@@ -1,0 +1,6 @@
+{
+  "name": "Sistema de Registro de Asistencia Escolar",
+  "description": "Sistema de registro de asistencia escolar en tiempo real mediante escáner USB HID, cámara web QR con validación criptográfica HMAC y carné digital.",
+  "requestFramePermissions": ["camera"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
