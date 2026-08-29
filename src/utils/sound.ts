@@ -5,126 +5,155 @@
 
 let audioCtx: AudioContext | null = null;
 
-function getAudioContext(): AudioContext | null {
+export function initAudio(): AudioContext | null {
   if (typeof window === 'undefined') return null;
-  if (!audioCtx) {
-    const AudioContextClass = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
-    if (AudioContextClass) {
-      audioCtx = new AudioContextClass();
+  try {
+    if (!audioCtx) {
+      const AudioContextClass = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
+      if (AudioContextClass) {
+        audioCtx = new AudioContextClass();
+      }
     }
-  }
-  if (audioCtx && audioCtx.state === 'suspended') {
-    audioCtx.resume().catch(() => {});
+    if (audioCtx && audioCtx.state === 'suspended') {
+      audioCtx.resume().catch(() => {});
+    }
+  } catch (e) {
+    console.warn('AudioContext initialization notice:', e);
   }
   return audioCtx;
 }
 
-export const SoundEffects = {
+// Auto-unlock AudioContext on any initial user touch/click/keypress
+if (typeof window !== 'undefined') {
+  const unlockAudio = () => {
+    initAudio();
+    if (audioCtx && audioCtx.state === 'running') {
+      window.removeEventListener('click', unlockAudio);
+      window.removeEventListener('touchstart', unlockAudio);
+      window.removeEventListener('keydown', unlockAudio);
+    }
+  };
+  window.addEventListener('click', unlockAudio, { passive: true });
+  window.addEventListener('touchstart', unlockAudio, { passive: true });
+  window.addEventListener('keydown', unlockAudio, { passive: true });
+}
+
+export const SoundService = {
+  unlock: () => {
+    initAudio();
+  },
+
   // Clear high double-chime for on-time punctual scan
-  playPunctual: () => {
+  playBeepSuccess: () => {
     try {
-      const ctx = getAudioContext();
+      const ctx = initAudio();
       if (!ctx) return;
       
-      const now = ctx.currentTime;
-      
-      // Tone 1
-      const osc1 = ctx.createOscillator();
-      const gain1 = ctx.createGain();
-      osc1.type = 'sine';
-      osc1.frequency.setValueAtTime(587.33, now); // D5
-      osc1.frequency.exponentialRampToValueAtTime(880, now + 0.12); // A5
-      gain1.gain.setValueAtTime(0.18, now);
-      gain1.gain.exponentialRampToValueAtTime(0.001, now + 0.18);
-      osc1.connect(gain1);
-      gain1.connect(ctx.destination);
-      osc1.start(now);
-      osc1.stop(now + 0.18);
+      const play = () => {
+        const now = ctx.currentTime;
+        
+        // Tone 1
+        const osc1 = ctx.createOscillator();
+        const gain1 = ctx.createGain();
+        osc1.type = 'sine';
+        osc1.frequency.setValueAtTime(659.25, now); // E5
+        osc1.frequency.exponentialRampToValueAtTime(880, now + 0.12); // A5
+        gain1.gain.setValueAtTime(0.28, now);
+        gain1.gain.exponentialRampToValueAtTime(0.001, now + 0.18);
+        osc1.connect(gain1);
+        gain1.connect(ctx.destination);
+        osc1.start(now);
+        osc1.stop(now + 0.18);
 
-      // Tone 2 (Harmonic resolve)
-      const osc2 = ctx.createOscillator();
-      const gain2 = ctx.createGain();
-      osc2.type = 'triangle';
-      osc2.frequency.setValueAtTime(1174.66, now + 0.08); // D6
-      gain2.gain.setValueAtTime(0.15, now + 0.08);
-      gain2.gain.exponentialRampToValueAtTime(0.001, now + 0.28);
-      osc2.connect(gain2);
-      gain2.connect(ctx.destination);
-      osc2.start(now + 0.08);
-      osc2.stop(now + 0.28);
-    } catch {
-      // Audio playback silently ignored if blocked by browser policy
+        // Tone 2 (Harmonic resolve)
+        const osc2 = ctx.createOscillator();
+        const gain2 = ctx.createGain();
+        osc2.type = 'triangle';
+        osc2.frequency.setValueAtTime(1318.51, now + 0.09); // E6
+        gain2.gain.setValueAtTime(0.22, now + 0.09);
+        gain2.gain.exponentialRampToValueAtTime(0.001, now + 0.3);
+        osc2.connect(gain2);
+        gain2.connect(ctx.destination);
+        osc2.start(now + 0.09);
+        osc2.stop(now + 0.3);
+      };
+
+      if (ctx.state === 'suspended') {
+        ctx.resume().then(play).catch(() => {});
+      } else {
+        play();
+      }
+    } catch (e) {
+      console.warn('SoundService success error:', e);
     }
   },
 
-  // Warm dual-tone for tardy entry
-  playTardy: () => {
+  // Warm dual-tone for tardy entry or exit
+  playBeepTardy: () => {
     try {
-      const ctx = getAudioContext();
+      const ctx = initAudio();
       if (!ctx) return;
 
-      const now = ctx.currentTime;
-      const osc = ctx.createOscillator();
-      const gain = ctx.createGain();
-
-      osc.type = 'sine';
-      osc.frequency.setValueAtTime(493.88, now); // B4
-      osc.frequency.setValueAtTime(440.00, now + 0.12); // A4
-      
-      gain.gain.setValueAtTime(0.18, now);
-      gain.gain.exponentialRampToValueAtTime(0.001, now + 0.3);
-
-      osc.connect(gain);
-      gain.connect(ctx.destination);
-      osc.start(now);
-      osc.stop(now + 0.3);
-    } catch {}
-  },
-
-  // Soft double-tap alert for already scanned today
-  playAlreadyScanned: () => {
-    try {
-      const ctx = getAudioContext();
-      if (!ctx) return;
-
-      const now = ctx.currentTime;
-      
-      [0, 0.14].forEach((offset) => {
+      const play = () => {
+        const now = ctx.currentTime;
         const osc = ctx.createOscillator();
         const gain = ctx.createGain();
+
         osc.type = 'sine';
-        osc.frequency.setValueAtTime(392.00, now + offset); // G4
-        gain.gain.setValueAtTime(0.14, now + offset);
-        gain.gain.exponentialRampToValueAtTime(0.001, now + offset + 0.08);
+        osc.frequency.setValueAtTime(523.25, now); // C5
+        osc.frequency.setValueAtTime(440.00, now + 0.12); // A4
+        
+        gain.gain.setValueAtTime(0.25, now);
+        gain.gain.exponentialRampToValueAtTime(0.001, now + 0.32);
+
         osc.connect(gain);
         gain.connect(ctx.destination);
-        osc.start(now + offset);
-        osc.stop(now + offset + 0.08);
-      });
-    } catch {}
+        osc.start(now);
+        osc.stop(now + 0.32);
+      };
+
+      if (ctx.state === 'suspended') {
+        ctx.resume().then(play).catch(() => {});
+      } else {
+        play();
+      }
+    } catch (e) {
+      console.warn('SoundService tardy error:', e);
+    }
   },
 
-  // Low gentle error buzz for not found or signature error
-  playError: () => {
+  // Noticeable error buzz for not found or unregistered document
+  playBeepError: () => {
     try {
-      const ctx = getAudioContext();
+      const ctx = initAudio();
       if (!ctx) return;
 
-      const now = ctx.currentTime;
-      const osc = ctx.createOscillator();
-      const gain = ctx.createGain();
+      const play = () => {
+        const now = ctx.currentTime;
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
 
-      osc.type = 'sawtooth';
-      osc.frequency.setValueAtTime(180, now);
-      osc.frequency.linearRampToValueAtTime(130, now + 0.25);
+        osc.type = 'sawtooth';
+        osc.frequency.setValueAtTime(220, now);
+        osc.frequency.linearRampToValueAtTime(140, now + 0.28);
 
-      gain.gain.setValueAtTime(0.12, now);
-      gain.gain.exponentialRampToValueAtTime(0.001, now + 0.28);
+        gain.gain.setValueAtTime(0.22, now);
+        gain.gain.exponentialRampToValueAtTime(0.001, now + 0.3);
 
-      osc.connect(gain);
-      gain.connect(ctx.destination);
-      osc.start(now);
-      osc.stop(now + 0.28);
-    } catch {}
+        osc.connect(gain);
+        gain.connect(ctx.destination);
+        osc.start(now);
+        osc.stop(now + 0.3);
+      };
+
+      if (ctx.state === 'suspended') {
+        ctx.resume().then(play).catch(() => {});
+      } else {
+        play();
+      }
+    } catch (e) {
+      console.warn('SoundService error tone:', e);
+    }
   }
 };
+

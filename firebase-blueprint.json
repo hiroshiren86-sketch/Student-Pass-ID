@@ -1,0 +1,54 @@
+{
+  "entities": {
+    "students": {
+      "title": "Estudiantes",
+      "description": "Directorio de estudiantes matriculados",
+      "fields": {
+        "code": { "type": "string", "description": "Código estudiantil único" },
+        "documentNumber": { "type": "string", "description": "Número de documento de identidad" },
+        "documentType": { "type": "string", "description": "Tipo de documento (TI, CC, RC, etc.)" },
+        "firstName": { "type": "string", "description": "Nombres" },
+        "lastName": { "type": "string", "description": "Apellidos" },
+        "grade": { "type": "string", "description": "Grado y grupo (ej: 10°1, 11°2)" },
+        "status": { "type": "string", "description": "Estado activo/inactivo" },
+        "guardianName": { "type": "string", "description": "Nombre de acudiente" },
+        "guardianPhone": { "type": "string", "description": "Teléfono de acudiente" }
+      }
+    },
+    "teachers": {
+      "title": "Docentes",
+      "description": "Profesores registrados en la institución",
+      "fields": {
+        "fullName": { "type": "string", "description": "Nombre completo" },
+        "email": { "type": "string", "description": "Correo institucional" },
+        "documentId": { "type": "string", "description": "Cédula de ciudadanía" },
+        "subjects": { "type": "array", "description": "Asignaturas que dicta" },
+        "assignedGrades": { "type": "array", "description": "Grupos asignados" }
+      }
+    },
+    "attendance_records": {
+      "title": "Registros de Portería",
+      "description": "Asistencia registrada por escaneo en portería",
+      "fields": {
+        "studentCode": { "type": "string", "description": "Código del estudiante" },
+        "date": { "type": "string", "description": "Fecha YYYY-MM-DD" },
+        "time": { "type": "string", "description": "Hora HH:mm:ss" },
+        "status": { "type": "string", "description": "Puntual, Retardo, etc." },
+        "method": { "type": "string", "description": "QR_CAMARA, CODIGO_BARRAS_USB, MANUAL" }
+      }
+    },
+    "schedule_assignments": {
+      "title": "Asignaciones de Horario",
+      "description": "Horario escolar por grado, día y bloque (incluye bloques dobles)",
+      "fields": {
+        "grade": { "type": "string", "description": "Grado (ej: 11°2)" },
+        "dayOfWeek": { "type": "string", "description": "Lunes a Viernes" },
+        "slotId": { "type": "string", "description": "ID del bloque horario" },
+        "subject": { "type": "string", "description": "Materia" },
+        "teacherId": { "type": "string", "description": "ID o Nombre del Docente" },
+        "classroom": { "type": "string", "description": "Salón" },
+        "isDoubleBlock": { "type": "boolean", "description": "Indica si es un bloque doble de 2 horas seguidas" }
+      }
+    }
+  }
+}

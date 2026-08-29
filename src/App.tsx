@@ -1,369 +1,463 @@
-import React, { useState, useEffect, useCallback } from 'react';
-import confetti from 'canvas-confetti';
+import React, { useState, useRef, useEffect } from 'react';
 import { 
-  Building2, 
-  Clock, 
+  ScanLine, 
+  BarChart3, 
   Users, 
-  CheckCircle2, 
-  AlertTriangle, 
-  UserX, 
-  Settings, 
-  Volume2, 
-  VolumeX, 
-  GraduationCap, 
-  QrCode, 
-  Scan, 
+  CreditCard, 
   ShieldCheck, 
-  RotateCcw,
+  UserCheck, 
+  Settings as SettingsIcon,
+  Sun,
+  Moon,
+  School,
   Sparkles,
-  Info
+  BrainCircuit,
+  FileSpreadsheet,
+  ChevronDown,
+  Layers,
+  ArrowRight,
+  Wifi,
+  ExternalLink,
+  BookOpen,
+  UserCheck2,
+  Shield,
+  GraduationCap,
+  Calendar,
+  Key,
+  LogOut
 } from 'lucide-react';
-import { 
-  Student, 
-  AttendanceRecord, 
-  ScanResultFeedback, 
-  AttendanceMethod, 
-  AttendanceStatus,
-  SchoolSettings 
-} from './types/attendance';
-import { AttendanceStorageService, getTodayDateString } from './services/attendanceStorage';
-import { SoundEffects } from './utils/sound';
-import { ScannerHub } from './components/ScannerHub';
-import { ScanFeedbackBanner } from './components/ScanFeedbackBanner';
-import { AttendanceTable } from './components/AttendanceTable';
-import { StudentCardModal } from './components/StudentCardModal';
-import { StudentDirectoryModal } from './components/StudentDirectoryModal';
+import { ScanHubView } from './components/ScanHubView';
+import { AttendanceReportsView } from './components/AttendanceReportsView';
+import { StudentsManagerView } from './components/StudentsManagerView';
+import { CardsManagerView } from './components/CardsManagerView';
+import { GradeAiSummaryView } from './components/GradeAiSummaryView';
+import { StudentPortalView } from './components/StudentPortalView';
+import { TeacherClassroomView } from './components/TeacherClassroomView';
+import { TeachersManagerView } from './components/TeachersManagerView';
+import { ScheduleBuilderView } from './components/ScheduleBuilderView';
+import { LoginScreen } from './components/LoginScreen';
 import { SettingsModal } from './components/SettingsModal';
+import { useTheme } from './context/ThemeContext';
+import { SchoolSettings, Student, Teacher, UserRole } from './types/attendance';
+import { AttendanceStorageService } from './services/attendanceStorage';
+
+export type ActiveTab = 'scan' | 'students' | 'teachers' | 'schedules' | 'cards' | 'attendance' | 'ai-grades' | 'teacher' | 'portal';
 
 export default function App() {
-  // Application State
-  const [records, setRecords] = useState<AttendanceRecord[]>([]);
+  const [isAuthenticated, setIsAuthenticated] = useState<boolean>(true); // Logged in by default or shows login
+  const [currentRole, setCurrentRole] = useState<UserRole>('ADMIN');
+  const [activeTab, setActiveTab] = useState<ActiveTab>('schedules');
+  const [loggedUser, setLoggedUser] = useState<{ teacher?: Teacher; student?: Student; username: string }>({
+    username: 'Rectoría / Administrador General'
+  });
+
+  const { theme, toggleTheme } = useTheme();
+  const [showSettingsModal, setShowSettingsModal] = useState(false);
+  const [showRoleModal, setShowRoleModal] = useState(false);
+  const [isMenuOpen, setIsMenuOpen] = useState(false);
   const [settings, setSettings] = useState<SchoolSettings>(AttendanceStorageService.getSettings());
-  const [feedback, setFeedback] = useState<ScanResultFeedback | null>(null);
-  const [isProcessing, setIsProcessing] = useState<boolean>(false);
-  const [currentTime, setCurrentTime] = useState<string>('');
-  const [currentDateFormatted, setCurrentDateFormatted] = useState<string>('');
 
-  // Modals state
-  const [selectedStudentForCard, setSelectedStudentForCard] = useState<Student | null>(null);
-  const [isDirectoryOpen, setIsDirectoryOpen] = useState<boolean>(false);
-  const [isSettingsOpen, setIsSettingsOpen] = useState<boolean>(false);
+  const menuRef = useRef<HTMLDivElement>(null);
 
-  // Refresh records and settings from storage
-  const refreshData = useCallback(() => {
-    setRecords(AttendanceStorageService.getAllAttendance());
-    setSettings(AttendanceStorageService.getSettings());
-  }, []);
-
-  // Subscribe to storage changes & initial load
   useEffect(() => {
-    refreshData();
-    const unsub = AttendanceStorageService.subscribe(() => {
-      refreshData();
+    const unsubscribe = AttendanceStorageService.subscribe(() => {
+      setSettings(AttendanceStorageService.getSettings());
     });
-    return unsub;
-  }, [refreshData]);
-
-  // Live Clock loop
-  useEffect(() => {
-    const updateClock = () => {
-      const now = new Date();
-      setCurrentTime(now.toLocaleTimeString('es-CO', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true }));
-      setCurrentDateFormatted(now.toLocaleDateString('es-CO', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' }));
-    };
-    updateClock();
-    const timer = setInterval(updateClock, 1000);
-    return () => clearInterval(timer);
+    return unsubscribe;
   }, []);
 
-  // Master Scan Handler (Receives scan from USB HID, Live Camera, or Manual)
-  const handleScanReceived = async (
-    scanInput: string, 
-    method: AttendanceMethod, 
-    customStatus?: AttendanceStatus, 
-    notes?: string
-  ) => {
-    setIsProcessing(true);
+  // Handle successful login
+  const handleLoginSuccess = (role: UserRole, userPayload?: { teacher?: Teacher; student?: Student; username: string }) => {
+    setCurrentRole(role);
+    setIsAuthenticated(true);
+    if (userPayload) {
+      setLoggedUser(userPayload);
+    } else {
+      setLoggedUser({ username: role });
+    }
 
-    try {
-      const result = await AttendanceStorageService.registerScan({
-        scanInput,
-        method,
-        customStatus,
-        notes
-      });
-
-      setFeedback(result);
-
-      // Trigger audio feedback according to result and user settings
-      if (settings.soundFeedback) {
-        if (result.type === 'success_punctual') {
-          SoundEffects.playPunctual();
-          // Gentle confetti burst for punctual entrance
-          try {
-            confetti({
-              particleCount: 35,
-              spread: 60,
-              origin: { y: 0.75 },
-              colors: ['#10b981', '#3b82f6', '#6366f1']
-            });
-          } catch {}
-        } else if (result.type === 'success_tardy') {
-          SoundEffects.playTardy();
-        } else if (result.type === 'already_scanned') {
-          SoundEffects.playAlreadyScanned();
-        } else {
-          SoundEffects.playError();
-        }
-      }
-
-      // Auto-dismiss feedback after 8 seconds (or user can close anytime)
-      setTimeout(() => {
-        setFeedback(prev => (prev?.timestamp === result.timestamp ? null : prev));
-      }, 8000);
-    } catch (err) {
-      console.error('Error during scan registration:', err);
-    } finally {
-      setIsProcessing(false);
+    // Default landing tab per role
+    if (role === 'PORTERO') {
+      setActiveTab('scan');
+    } else if (role === 'DOCENTE') {
+      setActiveTab('teacher');
+    } else if (role === 'ESTUDIANTE_ACUDIENTE') {
+      setActiveTab('portal');
+    } else if (role === 'ADMIN') {
+      setActiveTab('students');
     }
   };
 
-  // Calculate live stats
-  const summary = AttendanceStorageService.getSummary(getTodayDateString());
+  const handleLogout = () => {
+    setIsAuthenticated(false);
+  };
+
+  // Set default active tab when role changes from in-app switcher
+  const switchRole = (role: UserRole) => {
+    setCurrentRole(role);
+    setShowRoleModal(false);
+    if (role === 'PORTERO') {
+      setActiveTab('scan');
+      setLoggedUser({ username: 'Turno de Portería' });
+    } else if (role === 'DOCENTE') {
+      setActiveTab('teacher');
+      const firstTeacher = AttendanceStorageService.getTeachers()[0];
+      setLoggedUser({ teacher: firstTeacher, username: firstTeacher?.fullName || 'Prof. Juan Pablo Pérez' });
+    } else if (role === 'ESTUDIANTE_ACUDIENTE') {
+      setActiveTab('portal');
+      const firstStudent = AttendanceStorageService.getStudents()[0];
+      setLoggedUser({ student: firstStudent, username: `${firstStudent?.firstName} ${firstStudent?.lastName}` });
+    } else if (role === 'ADMIN') {
+      setActiveTab('students');
+      setLoggedUser({ username: 'Rectoría / Admin' });
+    }
+  };
+
+  // Close dropdown on outside click
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
+        setIsMenuOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
+
+  const navItems = [
+    { id: 'scan' as ActiveTab, label: 'Portería / Escáner', icon: ScanLine, badge: 'En vivo', primary: true, roles: ['ADMIN', 'PORTERO'] },
+    { id: 'students' as ActiveTab, label: 'Directorio Estudiantes', icon: Users, badge: 'Matrícula', primary: true, roles: ['ADMIN'] },
+    { id: 'schedules' as ActiveTab, label: 'Horarios Escolares', icon: Calendar, badge: 'Nuevo', primary: true, roles: ['ADMIN'] },
+    { id: 'teachers' as ActiveTab, label: 'Gestión Docentes', icon: Key, badge: 'Credenciales', primary: false, roles: ['ADMIN'] },
+    { id: 'teacher' as ActiveTab, label: 'Portal Docente (Aula)', icon: BookOpen, badge: 'Clases', primary: true, roles: ['ADMIN', 'DOCENTE'] },
+    { id: 'cards' as ActiveTab, label: 'Generador de Carnés PDF', icon: CreditCard, badge: 'CR80 PVC', primary: false, roles: ['ADMIN'] },
+    { id: 'attendance' as ActiveTab, label: 'Planilla de Asistencia', icon: FileSpreadsheet, badge: 'Reportes', primary: false, roles: ['ADMIN', 'DOCENTE'] },
+    { id: 'ai-grades' as ActiveTab, label: 'Analítica e IA por Grado', icon: BrainCircuit, badge: 'Gemini', primary: false, roles: ['ADMIN'] },
+    { id: 'portal' as ActiveTab, label: 'Portal Estudiante / Acudiente', icon: UserCheck, badge: 'Consulta', primary: false, roles: ['ADMIN', 'ESTUDIANTE_ACUDIENTE'] },
+  ];
+
+  const visibleNavItems = navItems.filter(item => item.roles.includes(currentRole));
+
+  const roleConfig = {
+    ADMIN: { label: 'Rectoría / Admin', icon: Shield, color: 'bg-purple-50 text-purple-700 dark:bg-purple-950/70 dark:text-purple-300 border-purple-200 dark:border-purple-800' },
+    DOCENTE: { label: 'Docente (Aula)', icon: BookOpen, color: 'bg-emerald-50 text-emerald-700 dark:bg-emerald-950/70 dark:text-emerald-300 border-emerald-200 dark:border-emerald-800' },
+    PORTERO: { label: 'Portería (Escáner)', icon: ScanLine, color: 'bg-indigo-50 text-indigo-700 dark:bg-indigo-950/70 dark:text-indigo-300 border-indigo-200 dark:border-indigo-800' },
+    ESTUDIANTE_ACUDIENTE: { label: 'Estudiante / Acudiente', icon: GraduationCap, color: 'bg-sky-50 text-sky-700 dark:bg-sky-950/70 dark:text-sky-300 border-sky-200 dark:border-sky-800' },
+  };
+
+  // If user is not authenticated, render Login Screen
+  if (!isAuthenticated) {
+    return <LoginScreen onLoginSuccess={handleLoginSuccess} />;
+  }
 
   return (
-    <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col font-sans selection:bg-indigo-500 selection:text-white">
-      {/* ================= TOP APPLICATION HEADER ================= */}
-      <header className="border-b border-slate-800/80 bg-slate-900/90 backdrop-blur-md sticky top-0 z-40">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 py-3.5 flex flex-wrap items-center justify-between gap-4">
-          {/* Institution Branding */}
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-2xl bg-gradient-to-tr from-indigo-600 to-cyan-500 flex items-center justify-center shadow-lg shadow-indigo-500/20 text-white">
-              <Building2 className="w-5 h-5" />
+    <div className="min-h-screen bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100 flex flex-col antialiased selection:bg-indigo-500 selection:text-white transition-colors duration-200">
+      {/* Modern Top Header / Linear Style Navigation */}
+      <header className="sticky top-0 z-40 bg-white/80 dark:bg-slate-900/80 backdrop-blur-xl border-b border-slate-200/80 dark:border-slate-800">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 h-16 flex items-center justify-between gap-4">
+          {/* Logo & School Identity */}
+          <div className="flex items-center gap-3 min-w-0">
+            <div className="w-10 h-10 rounded-2xl bg-indigo-600 text-white flex items-center justify-center shadow-lg shadow-indigo-600/25 shrink-0">
+              <School className="w-5 h-5" />
             </div>
-            <div>
+            <div className="min-w-0">
               <div className="flex items-center gap-2">
-                <h1 className="text-base sm:text-lg font-extrabold text-white tracking-tight leading-none">
+                <h1 className="text-sm sm:text-base font-black tracking-tight text-slate-900 dark:text-white truncate max-w-[180px] sm:max-w-[280px] md:max-w-md" title={settings.schoolName}>
                   {settings.schoolName}
                 </h1>
-                <span className="hidden sm:inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full bg-indigo-500/20 text-indigo-300 border border-indigo-500/30">
-                  <ShieldCheck className="w-3 h-3 text-emerald-400" /> Prototipo $0 • Etapa 1
+                <span className="text-[10px] font-mono px-2 py-0.5 rounded-full font-bold bg-indigo-50 text-indigo-700 dark:bg-indigo-950 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800 shrink-0">
+                  2026
                 </span>
               </div>
-              <p className="text-xs text-slate-400 capitalize mt-0.5">
-                {currentDateFormatted || 'Cargando fecha...'}
+              <p className="text-[11px] text-slate-500 dark:text-slate-400 hidden md:block truncate">
+                Control Escolar • Horarios, Aula y Carnetización Criptográfica
               </p>
             </div>
           </div>
 
-          {/* Live Clock & Navigation Actions */}
-          <div className="flex items-center gap-2 sm:gap-3 ml-auto">
-            {/* Live Clock Pill */}
-            <div className="bg-slate-950 px-3.5 py-1.5 rounded-2xl border border-slate-800 flex items-center gap-2 shadow-inner">
-              <Clock className="w-4 h-4 text-cyan-400 animate-pulse" />
-              <span className="font-mono text-xs sm:text-sm font-bold text-white tracking-wider">
-                {currentTime || '07:00:00 AM'}
-              </span>
+          {/* Clean Segmented Navigation & Role Switcher */}
+          <div className="flex items-center gap-2">
+            {/* Active Role Selector Badge / Switcher */}
+            <button
+              onClick={() => setShowRoleModal(true)}
+              className={`px-3 py-1.5 rounded-2xl border text-xs font-bold transition-all flex items-center gap-1.5 ${roleConfig[currentRole].color} shadow-xs hover:opacity-90`}
+              title="Cambiar Perfil de Usuario (Admin, Docente, Portería, Estudiante)"
+            >
+              {React.createElement(roleConfig[currentRole].icon, { className: 'w-3.5 h-3.5' })}
+              <span className="hidden sm:inline">{roleConfig[currentRole].label}</span>
+              <ChevronDown className="w-3 h-3 opacity-60" />
+            </button>
+
+            {/* Primary Action Buttons based on Role */}
+            <div className="hidden lg:flex items-center bg-slate-100 dark:bg-slate-800/70 p-1 rounded-2xl border border-slate-200/80 dark:border-slate-700/80">
+              {visibleNavItems.slice(0, 4).map((item) => {
+                const Icon = item.icon;
+                const isActive = activeTab === item.id;
+                return (
+                  <button
+                    key={item.id}
+                    onClick={() => setActiveTab(item.id)}
+                    className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 ${
+                      isActive
+                        ? 'bg-white dark:bg-slate-900 text-indigo-600 dark:text-indigo-400 shadow-sm'
+                        : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
+                    }`}
+                  >
+                    <Icon className="w-3.5 h-3.5" />
+                    <span>{item.label}</span>
+                  </button>
+                );
+              })}
             </div>
 
-            {/* Student Directory & Cards */}
+            {/* Dropdown Menu for All Visible Modules */}
+            {visibleNavItems.length > 2 && (
+              <div className="relative" ref={menuRef}>
+                <button
+                  onClick={() => setIsMenuOpen(!isMenuOpen)}
+                  className={`px-3 py-2 rounded-2xl text-xs font-bold border transition-all flex items-center gap-1.5 ${
+                    isMenuOpen
+                      ? 'bg-indigo-50 dark:bg-indigo-950/70 text-indigo-700 dark:text-indigo-300 border-indigo-200 dark:border-indigo-800'
+                      : 'bg-white dark:bg-slate-900 text-slate-700 dark:text-slate-300 border-slate-200 dark:border-slate-800 hover:bg-slate-50 dark:hover:bg-slate-800'
+                  }`}
+                >
+                  <Layers className="w-3.5 h-3.5" />
+                  <span className="hidden xs:inline">Módulos</span>
+                  <ChevronDown className={`w-3.5 h-3.5 transition-transform ${isMenuOpen ? 'rotate-180' : ''}`} />
+                </button>
+
+                {/* Floating Dropdown Drawer */}
+                {isMenuOpen && (
+                  <div className="absolute right-0 mt-2 w-72 p-2 rounded-3xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-2xl z-50 animate-fadeIn space-y-1">
+                    <div className="px-3 py-2 text-[10px] font-bold uppercase tracking-wider text-slate-400">
+                      Módulos Disponibles ({roleConfig[currentRole].label})
+                    </div>
+
+                    {visibleNavItems.map((item) => {
+                      const Icon = item.icon;
+                      const isActive = activeTab === item.id;
+                      return (
+                        <button
+                          key={item.id}
+                          onClick={() => {
+                            setActiveTab(item.id);
+                            setIsMenuOpen(false);
+                          }}
+                          className={`w-full p-2.5 rounded-2xl text-left flex items-center justify-between transition-all text-xs font-bold ${
+                            isActive
+                              ? 'bg-indigo-600 text-white shadow-md shadow-indigo-600/20'
+                              : 'text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800'
+                          }`}
+                        >
+                          <div className="flex items-center gap-2.5">
+                            <Icon className={`w-4 h-4 ${isActive ? 'text-white' : 'text-indigo-500'}`} />
+                            <span>{item.label}</span>
+                          </div>
+                          <span className={`text-[9px] font-mono px-2 py-0.5 rounded-full ${
+                            isActive ? 'bg-white/20 text-white' : 'bg-slate-100 dark:bg-slate-800 text-slate-500'
+                          }`}>
+                            {item.badge}
+                          </span>
+                        </button>
+                      );
+                    })}
+
+                    {currentRole === 'ADMIN' && (
+                      <div className="pt-2 border-t border-slate-100 dark:border-slate-800">
+                        <button
+                          onClick={() => {
+                            setShowSettingsModal(true);
+                            setIsMenuOpen(false);
+                          }}
+                          className="w-full p-2.5 rounded-2xl text-left flex items-center gap-2.5 text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 transition-all text-xs font-bold"
+                        >
+                          <SettingsIcon className="w-4 h-4 text-slate-400" />
+                          <span>Ajustes Institucionales</span>
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Quick Actions (Theme, Settings & Logout) */}
             <button
-              onClick={() => setIsDirectoryOpen(true)}
-              id="btn-open-directory"
-              className="px-3 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 hover:text-white rounded-xl text-xs font-semibold border border-slate-700 transition-colors flex items-center gap-1.5 shadow-sm"
-              title="Ver lista de estudiantes y carnés"
+              onClick={toggleTheme}
+              className="p-2 rounded-2xl text-slate-500 hover:text-slate-900 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-slate-800 transition-all"
+              title={theme === 'light' ? 'Modo Oscuro' : 'Modo Claro'}
             >
-              <GraduationCap className="w-4 h-4 text-indigo-400" />
-              <span className="hidden md:inline">Directorio & Carnés</span>
+              {theme === 'light' ? <Moon className="w-4 h-4" /> : <Sun className="w-4 h-4" />}
             </button>
 
-            {/* Sound Toggle */}
-            <button
-              onClick={() => {
-                const updated = { ...settings, soundFeedback: !settings.soundFeedback };
-                AttendanceStorageService.saveSettings(updated);
-                setSettings(updated);
-              }}
-              id="btn-toggle-sound"
-              className={`p-2 rounded-xl border transition-colors ${
-                settings.soundFeedback
-                  ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400 hover:bg-emerald-500/20'
-                  : 'bg-slate-800 border-slate-700 text-slate-400 hover:bg-slate-700'
-              }`}
-              title={settings.soundFeedback ? 'Alertas sonoras activadas' : 'Alertas sonoras silenciadas'}
-            >
-              {settings.soundFeedback ? <Volume2 className="w-4 h-4" /> : <VolumeX className="w-4 h-4" />}
-            </button>
+            {currentRole === 'ADMIN' && (
+              <button
+                onClick={() => setShowSettingsModal(true)}
+                className="p-2 rounded-2xl text-slate-500 hover:text-slate-900 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-slate-800 transition-all"
+                title="Configuración Institucional"
+              >
+                <SettingsIcon className="w-4 h-4" />
+              </button>
+            )}
 
-            {/* Settings Modal Button */}
             <button
-              onClick={() => setIsSettingsOpen(true)}
-              id="btn-open-settings"
-              className="p-2 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-300 hover:text-white transition-colors"
-              title="Configuración de horarios y jornada"
+              onClick={handleLogout}
+              className="p-2 rounded-2xl text-slate-400 hover:text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-950/60 transition-all"
+              title="Cerrar Sesión / Cambiar Usuario"
             >
-              <Settings className="w-4 h-4" />
+              <LogOut className="w-4 h-4" />
             </button>
           </div>
         </div>
       </header>
 
-      {/* ================= MAIN CONTENT BODY ================= */}
-      <main className="max-w-7xl mx-auto px-4 sm:px-6 py-6 w-full space-y-6 flex-1">
-        {/* Anti-Riesgos / Legal Notice Banner */}
-        <div className="bg-slate-900/60 border border-slate-800/80 rounded-2xl px-4 py-2.5 flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-xs text-slate-400">
-          <div className="flex items-center gap-2">
-            <Info className="w-4 h-4 text-cyan-400 shrink-0" />
-            <span>
-              <strong className="text-slate-200">Prototipo Seguro Anti-Riesgos:</strong> Datos 100% ficticios conformes a la Ley 1581. Firma HMAC-SHA256 client-side sin costos de nube.
-            </span>
-          </div>
-          <span className="text-[11px] font-mono text-slate-500 shrink-0">
-            Jornada Escolar: {settings.dailyStartTime} (Tolerancia: {settings.tardyGracePeriodMinutes} min)
-          </span>
-        </div>
-
-        {/* ================= SUMMARY STATS KPI CARDS ================= */}
-        <div className="grid grid-cols-2 lg:grid-cols-5 gap-3 sm:gap-4" id="stats-summary-grid">
-          {/* Total Matriculados */}
-          <div className="bg-slate-900 border border-slate-800/80 p-4 rounded-2xl flex flex-col justify-between shadow-lg">
-            <div className="flex items-center justify-between text-slate-400 mb-1">
-              <span className="text-xs font-semibold uppercase tracking-wider">Matriculados</span>
-              <Users className="w-4 h-4 text-slate-400" />
-            </div>
-            <div className="flex items-baseline gap-2">
-              <span className="text-2xl sm:text-3xl font-extrabold text-white font-mono">
-                {summary.totalEnrolled}
-              </span>
-              <span className="text-xs text-slate-400">estudiantes</span>
-            </div>
-          </div>
-
-          {/* Asistencia Presentes */}
-          <div className="bg-slate-900 border border-indigo-500/30 p-4 rounded-2xl flex flex-col justify-between shadow-lg relative overflow-hidden">
-            <div className="absolute top-0 right-0 left-0 h-1 bg-indigo-500" />
-            <div className="flex items-center justify-between text-indigo-300 mb-1">
-              <span className="text-xs font-semibold uppercase tracking-wider">Presentes Hoy</span>
-              <Scan className="w-4 h-4 text-indigo-400" />
-            </div>
-            <div className="flex items-baseline justify-between gap-1">
-              <span className="text-2xl sm:text-3xl font-extrabold text-indigo-200 font-mono">
-                {summary.totalPresent}
-              </span>
-              <span className="text-xs font-bold text-indigo-400 font-mono px-2 py-0.5 bg-indigo-500/10 rounded-full">
-                {summary.attendanceRate}% Asistencia
-              </span>
-            </div>
-          </div>
-
-          {/* Puntuales */}
-          <div className="bg-slate-900 border border-emerald-500/30 p-4 rounded-2xl flex flex-col justify-between shadow-lg relative overflow-hidden">
-            <div className="absolute top-0 right-0 left-0 h-1 bg-emerald-500" />
-            <div className="flex items-center justify-between text-emerald-300 mb-1">
-              <span className="text-xs font-semibold uppercase tracking-wider">A Tiempo (Puntual)</span>
-              <CheckCircle2 className="w-4 h-4 text-emerald-400" />
-            </div>
-            <div className="flex items-baseline gap-2">
-              <span className="text-2xl sm:text-3xl font-extrabold text-emerald-300 font-mono">
-                {summary.punctualCount}
-              </span>
-              <span className="text-xs text-emerald-500">
-                {summary.totalPresent > 0 ? `${Math.round((summary.punctualCount / summary.totalPresent) * 100)}% de los presentes` : '0%'}
-              </span>
-            </div>
-          </div>
-
-          {/* Tardanzas */}
-          <div className="bg-slate-900 border border-amber-500/30 p-4 rounded-2xl flex flex-col justify-between shadow-lg relative overflow-hidden">
-            <div className="absolute top-0 right-0 left-0 h-1 bg-amber-500" />
-            <div className="flex items-center justify-between text-amber-300 mb-1">
-              <span className="text-xs font-semibold uppercase tracking-wider">Tardanzas</span>
-              <Clock className="w-4 h-4 text-amber-400" />
-            </div>
-            <div className="flex items-baseline gap-2">
-              <span className="text-2xl sm:text-3xl font-extrabold text-amber-300 font-mono">
-                {summary.tardyCount}
-              </span>
-              <span className="text-xs text-amber-500">
-                {summary.totalPresent > 0 ? `${Math.round((summary.tardyCount / summary.totalPresent) * 100)}% de los presentes` : '0%'}
-              </span>
-            </div>
-          </div>
-
-          {/* Ausentes Proyectados */}
-          <div className="bg-slate-900 border border-slate-800 p-4 rounded-2xl flex flex-col justify-between shadow-lg col-span-2 lg:col-span-1">
-            <div className="flex items-center justify-between text-slate-400 mb-1">
-              <span className="text-xs font-semibold uppercase tracking-wider">Ausentes (Sin Registro)</span>
-              <UserX className="w-4 h-4 text-slate-400" />
-            </div>
-            <div className="flex items-baseline gap-2">
-              <span className="text-2xl sm:text-3xl font-extrabold text-slate-300 font-mono">
-                {summary.absentCount}
-              </span>
-              <span className="text-xs text-slate-500">
-                por registrar
-              </span>
-            </div>
-          </div>
-        </div>
-
-        {/* ================= SCAN FEEDBACK BANNER (TRIGGERED ON SCAN) ================= */}
-        <ScanFeedbackBanner
-          feedback={feedback}
-          onDismiss={() => setFeedback(null)}
-        />
-
-        {/* ================= CORE SCANNER HUB ================= */}
-        <ScannerHub
-          onScanReceived={handleScanReceived}
-          isProcessing={isProcessing}
-          onOpenCardModal={(student) => setSelectedStudentForCard(student)}
-        />
-
-        {/* ================= ATTENDANCE TABLE & LIVE FEED ================= */}
-        <AttendanceTable
-          records={records}
-          onOpenCardModal={(student) => setSelectedStudentForCard(student)}
-          onRefresh={refreshData}
-        />
+      {/* Main View Display */}
+      <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 py-6">
+        {activeTab === 'scan' && <ScanHubView />}
+        {activeTab === 'students' && <StudentsManagerView onGenerateCard={() => setActiveTab('cards')} />}
+        {activeTab === 'schedules' && <ScheduleBuilderView />}
+        {activeTab === 'teachers' && <TeachersManagerView />}
+        {activeTab === 'teacher' && <TeacherClassroomView teacher={loggedUser.teacher} teacherName={loggedUser.username} />}
+        {activeTab === 'cards' && <CardsManagerView />}
+        {activeTab === 'attendance' && <AttendanceReportsView />}
+        {activeTab === 'ai-grades' && <GradeAiSummaryView />}
+        {activeTab === 'portal' && <StudentPortalView />}
       </main>
 
-      {/* ================= MODALS ================= */}
-      {/* Student ID Card with Cryptographic QR */}
-      {selectedStudentForCard && (
-        <StudentCardModal
-          student={selectedStudentForCard}
-          onClose={() => setSelectedStudentForCard(null)}
-          onSimulateScan={(payload, method) => handleScanReceived(payload, method)}
-        />
+      {/* Role Selection Modal */}
+      {showRoleModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-md animate-fadeIn">
+          <div className="p-6 sm:p-8 rounded-3xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-2xl max-w-lg w-full space-y-6">
+            <div className="text-center space-y-1.5">
+              <div className="w-12 h-12 rounded-2xl bg-indigo-50 dark:bg-indigo-950 text-indigo-600 dark:text-indigo-400 mx-auto flex items-center justify-center font-black">
+                <School className="w-6 h-6" />
+              </div>
+              <h3 className="text-xl font-black text-slate-900 dark:text-white tracking-tight">
+                Cambio Rápido de Perfil de Acceso
+              </h3>
+              <p className="text-xs text-slate-500 dark:text-slate-400">
+                Cambie instantáneamente entre los 4 módulos escolares del sistema.
+              </p>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              {/* 1. Admin / Rectoría */}
+              <button
+                onClick={() => switchRole('ADMIN')}
+                className={`p-4 rounded-2xl border text-left transition-all space-y-2 ${
+                  currentRole === 'ADMIN'
+                    ? 'border-purple-500 bg-purple-50/50 dark:bg-purple-950/40 shadow-md ring-2 ring-purple-500/20'
+                    : 'border-slate-200 dark:border-slate-800 hover:border-slate-300 dark:hover:border-slate-700 bg-white dark:bg-slate-950'
+                }`}
+              >
+                <div className="w-8 h-8 rounded-xl bg-purple-100 dark:bg-purple-900/60 text-purple-600 dark:text-purple-300 flex items-center justify-center">
+                  <Shield className="w-4 h-4" />
+                </div>
+                <div>
+                  <h4 className="text-xs font-black text-slate-900 dark:text-white">
+                    1. Rectoría / Admin
+                  </h4>
+                  <p className="text-[10px] text-slate-500 dark:text-slate-400 mt-0.5 leading-relaxed">
+                    Control total, directorio, horarios, gestión docente, carnés CR80, reportes e IA.
+                  </p>
+                </div>
+              </button>
+
+              {/* 2. Docente / Aula */}
+              <button
+                onClick={() => switchRole('DOCENTE')}
+                className={`p-4 rounded-2xl border text-left transition-all space-y-2 ${
+                  currentRole === 'DOCENTE'
+                    ? 'border-emerald-500 bg-emerald-50/50 dark:bg-emerald-950/40 shadow-md ring-2 ring-emerald-500/20'
+                    : 'border-slate-200 dark:border-slate-800 hover:border-slate-300 dark:hover:border-slate-700 bg-white dark:bg-slate-950'
+                }`}
+              >
+                <div className="w-8 h-8 rounded-xl bg-emerald-100 dark:bg-emerald-900/60 text-emerald-600 dark:text-emerald-300 flex items-center justify-center">
+                  <BookOpen className="w-4 h-4" />
+                </div>
+                <div>
+                  <h4 className="text-xs font-black text-slate-900 dark:text-white">
+                    2. Docente (Aula)
+                  </h4>
+                  <p className="text-[10px] text-slate-500 dark:text-slate-400 mt-0.5 leading-relaxed">
+                    Llamado a lista por horario, comparación en vivo con portería y detección de ausencias.
+                  </p>
+                </div>
+              </button>
+
+              {/* 3. Portería / Escáner */}
+              <button
+                onClick={() => switchRole('PORTERO')}
+                className={`p-4 rounded-2xl border text-left transition-all space-y-2 ${
+                  currentRole === 'PORTERO'
+                    ? 'border-indigo-500 bg-indigo-50/50 dark:bg-indigo-950/40 shadow-md ring-2 ring-indigo-500/20'
+                    : 'border-slate-200 dark:border-slate-800 hover:border-slate-300 dark:hover:border-slate-700 bg-white dark:bg-slate-950'
+                }`}
+              >
+                <div className="w-8 h-8 rounded-xl bg-indigo-100 dark:bg-indigo-900/60 text-indigo-600 dark:text-indigo-300 flex items-center justify-center">
+                  <ScanLine className="w-4 h-4" />
+                </div>
+                <div>
+                  <h4 className="text-xs font-black text-slate-900 dark:text-white">
+                    3. Portería / Escáner
+                  </h4>
+                  <p className="text-[10px] text-slate-500 dark:text-slate-400 mt-0.5 leading-relaxed">
+                    Terminal dedicado de escaneo ultrarrápido con lector USB o cámara.
+                  </p>
+                </div>
+              </button>
+
+              {/* 4. Estudiante / Acudiente */}
+              <button
+                onClick={() => switchRole('ESTUDIANTE_ACUDIENTE')}
+                className={`p-4 rounded-2xl border text-left transition-all space-y-2 ${
+                  currentRole === 'ESTUDIANTE_ACUDIENTE'
+                    ? 'border-sky-500 bg-sky-50/50 dark:bg-sky-950/40 shadow-md ring-2 ring-sky-500/20'
+                    : 'border-slate-200 dark:border-slate-800 hover:border-slate-300 dark:hover:border-slate-700 bg-white dark:bg-slate-950'
+                }`}
+              >
+                <div className="w-8 h-8 rounded-xl bg-sky-100 dark:bg-sky-900/60 text-sky-600 dark:text-sky-300 flex items-center justify-center">
+                  <GraduationCap className="w-4 h-4" />
+                </div>
+                <div>
+                  <h4 className="text-xs font-black text-slate-900 dark:text-white">
+                    4. Estudiante / Acudiente
+                  </h4>
+                  <p className="text-[10px] text-slate-500 dark:text-slate-400 mt-0.5 leading-relaxed">
+                    Consulta individual de historial de asistencia mediante documento y clave de carné.
+                  </p>
+                </div>
+              </button>
+            </div>
+
+            <div className="flex justify-end">
+              <button
+                onClick={() => setShowRoleModal(false)}
+                className="px-5 py-2.5 bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 rounded-2xl text-xs font-bold hover:bg-slate-200 transition-all"
+              >
+                Cerrar
+              </button>
+            </div>
+          </div>
+        </div>
       )}
 
-      {/* Student Directory Modal */}
-      {isDirectoryOpen && (
-        <StudentDirectoryModal
-          onClose={() => setIsDirectoryOpen(false)}
-          onSelectStudentCard={(student) => setSelectedStudentForCard(student)}
-          todayRecords={records}
-        />
-      )}
-
-      {/* Settings Modal */}
-      {isSettingsOpen && (
-        <SettingsModal
-          onClose={() => setIsSettingsOpen(false)}
-          onSaved={refreshData}
-        />
-      )}
-
-      {/* ================= FOOTER ================= */}
-      <footer className="border-t border-slate-800/80 bg-slate-950 py-4 text-center text-xs text-slate-500">
-        <div className="max-w-7xl mx-auto px-4 flex flex-col sm:flex-row items-center justify-between gap-2">
-          <span>Sistema de Registro de Asistencia Escolar con Carné Digital • Versión Consolidada 2026</span>
-          <span className="font-mono text-[11px] text-slate-600">
-            Arquitectura: WebCrypto HMAC-SHA256 • Storage Optimizado • Modo USB HID / Cámara QR
-          </span>
+      {/* Modern Compact Footer */}
+      <footer className="border-t border-slate-200 dark:border-slate-800/80 py-4 bg-white/50 dark:bg-slate-950/50 text-[11px] text-slate-500">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 flex flex-col sm:flex-row items-center justify-between gap-2">
+          <div>
+            <strong>{settings.schoolName}:</strong> Terminal de asistencia por lector óptico y carné escolar CR80 con firma HMAC-SHA256.
+          </div>
+          <div className="font-mono text-[10px]">
+            Soporte 100% Offline • Ley 1581
+          </div>
         </div>
       </footer>
+
+      {/* Settings Modal */}
+      {showSettingsModal && (
+        <SettingsModal onClose={() => setShowSettingsModal(false)} />
+      )}
     </div>
   );
 }

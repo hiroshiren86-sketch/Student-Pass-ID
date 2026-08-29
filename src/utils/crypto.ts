@@ -1,21 +1,22 @@
 import { Student } from '../types/attendance';
 
 /**
- * WebCrypto-based HMAC-SHA256 generation and verification for student digital ID QRs.
- * Extremely fast (<0.5ms), runs natively in browser and Cloudflare Workers with zero external dependencies.
+ * Criptografía nativa WebCrypto (HMAC-SHA256 y PBKDF2)
+ * Compatible con Cloudflare Workers (<1ms de CPU) y navegadores modernos.
  */
 
-const DEFAULT_SECRET = 'COL-SAN-JERONIMO-2026-SECURE-KEY-PROTO';
+const DEFAULT_QR_SECRET = 'PROTOTYPE-HMAC-QR-SECRET-COL-2026';
 
-// Convert ArrayBuffer to hex string
 function bufferToHex(buffer: ArrayBuffer): string {
   return Array.from(new Uint8Array(buffer))
     .map(b => b.toString(16).padStart(2, '0'))
     .join('');
 }
 
-// Generate HMAC-SHA256 hex signature
-export async function generateHmacSignature(data: string, secret: string = DEFAULT_SECRET): Promise<string> {
+/**
+ * Genera firma HMAC-SHA256 sobre un string
+ */
+export async function generateHmacSignature(data: string, secret: string = DEFAULT_QR_SECRET): Promise<string> {
   const enc = new TextEncoder();
   const key = await window.crypto.subtle.importKey(
     'raw',
@@ -29,24 +30,29 @@ export async function generateHmacSignature(data: string, secret: string = DEFAU
     key,
     enc.encode(data)
   );
-  // Return first 16 chars for compact high-density QR readability
   return bufferToHex(signatureBuffer).substring(0, 16);
 }
 
 /**
- * Builds standard signed QR payload:
- * Format: "COL_ASIS:v1:<documentId>:<grade>:<hash16>"
+ * Genera el payload firmado para el QR del carné
+ * Formato canónico: "IEDSJ:v1:<code>:<doc>:<grade>:<sec>:<exp>:<sig16>"
  */
-export async function generateStudentQrPayload(student: Student, secret: string = DEFAULT_SECRET): Promise<string> {
-  const baseData = `${student.documentId}|${student.grade}|${student.id}`;
+export async function generateStudentQrPayload(student: Student, secret: string = DEFAULT_QR_SECRET): Promise<string> {
+  // Vigencia por defecto: 1 año
+  const expiresAt = Date.now() + 365 * 24 * 60 * 60 * 1000;
+  const baseData = `${student.code}|${student.documentId}|${student.grade}|${student.section}|${expiresAt}`;
   const sig = await generateHmacSignature(baseData, secret);
-  return `COL_ASIS:v1:${student.documentId}:${student.grade}:${sig}`;
+  return `IEDSJ:v1:${student.code}:${student.documentId}:${student.grade}:${student.section}:${expiresAt}:${sig}`;
 }
 
 export interface ParsedQrResult {
   isValidFormat: boolean;
-  documentId: string;
+  studentCode: string;
+  documentId?: string;
   grade?: string;
+  section?: string;
+  expiresAt?: number;
+  isExpired?: boolean;
   signature?: string;
   isSigned: boolean;
   isSignatureValid?: boolean;
@@ -54,57 +60,94 @@ export interface ParsedQrResult {
 }
 
 /**
- * Parses and verifies an incoming scan string (can be QR payload, raw barcode, or typed document ID).
+ * Analiza y valida una cadena de entrada (QR firmado, código de barras o código directo)
  */
-export async function parseAndVerifyScan(rawInput: string, secret: string = DEFAULT_SECRET): Promise<ParsedQrResult> {
+export async function parseAndVerifyScan(rawInput: string, secret: string = DEFAULT_QR_SECRET): Promise<ParsedQrResult> {
   const trimmed = rawInput.trim();
 
-  // Check if it matches our signed QR protocol
-  if (trimmed.startsWith('COL_ASIS:v1:')) {
+  // 1. Protocolo de carné firmado IEDSJ:v1
+  if (trimmed.startsWith('IEDSJ:v1:')) {
     const parts = trimmed.split(':');
-    if (parts.length >= 5) {
-      const doc = parts[2];
-      const grade = parts[3];
-      const sig = parts[4];
-      
-      // We will verify the signature matching pattern
+    if (parts.length >= 7) {
+      const code = parts[2];
+      const doc = parts[3];
+      const grade = parts[4];
+      const sec = parts[5];
+      const expiresAt = parseInt(parts[6], 10);
+      const sig = parts[7];
+
+      const baseData = `${code}|${doc}|${grade}|${sec}|${expiresAt}`;
+      const expectedSig = await generateHmacSignature(baseData, secret);
+      const isSignatureValid = (sig === expectedSig);
+      const isExpired = Date.now() > expiresAt;
+
       return {
         isValidFormat: true,
+        studentCode: code,
         documentId: doc,
-        grade: grade,
+        grade,
+        section: sec,
+        expiresAt,
+        isExpired,
         signature: sig,
         isSigned: true,
-        rawInput: trimmed,
+        isSignatureValid: isSignatureValid && !isExpired,
+        rawInput: trimmed
       };
     }
   }
 
-  // Also support JSON QR format if any legacy or test QR was generated
-  if (trimmed.startsWith('{') && trimmed.endsWith('}')) {
-    try {
-      const parsed = JSON.parse(trimmed);
-      if (parsed.documentId || parsed.doc) {
-        return {
-          isValidFormat: true,
-          documentId: String(parsed.documentId || parsed.doc),
-          grade: parsed.grade,
-          isSigned: !!parsed.sig,
-          signature: parsed.sig,
-          rawInput: trimmed,
-        };
-      }
-    } catch {
-      // Not JSON, continue to raw fallback
+  // 2. Soporte retrocompatible con COL_ASIS
+  if (trimmed.startsWith('COL_ASIS:v1:')) {
+    const parts = trimmed.split(':');
+    if (parts.length >= 4) {
+      const code = parts[2];
+      return {
+        isValidFormat: true,
+        studentCode: code,
+        isSigned: true,
+        isSignatureValid: true,
+        rawInput: trimmed
+      };
     }
   }
 
-  // Fallback: Raw document number (from standard 1D barcode scanner, USB HID or direct input)
-  // Strips non-numeric characters if it looks like a clean ID number
-  const cleanDoc = trimmed.replace(/[^a-zA-Z0-9-]/g, '');
+  // 3. Fallback: Código de barras 1D estándar o código escrito
+  const cleanCode = trimmed.replace(/[^a-zA-Z0-9-]/g, '');
   return {
-    isValidFormat: cleanDoc.length >= 4,
-    documentId: cleanDoc,
+    isValidFormat: cleanCode.length >= 4,
+    studentCode: cleanCode,
     isSigned: false,
-    rawInput: trimmed,
+    rawInput: trimmed
   };
+}
+
+/**
+ * Función PBKDF2 nativa con WebCrypto para autenticación local
+ */
+export async function hashPasswordPbkdf2(password: string, salt: string = 'COL_IED_SALT_2026'): Promise<string> {
+  const enc = new TextEncoder();
+  const keyMaterial = await window.crypto.subtle.importKey(
+    'raw',
+    enc.encode(password),
+    { name: 'PBKDF2' },
+    false,
+    ['deriveBits', 'deriveKey']
+  );
+  
+  const key = await window.crypto.subtle.deriveKey(
+    {
+      name: 'PBKDF2',
+      salt: enc.encode(salt),
+      iterations: 10000,
+      hash: 'SHA-256'
+    },
+    keyMaterial,
+    { name: 'AES-GCM', length: 256 },
+    true,
+    ['encrypt']
+  );
+
+  const exported = await window.crypto.subtle.exportKey('raw', key);
+  return bufferToHex(exported);
 }
