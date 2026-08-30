@@ -245,72 +245,64 @@ export async function generateStudentCardPdf(student: Student, settings: SchoolS
     color: rgb(0.08, 0.18, 0.38)
   });
 
-  pageBack.drawText('SISTEMA INTEGRADO DE IDENTIFICACIÓN Y ASISTENCIA ESCOLAR', {
-    x: 10,
+  pageBack.drawText('IDENTIFICACIÓN Y CONSULTA INSTITUCIONAL', {
+    x: 14,
     y: height - 11,
-    size: 5.5,
+    size: 6,
     font: fontBold,
     color: rgb(1, 1, 1)
   });
 
-  // Caja de Credencial Permanente de Consulta (No Expira)
+  // Caja de Credencial Permanente de Consulta
   pageBack.drawRectangle({
     x: 12,
-    y: 62,
+    y: 54,
     width: width - 24,
-    height: 60,
+    height: 68,
     color: rgb(1, 1, 1),
     borderColor: rgb(0.82, 0.87, 0.93),
     borderWidth: 0.8
   });
 
-  pageBack.drawText('ACCESO AL HISTORIAL Y ASISTENCIA DEL ESTUDIANTE', {
+  pageBack.drawText('CREDENCIALES DE CONSULTA (PORTAL ESTUDIANTE)', {
     x: 18,
-    y: 110,
-    size: 6,
+    y: 108,
+    size: 5.8,
     font: fontBold,
     color: rgb(0.08, 0.25, 0.55)
   });
 
-  pageBack.drawText('Portal de Consulta Estudiantil y para Acudientes (Solo Lectura):', {
+  pageBack.drawText(`CÓDIGO DE USUARIO:  ${student.code}`, {
     x: 18,
-    y: 99,
-    size: 5,
-    font: fontRegular,
-    color: rgb(0.35, 0.4, 0.45)
-  });
-
-  pageBack.drawText(`Usuario de Consulta:  ${student.code}`, {
-    x: 18,
-    y: 86,
-    size: 6,
+    y: 92,
+    size: 6.5,
     font: fontMono,
     color: rgb(0.1, 0.15, 0.25)
   });
 
-  pageBack.drawText(`Clave Permanente:    ${permanentPin}`, {
+  pageBack.drawText(`CLAVE DE ACCESO:    ${permanentPin}`, {
     x: 18,
-    y: 73,
-    size: 6.5,
+    y: 78,
+    size: 6.8,
     font: fontMono,
     color: rgb(0.25, 0.1, 0.6)
   });
 
-  // Datos Institucionales y de Emergencia
-  pageBack.drawText('IMPORTANTE: Este carné es personal e intransferible. Presentarlo diariamente al ingreso.', {
-    x: 12,
-    y: 48,
-    size: 4.8,
-    font: fontRegular,
+  pageBack.drawText(`DOCUMENTO:          ${student.documentId}`, {
+    x: 18,
+    y: 64,
+    size: 5.5,
+    font: fontMono,
     color: rgb(0.4, 0.45, 0.5)
   });
 
-  pageBack.drawText('En caso de pérdida comunicarse inmediatamente con la coordinación del plantel.', {
-    x: 12,
+  // Texto de uso institucional
+  pageBack.drawText('Documento institucional de uso personal para registro de asistencia escolar.', {
+    x: 14,
     y: 40,
-    size: 4.5,
+    size: 4.8,
     font: fontRegular,
-    color: rgb(0.5, 0.55, 0.6)
+    color: rgb(0.45, 0.5, 0.55)
   });
 
   // Zona MRZ en el Reverso

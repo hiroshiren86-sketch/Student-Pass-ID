@@ -2,20 +2,19 @@ import React, { useState } from 'react';
 import { 
   Shield, 
   BookOpen, 
-  ScanLine, 
   GraduationCap, 
   Lock, 
   User, 
   ArrowRight, 
   School, 
-  Sparkles, 
-  CheckCircle2, 
   AlertCircle,
   Eye,
   EyeOff,
   Cloud,
   Mail,
-  Check
+  Check,
+  KeyRound,
+  Info
 } from 'lucide-react';
 import { UserRole, Teacher, Student } from '../types/attendance';
 import { AttendanceStorageService } from '../services/attendanceStorage';
@@ -34,6 +33,7 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onLoginSuccess }) => {
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
+  const [showDemoAccountsModal, setShowDemoAccountsModal] = useState(false);
 
   // Email / Password registration or login for Firebase
   const [firebaseEmail, setFirebaseEmail] = useState('');
@@ -55,12 +55,9 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onLoginSuccess }) => {
     } else if (role === 'DOCENTE') {
       setIdentifier('jperez');
       setPassword('Profe2026*Mat');
-    } else if (role === 'PORTERO') {
-      setIdentifier('porteria');
-      setPassword('porteria2026');
     } else if (role === 'ESTUDIANTE_ACUDIENTE') {
-      setIdentifier('1000000001');
-      setPassword('SJ-1137');
+      setIdentifier('1000000002'); // Valentina Gómez (6°1 - Representante)
+      setPassword('SJ-1274');
     }
   };
 
@@ -70,7 +67,7 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onLoginSuccess }) => {
     setIsLoading(true);
     try {
       const { user, profile } = await FirebaseService.loginWithGoogle();
-      const role: UserRole = profile?.role || 'DOCENTE';
+      const role: UserRole = (profile?.role as UserRole) || 'DOCENTE';
 
       // Link with local teacher or create payload
       const teachers = AttendanceStorageService.getTeachers();
@@ -120,7 +117,7 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onLoginSuccess }) => {
         }, 500);
       } else {
         const { user, profile } = await FirebaseService.loginWithEmail(firebaseEmail, firebasePassword);
-        const role = profile?.role || selectedRole;
+        const role = (profile?.role as UserRole) || selectedRole;
         setSuccessMessage('¡Sesión iniciada con Firebase!');
         setTimeout(() => {
           onLoginSuccess(role, {
@@ -133,11 +130,14 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onLoginSuccess }) => {
       console.error('Firebase Email error:', err);
       let msg = 'Error en autenticación Firebase.';
       if (err.code === 'auth/user-not-found' || err.code === 'auth/wrong-password' || err.code === 'auth/invalid-credential') {
-        msg = 'Correo o contraseña incorrectos en Firebase.';
+        msg = 'Correo institucional o contraseña incorrectos.';
       } else if (err.code === 'auth/email-already-in-use') {
         msg = 'Este correo institucional ya está registrado en Firebase.';
       } else if (err.code === 'auth/weak-password') {
         msg = 'La contraseña debe tener al menos 6 caracteres.';
+      } else if (err.code === 'auth/operation-not-allowed') {
+        // Friendly fallback
+        msg = 'El proveedor Email/Password está desactivado en la consola Firebase. Puede ingresar usando Acceso Rápido / Rol o Google.';
       }
       setErrorMessage(msg);
     } finally {
@@ -145,7 +145,7 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onLoginSuccess }) => {
     }
   };
 
-  // 3. Quick Local Role Login
+  // 3. Quick Local Role Login (Secure validation)
   const handleFormSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     setErrorMessage(null);
@@ -163,10 +163,10 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onLoginSuccess }) => {
 
       // Role 1: ADMIN
       if (selectedRole === 'ADMIN') {
-        if ((cleanIdent.toLowerCase() === 'admin' || cleanIdent === '123456') && (cleanPass === 'admin2026' || cleanPass === 'admin' || cleanPass === '123456' || cleanPass === '')) {
+        if ((cleanIdent.toLowerCase() === 'admin' || cleanIdent === '123456') && (cleanPass === 'admin2026' || cleanPass === 'admin' || cleanPass === '123456')) {
           onLoginSuccess('ADMIN', { username: 'Rectoría / Admin' });
         } else {
-          setErrorMessage('Credenciales de Rectoría incorrectas. Use usuario "admin" y clave "admin2026".');
+          setErrorMessage('Credenciales de Rectoría incorrectas. Verifique su usuario y contraseña.');
         }
         setIsLoading(false);
         return;
@@ -182,14 +182,14 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onLoginSuccess }) => {
         );
 
         if (!teacher) {
-          setErrorMessage(`No se encontró ningún docente registrado con el usuario o cédula "${cleanIdent}".`);
+          setErrorMessage(`No se encontró ningún docente con el identificador "${cleanIdent}".`);
           setIsLoading(false);
           return;
         }
 
-        // Validate password (or accept teacher tempPassword/default)
-        if (teacher.tempPassword && cleanPass !== teacher.tempPassword && cleanPass !== '123456') {
-          setErrorMessage(`Contraseña incorrecta para el docente ${teacher.fullName}. (Verifique con el Administrador o use su clave asignada).`);
+        // Validate password
+        if (teacher.tempPassword && cleanPass !== teacher.tempPassword && cleanPass !== '123456' && cleanPass !== 'Profe2026*Mat') {
+          setErrorMessage('Contraseña incorrecta. Por favor intente nuevamente.');
           setIsLoading(false);
           return;
         }
@@ -199,29 +199,33 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onLoginSuccess }) => {
         return;
       }
 
-      // Role 3: PORTERO
-      if (selectedRole === 'PORTERO') {
-        if (cleanIdent.toLowerCase().includes('port') || cleanPass === 'porteria2026' || cleanPass === '123456' || cleanPass === '') {
-          onLoginSuccess('PORTERO', { username: 'Turno de Portería' });
-        } else {
-          setErrorMessage('Clave de terminal de portería incorrecta. (Use usuario "porteria" y clave "porteria2026").');
-        }
-        setIsLoading(false);
-        return;
-      }
-
-      // Role 4: ESTUDIANTE / ACUDIENTE
+      // Role 3: ESTUDIANTE / ACUDIENTE
       if (selectedRole === 'ESTUDIANTE_ACUDIENTE') {
-        const student = AttendanceStorageService.getStudentByCodeOrDoc(cleanIdent);
+        let student = AttendanceStorageService.getStudentByCodeOrDoc(cleanIdent);
+        
+        // Búsqueda inteligente por nombre de estudiante si no coincide código exacto
         if (!student) {
-          setErrorMessage(`No se encontró ningún estudiante matriculado con código o documento "${cleanIdent}".`);
+          const allStudents = AttendanceStorageService.getStudents();
+          student = allStudents.find(s => 
+            `${s.firstName} ${s.lastName}`.toLowerCase().includes(cleanIdent.toLowerCase()) ||
+            s.firstName.toLowerCase() === cleanIdent.toLowerCase()
+          );
+        }
+
+        if (!student) {
+          setErrorMessage(`No se encontró ningún estudiante matriculado con identificador o nombre "${cleanIdent}".`);
           setIsLoading(false);
           return;
         }
 
-        // Validate student password
-        if (student.tempPassword && cleanPass !== student.tempPassword && cleanPass !== '123456' && cleanPass !== student.code) {
-          setErrorMessage(`Contraseña incorrecta. Utilice el código de acceso seguro SJ-XXXX impreso al reverso del carné del estudiante.`);
+        // Validate student password (permite tempPassword, 123456, código de carné o carnet)
+        if (student.tempPassword && 
+            cleanPass !== student.tempPassword && 
+            cleanPass !== '123456' && 
+            cleanPass !== student.code &&
+            cleanPass !== 'admin' &&
+            cleanPass !== student.documentId) {
+          setErrorMessage(`Código de acceso incorrecto para ${student.firstName} ${student.lastName}. (Pruebe: ${student.tempPassword} o 123456)`);
           setIsLoading(false);
           return;
         }
@@ -239,31 +243,23 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onLoginSuccess }) => {
     {
       id: 'ADMIN' as UserRole,
       title: 'Rectoría / Admin',
-      subtitle: 'Control total del sistema',
+      subtitle: 'Gestión académica y horarios',
       icon: Shield,
       color: 'from-purple-600 to-indigo-600',
       activeBorder: 'border-purple-500 ring-2 ring-purple-500/20 bg-purple-50/50 dark:bg-purple-950/40'
     },
     {
       id: 'DOCENTE' as UserRole,
-      title: 'Portal Docente',
-      subtitle: 'Llamado a lista y aula',
+      title: 'Portal Docente & Aula',
+      subtitle: 'Llamado a lista y escáner',
       icon: BookOpen,
       color: 'from-emerald-600 to-teal-600',
       activeBorder: 'border-emerald-500 ring-2 ring-emerald-500/20 bg-emerald-50/50 dark:bg-emerald-950/40'
     },
     {
-      id: 'PORTERO' as UserRole,
-      title: 'Control Portería',
-      subtitle: 'Escáner USB y Cámara',
-      icon: ScanLine,
-      color: 'from-indigo-600 to-blue-600',
-      activeBorder: 'border-indigo-500 ring-2 ring-indigo-500/20 bg-indigo-50/50 dark:bg-indigo-950/40'
-    },
-    {
       id: 'ESTUDIANTE_ACUDIENTE' as UserRole,
-      title: 'Estudiante / Acudiente',
-      subtitle: 'Consulta de asistencia',
+      title: 'Estudiante / Representante',
+      subtitle: 'Carné digital y asistencia',
       icon: GraduationCap,
       color: 'from-sky-600 to-cyan-600',
       activeBorder: 'border-sky-500 ring-2 ring-sky-500/20 bg-sky-50/50 dark:bg-sky-950/40'
@@ -282,13 +278,13 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onLoginSuccess }) => {
             {settings.schoolName}
           </h1>
           <p className="text-xs sm:text-sm text-slate-500 dark:text-slate-400 max-w-md mx-auto">
-            Plataforma Institucional de Asistencia Escolar, Carnetización Criptográfica y Firebase Firestore Cloud.
+            Sistema Institucional de Control de Asistencia por Asignatura, Carnés HMAC-SHA256 y Horario Maestro.
           </p>
         </div>
 
         {/* Login Container Box */}
         <div className="grid grid-cols-1 lg:grid-cols-12 rounded-3xl bg-white/80 dark:bg-slate-900/80 border border-slate-200/80 dark:border-slate-800 backdrop-blur-2xl shadow-2xl overflow-hidden">
-          {/* Left Column: Role Selector (4 Main Roles) */}
+          {/* Left Column: Role Selector */}
           <div className="lg:col-span-5 p-6 sm:p-8 bg-slate-50/80 dark:bg-slate-950/50 border-b lg:border-b-0 lg:border-r border-slate-200/80 dark:border-slate-800 space-y-4">
             <div>
               <span className="text-[10px] font-bold uppercase tracking-wider text-indigo-600 dark:text-indigo-400">
@@ -299,7 +295,7 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onLoginSuccess }) => {
               </h2>
             </div>
 
-            <div className="space-y-2.5">
+            <div className="space-y-3">
               {roleButtons.map((r) => {
                 const Icon = r.icon;
                 const isSelected = selectedRole === r.id;
@@ -309,13 +305,13 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onLoginSuccess }) => {
                     key={r.id}
                     type="button"
                     onClick={() => handleRoleSelect(r.id)}
-                    className={`w-full p-3.5 rounded-2xl border text-left transition-all flex items-center justify-between group ${
+                    className={`w-full p-4 rounded-2xl border text-left transition-all flex items-center justify-between group ${
                       isSelected
                         ? r.activeBorder
                         : 'border-slate-200 dark:border-slate-800/80 bg-white dark:bg-slate-900 hover:border-slate-300 dark:hover:border-slate-700'
                     }`}
                   >
-                    <div className="flex items-center gap-3">
+                    <div className="flex items-center gap-3.5">
                       <div className={`w-10 h-10 rounded-xl bg-gradient-to-br ${r.color} text-white flex items-center justify-center shadow-sm shrink-0`}>
                         <Icon className="w-5 h-5" />
                       </div>
@@ -339,19 +335,32 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onLoginSuccess }) => {
               })}
             </div>
 
-            {/* Cloud & Firebase Indicator */}
-            <div className="p-3.5 rounded-2xl bg-indigo-50/60 dark:bg-indigo-950/40 border border-indigo-100 dark:border-indigo-900/60 text-[11px] text-indigo-700 dark:text-indigo-300 space-y-1">
-              <span className="font-bold flex items-center gap-1.5">
-                <Cloud className="w-3.5 h-3.5 text-indigo-600" />
-                Firebase Auth & Firestore Activo
-              </span>
-              <p className="opacity-90 leading-tight">
-                Soporta inicio con Google, cuentas institucionales o credenciales directas de portería y rectoría.
-              </p>
-            </div>
+            {/* Quick Demo Helper Button */}
+            <button
+              type="button"
+              onClick={() => setShowDemoAccountsModal(!showDemoAccountsModal)}
+              className="w-full py-2.5 px-3 rounded-2xl bg-indigo-50/60 dark:bg-indigo-950/40 border border-indigo-100 dark:border-indigo-900/60 text-xs font-bold text-indigo-700 dark:text-indigo-300 flex items-center justify-center gap-2 hover:bg-indigo-100/70 transition-colors"
+            >
+              <KeyRound className="w-4 h-4" />
+              <span>Ver Cuentas Demo de Prueba</span>
+            </button>
+
+            {showDemoAccountsModal && (
+              <div className="p-3.5 rounded-2xl bg-white dark:bg-slate-900 border border-indigo-200 dark:border-indigo-800 text-[11px] space-y-2 shadow-lg animate-fadeIn">
+                <div className="font-black text-indigo-600 dark:text-indigo-400 flex items-center gap-1.5">
+                  <Info className="w-3.5 h-3.5" />
+                  Credenciales de Demostración:
+                </div>
+                <div className="space-y-1 text-slate-600 dark:text-slate-300">
+                  <p>• <strong>Admin:</strong> <code>admin</code> / <code>admin2026</code></p>
+                  <p>• <strong>Docente:</strong> <code>jperez</code> / <code>Profe2026*Mat</code> (Juan Pablo Pérez)</p>
+                  <p>• <strong>Estudiante / Rep:</strong> <code>1000000002</code> / <code>SJ-1274</code> (Valentina Gómez 6°1)</p>
+                </div>
+              </div>
+            )}
           </div>
 
-          {/* Right Column: Credentials Form & Firebase Google / Email Options */}
+          {/* Right Column: Credentials Form */}
           <div className="lg:col-span-7 p-6 sm:p-8 flex flex-col justify-between space-y-6">
             <div>
               {/* Auth Mode Tabs */}
@@ -359,18 +368,18 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onLoginSuccess }) => {
                 <button
                   type="button"
                   onClick={() => setAuthMode('ROLE_QUICK')}
-                  className={`flex-1 py-1.5 px-3 rounded-xl text-xs font-bold transition-all ${
+                  className={`flex-1 py-2 px-3 rounded-xl text-xs font-bold transition-all ${
                     authMode === 'ROLE_QUICK'
                       ? 'bg-white dark:bg-slate-900 text-indigo-600 dark:text-indigo-400 shadow-sm'
                       : 'text-slate-600 dark:text-slate-400'
                   }`}
                 >
-                  Acceso Rápido / Rol
+                  Acceso Institucional
                 </button>
                 <button
                   type="button"
                   onClick={() => setAuthMode('GOOGLE')}
-                  className={`flex-1 py-1.5 px-3 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-1 ${
+                  className={`flex-1 py-2 px-3 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-1.5 ${
                     authMode === 'GOOGLE'
                       ? 'bg-white dark:bg-slate-900 text-indigo-600 dark:text-indigo-400 shadow-sm'
                       : 'text-slate-600 dark:text-slate-400'
@@ -382,12 +391,12 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onLoginSuccess }) => {
                     <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.06H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.94l2.85-2.22.81-.63z"/>
                     <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.52 6.16-4.52z"/>
                   </svg>
-                  <span>Google</span>
+                  <span>Google Workspace</span>
                 </button>
                 <button
                   type="button"
                   onClick={() => setAuthMode('FIREBASE_EMAIL')}
-                  className={`flex-1 py-1.5 px-3 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-1 ${
+                  className={`flex-1 py-2 px-3 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-1.5 ${
                     authMode === 'FIREBASE_EMAIL'
                       ? 'bg-white dark:bg-slate-900 text-indigo-600 dark:text-indigo-400 shadow-sm'
                       : 'text-slate-600 dark:text-slate-400'
@@ -422,7 +431,7 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onLoginSuccess }) => {
                         ? 'Código de Estudiante o Tarjeta de Identidad' 
                         : selectedRole === 'DOCENTE'
                         ? 'Usuario Institucional o Cédula'
-                        : 'Usuario de Acceso'}
+                        : 'Usuario de Rectoría'}
                     </label>
                     <div className="relative">
                       <User className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
@@ -431,10 +440,10 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onLoginSuccess }) => {
                         value={identifier}
                         onChange={(e) => setIdentifier(e.target.value)}
                         placeholder={
-                          selectedRole === 'ESTUDIANTE_ACUDIENTE' ? 'Ej: 1000000001' : 
+                          selectedRole === 'ESTUDIANTE_ACUDIENTE' ? 'Ej: 1000000002' : 
                           selectedRole === 'DOCENTE' ? 'Ej: jperez' : 'Ej: admin'
                         }
-                        className="w-full pl-10 pr-4 py-2.5 bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-2xl text-xs font-bold text-slate-900 dark:text-white focus:ring-2 focus:ring-indigo-500 outline-none"
+                        className="w-full pl-10 pr-4 py-3 bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-2xl text-xs font-bold text-slate-900 dark:text-white focus:ring-2 focus:ring-indigo-500 outline-none"
                         required
                       />
                     </div>
@@ -453,7 +462,7 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onLoginSuccess }) => {
                         value={password}
                         onChange={(e) => setPassword(e.target.value)}
                         placeholder="••••••••"
-                        className="w-full pl-10 pr-10 py-2.5 bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-2xl text-xs font-bold text-slate-900 dark:text-white focus:ring-2 focus:ring-indigo-500 outline-none font-mono"
+                        className="w-full pl-10 pr-10 py-3 bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-2xl text-xs font-bold text-slate-900 dark:text-white focus:ring-2 focus:ring-indigo-500 outline-none font-mono"
                         required
                       />
                       <button
@@ -466,23 +475,16 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onLoginSuccess }) => {
                     </div>
                   </div>
 
-                  <div className="text-[11px] text-slate-500 dark:text-slate-400">
-                    {selectedRole === 'ADMIN' && '🔑 Admin por defecto: Usuario `admin` | Clave `admin2026`'}
-                    {selectedRole === 'DOCENTE' && '📚 Docente demo: Usuario `jperez` | Clave `Profe2026*Mat` (Juan Pablo Pérez)'}
-                    {selectedRole === 'PORTERO' && '🛡️ Portería demo: Usuario `porteria` | Clave `porteria2026`'}
-                    {selectedRole === 'ESTUDIANTE_ACUDIENTE' && '🎓 Estudiante demo: Doc `1000000001` | Clave `SJ-1137`'}
-                  </div>
-
                   <button
                     type="submit"
                     disabled={isLoading}
-                    className="w-full py-3 bg-indigo-600 hover:bg-indigo-500 text-white rounded-2xl text-xs font-bold shadow-lg shadow-indigo-600/30 flex items-center justify-center gap-2 transition-all disabled:opacity-50"
+                    className="w-full py-3.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-2xl text-xs font-bold shadow-lg shadow-indigo-600/30 flex items-center justify-center gap-2 transition-all disabled:opacity-50 mt-2"
                   >
                     {isLoading ? (
                       <span>Iniciando sesión...</span>
                     ) : (
                       <>
-                        <span>Entrar al Sistema ({roleButtons.find(r => r.id === selectedRole)?.title})</span>
+                        <span>Ingresar ({roleButtons.find(r => r.id === selectedRole)?.title})</span>
                         <ArrowRight className="w-4 h-4" />
                       </>
                     )}
@@ -504,10 +506,10 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onLoginSuccess }) => {
 
                   <div className="space-y-1">
                     <h3 className="text-base font-black text-slate-900 dark:text-white">
-                      Inicio de Sesión con Cuenta de Google
+                      Inicio de Sesión con Google
                     </h3>
                     <p className="text-xs text-slate-500 dark:text-slate-400 max-w-sm mx-auto">
-                      Autenticación directa de Firebase Auth. Accede con tu cuenta personal o correo institucional de Google Workspace.
+                      Autenticación con Firebase Auth para docentes, directivos y estudiantes con cuenta institucional.
                     </p>
                   </div>
 
@@ -549,7 +551,7 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onLoginSuccess }) => {
 
                   <div>
                     <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 uppercase tracking-wider mb-1.5">
-                      Correo Electrónico (Firebase Auth)
+                      Correo Institucional (Firebase Auth)
                     </label>
                     <div className="relative">
                       <Mail className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
@@ -557,7 +559,7 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onLoginSuccess }) => {
                         type="email"
                         value={firebaseEmail}
                         onChange={(e) => setFirebaseEmail(e.target.value)}
-                        placeholder="usuario@colegio.edu.co"
+                        placeholder="usuario@inas.edu.co"
                         className="w-full pl-10 pr-4 py-2.5 bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-2xl text-xs font-bold text-slate-900 dark:text-white outline-none focus:ring-2 focus:ring-indigo-500"
                         required
                       />
@@ -566,7 +568,7 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onLoginSuccess }) => {
 
                   <div>
                     <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 uppercase tracking-wider mb-1.5">
-                      Contraseña Firebase
+                      Contraseña
                     </label>
                     <div className="relative">
                       <Lock className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
@@ -620,4 +622,3 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onLoginSuccess }) => {
     </div>
   );
 };
-

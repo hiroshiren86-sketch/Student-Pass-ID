@@ -75,6 +75,22 @@ const SLOT_TYPE_CONFIG: Record<ScheduleSlotType, { label: string; icon: any; bg:
     text: 'text-amber-700 dark:text-amber-300',
     border: 'border-amber-200 dark:border-amber-800',
     desc: 'Comedor escolar / restaurante'
+  },
+  CIVIC: {
+    label: 'Acto Cívico / Izada',
+    icon: Sparkles,
+    bg: 'bg-purple-50 dark:bg-purple-950/60',
+    text: 'text-purple-700 dark:text-purple-300',
+    border: 'border-purple-200 dark:border-purple-800',
+    desc: 'Izada de bandera / Actividad cívica'
+  },
+  ADVISORY: {
+    label: 'Asesoría de Grupo',
+    icon: Users,
+    bg: 'bg-teal-50 dark:bg-teal-950/60',
+    text: 'text-teal-700 dark:text-teal-300',
+    border: 'border-teal-200 dark:border-teal-800',
+    desc: 'Dirección de grupo / Acompañamiento'
   }
 };
 
@@ -127,15 +143,19 @@ export const ScheduleBuilderView: React.FC = () => {
   }, [editingSlot]);
 
   // Open assignment editor for a specific slot in grid
-  const handleOpenAssign = (slot: ScheduleSlot) => {
+  const handleOpenAssign = (slot: ScheduleSlot, dayOverride?: number) => {
     if (slot.type !== 'CLASS') return;
+    const targetDay = dayOverride !== undefined ? dayOverride : selectedDay;
+    if (dayOverride !== undefined) {
+      setSelectedDay(dayOverride);
+    }
     setEditingSlot(slot);
 
     // Check existing assignment
     const existing = assignments.find(a => 
       a.slotId === slot.id && 
       a.grade === selectedGrade && 
-      a.dayOfWeek === selectedDay
+      a.dayOfWeek === targetDay
     );
 
     if (existing) {
@@ -628,8 +648,7 @@ export const ScheduleBuilderView: React.FC = () => {
                           <td 
                             key={d.id} 
                             onClick={() => {
-                              setSelectedDay(d.id);
-                              handleOpenAssign(slot);
+                              handleOpenAssign(slot, d.id);
                             }}
                             className="py-2 px-3 cursor-pointer"
                           >

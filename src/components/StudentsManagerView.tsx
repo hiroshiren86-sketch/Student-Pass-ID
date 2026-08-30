@@ -17,7 +17,8 @@ import {
   HelpCircle,
   Sparkles,
   CheckCircle,
-  ShieldCheck
+  ShieldCheck,
+  Crown
 } from 'lucide-react';
 import { Student, SchoolSettings, DocumentType } from '../types/attendance';
 import { AttendanceStorageService } from '../services/attendanceStorage';
@@ -297,6 +298,7 @@ export const StudentsManagerView: React.FC<StudentsManagerViewProps> = ({ onGene
                 <th className="py-3 px-3">Grado / Curso</th>
                 <th className="py-3 px-3">Tipo / Documento</th>
                 <th className="py-3 px-3">Código QR / Barras</th>
+                <th className="py-3 px-3">Rol en Aula</th>
                 <th className="py-3 px-3 text-right">Acciones</th>
               </tr>
             </thead>
@@ -332,6 +334,34 @@ export const StudentsManagerView: React.FC<StudentsManagerViewProps> = ({ onGene
                   </td>
                   <td className="py-3 px-3 font-mono text-indigo-600 dark:text-indigo-400 font-bold">
                     {std.code}
+                  </td>
+                  <td className="py-3 px-3">
+                    {std.isRepresentative ? (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          AttendanceStorageService.setRepresentativeForGrade(std.grade, '');
+                          refreshList();
+                        }}
+                        className="px-2 py-0.5 rounded-md bg-amber-100 dark:bg-amber-950/70 text-amber-800 dark:text-amber-300 text-[10px] font-bold border border-amber-300 dark:border-amber-800 flex items-center gap-1 hover:bg-amber-200 transition-colors"
+                        title="Clic para remover rol de representante"
+                      >
+                        <Crown className="w-3 h-3 text-amber-600" />
+                        <span>Representante</span>
+                      </button>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          AttendanceStorageService.setRepresentativeForGrade(std.grade, std.code);
+                          refreshList();
+                        }}
+                        className="px-2 py-0.5 rounded-md bg-slate-100 dark:bg-slate-800 hover:bg-amber-50 text-slate-500 hover:text-amber-700 text-[10px] font-medium border border-slate-200 dark:border-slate-700 flex items-center gap-1 transition-colors"
+                        title="Asignar como Representante de este curso"
+                      >
+                        <span>Hacer Rep</span>
+                      </button>
+                    )}
                   </td>
                   <td className="py-3 px-3 text-right space-x-1">
                     <button

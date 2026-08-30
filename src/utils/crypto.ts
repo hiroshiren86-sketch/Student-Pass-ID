@@ -151,3 +151,6 @@ export async function hashPasswordPbkdf2(password: string, salt: string = 'COL_I
   const exported = await window.crypto.subtle.exportKey('raw', key);
   return bufferToHex(exported);
 }
+
+export const generateSignedQRPayload = generateStudentQrPayload;
+

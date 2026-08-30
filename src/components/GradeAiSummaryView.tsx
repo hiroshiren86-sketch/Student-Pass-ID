@@ -28,6 +28,19 @@ export const GradeAiSummaryView: React.FC = () => {
   const [loading, setLoading] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<GradeAiSummaryResult | null>(null);
+  const [aiStatus, setAiStatus] = useState<{ activeProvider: string; activeModel: string; availableProviders: string[]; hasAnyKey: boolean }>({
+    activeProvider: 'none',
+    activeModel: '',
+    availableProviders: [],
+    hasAnyKey: false
+  });
+
+  useEffect(() => {
+    fetch('/api/ai/status')
+      .then(res => res.json())
+      .then(data => setAiStatus(data))
+      .catch(() => {});
+  }, []);
 
   const quickPrompts = [
     `Dame un resumen conciso de ${selectedGrade}`,
@@ -40,6 +53,7 @@ export const GradeAiSummaryView: React.FC = () => {
     setLoading(true);
     setError(null);
 
+    const settings = AttendanceStorageService.getSettings();
     const students = AttendanceStorageService.getStudentsByGrade(selectedGrade);
     const records = AttendanceStorageService.getAttendanceByGrade(selectedGrade);
 
@@ -52,7 +66,10 @@ export const GradeAiSummaryView: React.FC = () => {
           timeframe,
           customQuestion: queryPrompt || customQuestion || `Genera un resumen analítico relevante y conciso del curso ${selectedGrade}`,
           students,
-          records
+          records,
+          aiProvider: settings.aiProvider,
+          apiKey: settings.customAiApiKey,
+          temperature: settings.aiTemperature
         })
       });
 
@@ -79,15 +96,27 @@ export const GradeAiSummaryView: React.FC = () => {
     fetchGradeSummary();
   }, [selectedGrade, timeframe]);
 
+  const providerLabels: Record<string, { label: string; color: string; badge: string }> = {
+    mistral: { label: 'Mistral AI', color: 'text-amber-600 dark:text-amber-400 bg-amber-500/10 border-amber-500/30', badge: 'Mistral Pixtral / Small' },
+    groq: { label: 'Groq Cloud', color: 'text-orange-600 dark:text-orange-400 bg-orange-500/10 border-orange-500/30', badge: 'Groq Llama 3.3 Ultra-Fast' },
+    openrouter: { label: 'OpenRouter', color: 'text-emerald-600 dark:text-emerald-400 bg-emerald-500/10 border-emerald-500/30', badge: 'OpenRouter Multi-LLM' },
+    gemini: { label: 'Google Gemini', color: 'text-indigo-600 dark:text-indigo-400 bg-indigo-500/10 border-indigo-500/30', badge: 'Gemini 2.5 Flash' },
+    openai: { label: 'OpenAI', color: 'text-teal-600 dark:text-teal-400 bg-teal-500/10 border-teal-500/30', badge: 'OpenAI GPT-4o' },
+    none: { label: 'Motor Local', color: 'text-slate-600 dark:text-slate-400 bg-slate-500/10 border-slate-500/30', badge: 'Motor Local Heurístico ($0)' },
+  };
+
+  const activeProviderKey = (result?.provider || AttendanceStorageService.getSettings().aiProvider || aiStatus.activeProvider || 'none').toLowerCase();
+  const currentProvider = providerLabels[activeProviderKey] || providerLabels.none;
+
   return (
     <div className="space-y-6 animate-fadeIn" id="grade-ai-summary-view">
       {/* Header Banner */}
       <div className="glass-panel p-6 rounded-3xl flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
         <div>
           <div className="flex items-center gap-2">
-            <span className="px-2.5 py-0.5 rounded-full bg-indigo-500/15 border border-indigo-500/30 text-indigo-700 dark:text-indigo-300 font-bold text-[11px] uppercase tracking-wider flex items-center gap-1.5">
-              <Sparkles className="w-3 h-3 text-indigo-500" />
-              IA Escolar • Gemini 3.7 Flash
+            <span className={`px-2.5 py-0.5 rounded-full border font-bold text-[11px] uppercase tracking-wider flex items-center gap-1.5 ${currentProvider.color}`}>
+              <Sparkles className="w-3 h-3" />
+              IA Escolar • {currentProvider.badge}
             </span>
           </div>
           <h2 className="text-xl sm:text-2xl font-black text-slate-900 dark:text-white tracking-tight mt-1.5">

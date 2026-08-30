@@ -44,10 +44,55 @@ export const DocumentUploadModal: React.FC<DocumentUploadModalProps> = ({
   const handleFiles = async (files: FileList | File[]) => {
     setIsProcessing(true);
     const newDrafts: ExtractedStudentDraft[] = [];
+    const settings = AttendanceStorageService.getSettings();
 
     for (let i = 0; i < files.length; i++) {
       const file = files[i];
       try {
+        const fileExt = file.name.split('.').pop()?.toLowerCase() || '';
+        
+        // Si es imagen (JPG, PNG, WEBP) y hay configuración de IA activa, intentar extracción inteligente por visión además del parser local
+        if (['jpg', 'jpeg', 'png', 'webp'].includes(fileExt) && settings.aiProvider && settings.aiProvider !== 'local') {
+          try {
+            const base64Data = await readFileAsBase64Raw(file);
+            const visionRes = await fetch('/api/ai/vision-extract', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                imageBase64: base64Data,
+                mimeType: file.type || 'image/jpeg',
+                fileName: file.name,
+                aiProvider: settings.aiProvider,
+                apiKey: settings.customAiApiKey
+              })
+            });
+
+            if (visionRes.ok) {
+              const visionData = await visionRes.json();
+              if (visionData.success && Array.isArray(visionData.students) && visionData.students.length > 0) {
+                const photoDataUrl = await readFileAsDataUrl(file);
+                for (const st of visionData.students) {
+                  newDrafts.push({
+                    id: `draft_ai_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+                    fileName: file.name,
+                    documentType: st.documentType || 'TI',
+                    documentId: String(st.documentId || '').replace(/\D/g, '') || `10${Math.floor(10000000 + Math.random() * 90000000)}`,
+                    firstName: String(st.firstName || 'ESTUDIANTE').toUpperCase().trim(),
+                    lastName: String(st.lastName || '').toUpperCase().trim(),
+                    grade: normalizeGradeName(st.grade || '6°1'),
+                    photoUrl: photoDataUrl,
+                    confidence: st.confidence || 0.95,
+                    status: 'valid'
+                  });
+                }
+                continue; // Procesado exitosamente por IA de Visión
+              }
+            }
+          } catch (aiErr) {
+            console.warn('Fallback a parser local tras error en visión IA:', aiErr);
+          }
+        }
+
         const extracted = await parseDocumentFile(file);
         newDrafts.push(...extracted);
       } catch (err) {
@@ -57,6 +102,28 @@ export const DocumentUploadModal: React.FC<DocumentUploadModalProps> = ({
 
     setDrafts((prev) => [...prev, ...newDrafts]);
     setIsProcessing(false);
+  };
+
+  const readFileAsBase64Raw = (file: File): Promise<string> => {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => {
+        const res = reader.result as string;
+        const base64 = res.split(',')[1] || res;
+        resolve(base64);
+      };
+      reader.onerror = reject;
+      reader.readAsDataURL(file);
+    });
+  };
+
+  const readFileAsDataUrl = (file: File): Promise<string> => {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result as string);
+      reader.onerror = reject;
+      reader.readAsDataURL(file);
+    });
   };
 
   const handleDrag = (e: React.DragEvent) => {

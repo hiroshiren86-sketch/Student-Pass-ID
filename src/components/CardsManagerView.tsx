@@ -361,7 +361,7 @@ export const CardsManagerView: React.FC = () => {
             {previewStudent ? (
               <div className="space-y-4">
                 {/* Visual Front Card - Colombian Digital ID Aesthetic */}
-                <div className="w-full aspect-[85.6/53.98] rounded-2xl bg-gradient-to-br from-slate-50 via-sky-50/40 to-indigo-50/30 border-2 border-slate-300 dark:border-slate-700 shadow-xl p-3 flex flex-col justify-between relative overflow-hidden text-slate-900">
+                <div className="w-full aspect-[85.6/53.98] rounded-2xl bg-white border-2 border-slate-300 dark:border-slate-700 shadow-xl p-3 flex flex-col justify-between relative overflow-hidden text-slate-900">
                   {/* Subtle Colombia Tricolor Header */}
                   <div className="absolute top-0 left-0 right-0 h-1.5 flex">
                     <div className="w-1/2 h-full bg-amber-400" />
@@ -369,22 +369,24 @@ export const CardsManagerView: React.FC = () => {
                     <div className="w-1/4 h-full bg-red-600" />
                   </div>
 
-                  {/* Header */}
-                  <div className="flex items-center justify-between pt-1 text-[8px] font-bold text-slate-800 tracking-tight">
-                    <div>
-                      <span className="text-[7px] uppercase text-indigo-900 block font-black">REPÚBLICA DE COLOMBIA</span>
-                      <span className="text-[8px] font-black text-slate-900 line-clamp-1 max-w-[185px] block leading-tight" title={settings.schoolName}>
-                        {settings.schoolName || 'Institución Educativa Antonia Santos (I.N.A.S)'}
+                  {/* Header: Institución Educativa y Año */}
+                  <div className="flex items-center justify-between pt-1">
+                    <div className="min-w-0 pr-2">
+                      <span className="text-[8px] font-black text-slate-900 truncate block leading-tight" title={settings.schoolName}>
+                        {settings.schoolName || 'Institución Educativa'}
+                      </span>
+                      <span className="text-[6.5px] uppercase font-bold text-indigo-700 block">
+                        Carné Estudiantil
                       </span>
                     </div>
-                    <div className="w-6 h-6 rounded-full border border-indigo-200 bg-indigo-50/80 flex items-center justify-center text-[7px] font-black text-indigo-700">
+                    <div className="px-1.5 py-0.5 rounded-md bg-slate-900 text-white text-[7px] font-black tracking-wider shrink-0">
                       2026
                     </div>
                   </div>
 
                   {/* Body with QR / Chip and Student Details */}
                   <div className="flex items-center gap-2.5 my-0.5">
-                    <div className="w-14 h-14 rounded-xl bg-white p-1 border border-slate-300 shadow-sm flex items-center justify-center text-slate-900 shrink-0 relative">
+                    <div className="w-14 h-14 rounded-xl bg-white p-1 border border-slate-300 shadow-xs flex items-center justify-center text-slate-900 shrink-0 relative">
                       <QrCode className="w-12 h-12" />
                       <div className="absolute -bottom-1 -right-1 px-1 bg-indigo-600 text-white text-[6px] font-black rounded">
                         HMAC
@@ -399,13 +401,15 @@ export const CardsManagerView: React.FC = () => {
                         {previewStudent.documentId}
                       </div>
 
-                      <div className="text-[6.5px] font-bold text-slate-400 uppercase leading-none mt-0.5">Apellidos y Nombres</div>
-                      <div className="text-[9px] font-black uppercase truncate text-slate-900 leading-tight">
+                      <div className="text-[6.5px] font-bold text-slate-400 uppercase leading-none mt-0.5">
+                        Estudiante
+                      </div>
+                      <div className="text-[9.5px] font-black uppercase truncate text-slate-900 leading-tight">
                         {previewStudent.lastName} {previewStudent.firstName}
                       </div>
 
-                      <div className="text-[7.5px] font-bold text-indigo-600">
-                        CURSO: <span className="font-black">{previewStudent.grade}</span>
+                      <div className="text-[8px] font-bold text-indigo-700">
+                        GRADO: <span className="font-black">{previewStudent.grade}</span>
                       </div>
                     </div>
 
@@ -435,22 +439,22 @@ export const CardsManagerView: React.FC = () => {
 
                 {/* Visual Back Card */}
                 <div className="w-full aspect-[85.6/53.98] rounded-2xl bg-slate-50 border-2 border-slate-300 dark:border-slate-700 shadow-xl p-3 flex flex-col justify-between relative overflow-hidden text-slate-900">
-                  <div className="absolute top-0 left-0 right-0 h-2.5 bg-slate-900" />
+                  <div className="absolute top-0 left-0 right-0 h-2 bg-slate-900" />
 
-                  <div className="pt-2 space-y-1">
-                    <div className="text-[7.5px] font-black text-indigo-950 uppercase flex items-center justify-between">
-                      <span>Portal de Consulta Estudiantil</span>
-                      <span className="text-[6.5px] font-bold text-emerald-700">● Solo Lectura</span>
+                  <div className="pt-2 space-y-1.5">
+                    <div className="text-[7.5px] font-black text-slate-800 uppercase flex items-center justify-between">
+                      <span>Credenciales de Consulta</span>
+                      <span className="text-[6.5px] font-bold text-emerald-700">● Institucional</span>
                     </div>
 
-                    <div className="p-1.5 bg-white rounded-xl border border-slate-200 text-[7.5px] font-mono space-y-0.5 shadow-xs">
-                      <div className="flex justify-between">
-                        <span className="text-slate-500">USUARIO:</span>
-                        <strong className="text-slate-900">{previewStudent.code}</strong>
+                    <div className="p-2 bg-white rounded-xl border border-slate-200 text-[8px] font-mono space-y-1 shadow-xs">
+                      <div className="flex justify-between items-center">
+                        <span className="text-slate-500 font-sans text-[7px] font-bold">CÓDIGO:</span>
+                        <strong className="text-slate-900 text-[8.5px]">{previewStudent.code}</strong>
                       </div>
-                      <div className="flex justify-between">
-                        <span className="text-slate-500">CLAVE PERMANENTE:</span>
-                        <strong className="text-rose-600 font-black">{previewStudent.tempPassword || `SJ-${previewStudent.documentId.slice(-4)}`}</strong>
+                      <div className="flex justify-between items-center">
+                        <span className="text-slate-500 font-sans text-[7px] font-bold">CLAVE ACCESO:</span>
+                        <strong className="text-indigo-600 font-black text-[8.5px]">{previewStudent.tempPassword || `SJ-${previewStudent.documentId.slice(-4)}`}</strong>
                       </div>
                     </div>
                   </div>

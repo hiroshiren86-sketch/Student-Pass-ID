@@ -40,6 +40,7 @@ import { SettingsModal } from './components/SettingsModal';
 import { useTheme } from './context/ThemeContext';
 import { SchoolSettings, Student, Teacher, UserRole } from './types/attendance';
 import { AttendanceStorageService } from './services/attendanceStorage';
+import { CloudflareSyncService } from './services/cloudflareSync';
 
 export type ActiveTab = 'scan' | 'students' | 'teachers' | 'schedules' | 'cards' | 'attendance' | 'ai-grades' | 'teacher' | 'portal';
 
@@ -57,9 +58,12 @@ export default function App() {
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const [settings, setSettings] = useState<SchoolSettings>(AttendanceStorageService.getSettings());
 
+  const [isUserMenuOpen, setIsUserMenuOpen] = useState(false);
+  const userMenuRef = useRef<HTMLDivElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
+    CloudflareSyncService.initAutoSync();
     const unsubscribe = AttendanceStorageService.subscribe(() => {
       setSettings(AttendanceStorageService.getSettings());
     });
@@ -77,9 +81,7 @@ export default function App() {
     }
 
     // Default landing tab per role
-    if (role === 'PORTERO') {
-      setActiveTab('scan');
-    } else if (role === 'DOCENTE') {
+    if (role === 'DOCENTE') {
       setActiveTab('teacher');
     } else if (role === 'ESTUDIANTE_ACUDIENTE') {
       setActiveTab('portal');
@@ -89,6 +91,7 @@ export default function App() {
   };
 
   const handleLogout = () => {
+    setIsUserMenuOpen(false);
     setIsAuthenticated(false);
   };
 
@@ -96,10 +99,8 @@ export default function App() {
   const switchRole = (role: UserRole) => {
     setCurrentRole(role);
     setShowRoleModal(false);
-    if (role === 'PORTERO') {
-      setActiveTab('scan');
-      setLoggedUser({ username: 'Turno de Portería' });
-    } else if (role === 'DOCENTE') {
+    setIsUserMenuOpen(false);
+    if (role === 'DOCENTE') {
       setActiveTab('teacher');
       const firstTeacher = AttendanceStorageService.getTeachers()[0];
       setLoggedUser({ teacher: firstTeacher, username: firstTeacher?.fullName || 'Prof. Juan Pablo Pérez' });
@@ -113,11 +114,14 @@ export default function App() {
     }
   };
 
-  // Close dropdown on outside click
+  // Close dropdowns on outside click
   useEffect(() => {
     const handleClickOutside = (e: MouseEvent) => {
       if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
         setIsMenuOpen(false);
+      }
+      if (userMenuRef.current && !userMenuRef.current.contains(e.target as Node)) {
+        setIsUserMenuOpen(false);
       }
     };
     document.addEventListener('mousedown', handleClickOutside);
@@ -125,7 +129,7 @@ export default function App() {
   }, []);
 
   const navItems = [
-    { id: 'scan' as ActiveTab, label: 'Portería / Escáner', icon: ScanLine, badge: 'En vivo', primary: true, roles: ['ADMIN', 'PORTERO'] },
+    { id: 'scan' as ActiveTab, label: 'Escanear Asistencia', icon: ScanLine, badge: 'En vivo', primary: true, roles: ['ADMIN', 'PORTERO'] },
     { id: 'students' as ActiveTab, label: 'Directorio Estudiantes', icon: Users, badge: 'Matrícula', primary: true, roles: ['ADMIN'] },
     { id: 'schedules' as ActiveTab, label: 'Horarios Escolares', icon: Calendar, badge: 'Nuevo', primary: true, roles: ['ADMIN'] },
     { id: 'teachers' as ActiveTab, label: 'Gestión Docentes', icon: Key, badge: 'Credenciales', primary: false, roles: ['ADMIN'] },
@@ -141,7 +145,7 @@ export default function App() {
   const roleConfig = {
     ADMIN: { label: 'Rectoría / Admin', icon: Shield, color: 'bg-purple-50 text-purple-700 dark:bg-purple-950/70 dark:text-purple-300 border-purple-200 dark:border-purple-800' },
     DOCENTE: { label: 'Docente (Aula)', icon: BookOpen, color: 'bg-emerald-50 text-emerald-700 dark:bg-emerald-950/70 dark:text-emerald-300 border-emerald-200 dark:border-emerald-800' },
-    PORTERO: { label: 'Portería (Escáner)', icon: ScanLine, color: 'bg-indigo-50 text-indigo-700 dark:bg-indigo-950/70 dark:text-indigo-300 border-indigo-200 dark:border-indigo-800' },
+    PORTERO: { label: 'Operador de Escaneo', icon: ScanLine, color: 'bg-indigo-50 text-indigo-700 dark:bg-indigo-950/70 dark:text-indigo-300 border-indigo-200 dark:border-indigo-800' },
     ESTUDIANTE_ACUDIENTE: { label: 'Estudiante / Acudiente', icon: GraduationCap, color: 'bg-sky-50 text-sky-700 dark:bg-sky-950/70 dark:text-sky-300 border-sky-200 dark:border-sky-800' },
   };
 
@@ -281,32 +285,120 @@ export default function App() {
               </div>
             )}
 
-            {/* Quick Actions (Theme, Settings & Logout) */}
-            <button
-              onClick={toggleTheme}
-              className="p-2 rounded-2xl text-slate-500 hover:text-slate-900 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-slate-800 transition-all"
-              title={theme === 'light' ? 'Modo Oscuro' : 'Modo Claro'}
-            >
-              {theme === 'light' ? <Moon className="w-4 h-4" /> : <Sun className="w-4 h-4" />}
-            </button>
-
-            {currentRole === 'ADMIN' && (
+            {/* User Account & System Menu Dropdown */}
+            <div className="relative" ref={userMenuRef}>
               <button
-                onClick={() => setShowSettingsModal(true)}
-                className="p-2 rounded-2xl text-slate-500 hover:text-slate-900 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-slate-800 transition-all"
-                title="Configuración Institucional"
+                onClick={() => setIsUserMenuOpen(!isUserMenuOpen)}
+                className={`p-1.5 sm:px-3 sm:py-1.5 rounded-2xl border text-xs font-bold transition-all flex items-center gap-2 ${
+                  isUserMenuOpen
+                    ? 'bg-slate-100 dark:bg-slate-800 border-indigo-400 text-indigo-600 dark:text-indigo-300'
+                    : 'bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-800 text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-800/60 shadow-xs'
+                }`}
+                title="Menú de Usuario, Ajustes y Sesión"
               >
-                <SettingsIcon className="w-4 h-4" />
+                <div className="w-7 h-7 rounded-xl bg-gradient-to-tr from-indigo-600 to-purple-600 text-white flex items-center justify-center text-xs font-black shrink-0 shadow-xs">
+                  {loggedUser.username[0]?.toUpperCase() || 'U'}
+                </div>
+                <div className="text-left hidden sm:block max-w-[120px] md:max-w-[150px]">
+                  <p className="text-[11px] font-black truncate text-slate-900 dark:text-white leading-tight">
+                    {loggedUser.username}
+                  </p>
+                  <p className="text-[9px] text-slate-400 font-medium truncate uppercase tracking-wider">
+                    {roleConfig[currentRole].label}
+                  </p>
+                </div>
+                <ChevronDown className={`w-3.5 h-3.5 opacity-60 transition-transform ${isUserMenuOpen ? 'rotate-180' : ''}`} />
               </button>
-            )}
 
-            <button
-              onClick={handleLogout}
-              className="p-2 rounded-2xl text-slate-400 hover:text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-950/60 transition-all"
-              title="Cerrar Sesión / Cambiar Usuario"
-            >
-              <LogOut className="w-4 h-4" />
-            </button>
+              {/* Floating User & Settings Menu */}
+              {isUserMenuOpen && (
+                <div className="absolute right-0 mt-2 w-72 p-2.5 rounded-3xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-2xl z-50 animate-fadeIn space-y-2">
+                  {/* User Profile Header */}
+                  <div className="p-3 rounded-2xl bg-slate-50 dark:bg-slate-950/70 border border-slate-100 dark:border-slate-800 space-y-1">
+                    <div className="flex items-center justify-between">
+                      <span className="text-[10px] uppercase font-bold text-slate-400 tracking-wider">Sesión Activa</span>
+                      <span className="text-[9px] font-bold px-2 py-0.5 rounded-full bg-emerald-100 dark:bg-emerald-950/70 text-emerald-700 dark:text-emerald-300">
+                        En Línea
+                      </span>
+                    </div>
+                    <p className="text-xs font-black text-slate-900 dark:text-white truncate">
+                      {loggedUser.username}
+                    </p>
+                    <p className="text-[10px] text-indigo-600 dark:text-indigo-400 font-bold">
+                      Rol: {roleConfig[currentRole].label}
+                    </p>
+                  </div>
+
+                  {/* Settings & Preferences */}
+                  <div className="space-y-1 pt-1">
+                    <button
+                      onClick={() => {
+                        setShowRoleModal(true);
+                        setIsUserMenuOpen(false);
+                      }}
+                      className="w-full p-2 rounded-xl text-left flex items-center justify-between text-xs font-bold text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
+                    >
+                      <div className="flex items-center gap-2">
+                        <UserCheck2 className="w-4 h-4 text-indigo-500" />
+                        <span>Cambiar Rol / Perfil</span>
+                      </div>
+                      <span className="text-[10px] text-slate-400">4 roles</span>
+                    </button>
+
+                    <button
+                      onClick={toggleTheme}
+                      className="w-full p-2 rounded-xl text-left flex items-center justify-between text-xs font-bold text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
+                    >
+                      <div className="flex items-center gap-2">
+                        {theme === 'light' ? <Moon className="w-4 h-4 text-indigo-500" /> : <Sun className="w-4 h-4 text-amber-400" />}
+                        <span>Tema Visual</span>
+                      </div>
+                      <span className="text-[10px] font-mono px-2 py-0.5 rounded-md bg-slate-100 dark:bg-slate-800 text-slate-500 capitalize">
+                        {theme === 'light' ? 'Claro' : 'Oscuro'}
+                      </span>
+                    </button>
+
+                    {currentRole === 'ADMIN' && (
+                      <button
+                        onClick={() => {
+                          setShowSettingsModal(true);
+                          setIsUserMenuOpen(false);
+                        }}
+                        className="w-full p-2 rounded-xl text-left flex items-center justify-between text-xs font-bold text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
+                      >
+                        <div className="flex items-center gap-2">
+                          <SettingsIcon className="w-4 h-4 text-purple-500" />
+                          <span>Configuración & Motores IA</span>
+                        </div>
+                        <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-purple-100 dark:bg-purple-950 text-purple-700 dark:text-purple-300 uppercase">
+                          {settings.aiProvider || 'Groq'}
+                        </span>
+                      </button>
+                    )}
+                  </div>
+
+                  {/* Sync Status Badge */}
+                  <div className="p-2 rounded-xl bg-slate-50 dark:bg-slate-950 border border-slate-100 dark:border-slate-800 text-[10px] text-slate-500 flex items-center justify-between">
+                    <div className="flex items-center gap-1.5">
+                      <Wifi className="w-3 h-3 text-emerald-500" />
+                      <span>Cloudflare D1 & Sync</span>
+                    </div>
+                    <span className="text-emerald-600 dark:text-emerald-400 font-bold">Activo</span>
+                  </div>
+
+                  {/* Secure Logout Action */}
+                  <div className="pt-2 border-t border-slate-100 dark:border-slate-800">
+                    <button
+                      onClick={handleLogout}
+                      className="w-full p-2 rounded-xl text-left flex items-center gap-2 text-xs font-bold text-rose-600 dark:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/50 transition-colors"
+                    >
+                      <LogOut className="w-4 h-4" />
+                      <span>Cerrar Sesión</span>
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
           </div>
         </div>
       </header>
@@ -377,37 +469,15 @@ export default function App() {
                 </div>
                 <div>
                   <h4 className="text-xs font-black text-slate-900 dark:text-white">
-                    2. Docente (Aula)
+                    2. Docente (Aula y Horarios)
                   </h4>
                   <p className="text-[10px] text-slate-500 dark:text-slate-400 mt-0.5 leading-relaxed">
-                    Llamado a lista por horario, comparación en vivo con portería y detección de ausencias.
+                    Llamado a lista por bloques, escáner en vivo, subrol de Director de Grupo y Representantes.
                   </p>
                 </div>
               </button>
 
-              {/* 3. Portería / Escáner */}
-              <button
-                onClick={() => switchRole('PORTERO')}
-                className={`p-4 rounded-2xl border text-left transition-all space-y-2 ${
-                  currentRole === 'PORTERO'
-                    ? 'border-indigo-500 bg-indigo-50/50 dark:bg-indigo-950/40 shadow-md ring-2 ring-indigo-500/20'
-                    : 'border-slate-200 dark:border-slate-800 hover:border-slate-300 dark:hover:border-slate-700 bg-white dark:bg-slate-950'
-                }`}
-              >
-                <div className="w-8 h-8 rounded-xl bg-indigo-100 dark:bg-indigo-900/60 text-indigo-600 dark:text-indigo-300 flex items-center justify-center">
-                  <ScanLine className="w-4 h-4" />
-                </div>
-                <div>
-                  <h4 className="text-xs font-black text-slate-900 dark:text-white">
-                    3. Portería / Escáner
-                  </h4>
-                  <p className="text-[10px] text-slate-500 dark:text-slate-400 mt-0.5 leading-relaxed">
-                    Terminal dedicado de escaneo ultrarrápido con lector USB o cámara.
-                  </p>
-                </div>
-              </button>
-
-              {/* 4. Estudiante / Acudiente */}
+              {/* 3. Estudiante / Acudiente */}
               <button
                 onClick={() => switchRole('ESTUDIANTE_ACUDIENTE')}
                 className={`p-4 rounded-2xl border text-left transition-all space-y-2 ${
@@ -421,10 +491,10 @@ export default function App() {
                 </div>
                 <div>
                   <h4 className="text-xs font-black text-slate-900 dark:text-white">
-                    4. Estudiante / Acudiente
+                    3. Estudiante / Acudiente
                   </h4>
                   <p className="text-[10px] text-slate-500 dark:text-slate-400 mt-0.5 leading-relaxed">
-                    Consulta individual de historial de asistencia mediante documento y clave de carné.
+                    Consulta individual de historial de asistencia, asignaturas y modo Representante de Salón.
                   </p>
                 </div>
               </button>
