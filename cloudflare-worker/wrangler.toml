@@ -7,8 +7,9 @@ compatibility_flags = ["nodejs_compat"]
 [vars]
 SCHOOL_CODE = "INAS_2026"
 SCHOOL_NAME = "Institución Educativa Antonia Santos"
-DEFAULT_AI_PROVIDER = "groq"
-DEFAULT_AI_MODEL = "openai/gpt-oss-120b"
+# NOTA: la IA ya NO se integra en el Worker (se ejecuta local en el navegador, BYOK).
+# Los secrets GROQ_API_KEY / MISTRAL_API_KEY / GEMINI_API_KEY / OPENAI_API_KEY del
+# dashboard quedaron sin uso y pueden eliminarse. Ver AGENTS.md (01/09/2026).
 
 # Enlace a Base de Datos Relacional Cloudflare D1
 [[d1_databases]]
@@ -23,7 +24,4 @@ id = "3b249fb9b0014f918680646a5ae869f6"
 
 # NOTA DE SECRETOS (Configurar vía `wrangler secret put <NOMBRE>`):
 # - AUTH_TOKEN : Token secreto de autorización de la institución para conectar terminales
-# - GROQ_API_KEY : Clave de API de Groq Cloud
-# - MISTRAL_API_KEY : Clave de API de Mistral AI
-# - GEMINI_API_KEY : Clave de API de Google Gemini
-# - OPENAI_API_KEY : Clave de API de OpenAI
+# (Los secrets de IA quedaron obsoletos con la migración a IA local BYOK — pueden borrarse del dashboard)

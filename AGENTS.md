@@ -106,6 +106,22 @@ El sistema implementa una arquitectura híbrida de alta resiliencia y **Costo Ce
 - ~~**E14 — Banner de verdad en la UI de análisis:** `GradeAiSummaryView` muestra un banner ámbar "Análisis generado por el Motor Local (sin IA real)" con el motivo cuando `isSimulated:true`, y las etiquetas obsoletas ('Groq Llama 3.3 Ultra-Fast', 'OpenAI GPT-4o', 'modelos Llama 3.3') se actualizaron a denominaciones vigentes. (Corregido y Validado con `tsc --noEmit` + `vite build`).~~
 - **Nota operativa:** la clave Groq institucional del Worker (secreto `GROQ_API_KEY`) sigue sin poder actualizarse remotamente sin token de API de Cloudflare; con la cadena BYOK-first esto deja de ser bloqueante para la IA real del usuario. El Worker también sigue sin `AUTH_TOKEN` (acceso abierto).
 
+### 🏠 Decisión de Arquitectura: IA 100% Local BYOK (01/09/2026)
+
+**Decisión del propietario:** eliminar la integración de IA del Cloudflare Worker; la IA se ejecuta exclusivamente en el navegador con la clave API del administrador (BYOK). Motivo técnico validado: los proveedores (Groq) bloquean el egreso de datacenters (403 desde Cloudflare Workers, ver E6), mientras que la IP residencial del navegador es aceptada — comprobado por el propio propietario al configurar su clave en la cuenta de administración y obtener IA real.
+
+- **E15 — Retiro total del proxy IA del Worker (CORREGIDO y VALIDADO):**
+  - `cloudflare-worker/src/index.ts`: eliminadas las rutas `/api/ai/status`, `/api/ai/models` y `/api/ai/grade-summary` (incluido el motor simulado `worker-local-engine` y la lectura de secrets IA). Stub `410 {code:'AI_REMOVED_FROM_WORKER'}` para clientes antiguos en caché. `/api/health` ahora reporta `ai.mode: 'client-side-byok'`. El `Env` ya no declara `DEFAULT_AI_PROVIDER/MODEL` ni secrets de proveedores. Rutas de datos (`/api/sync/push`, `/api/sync/pull`, `/api/attendance`, `verifyAuth`, CORS) intactas.
+  - `cloudflare-worker/wrangler.toml`: retiradas `DEFAULT_AI_PROVIDER`/`DEFAULT_AI_MODEL`; nota sobre secrets IA obsoletos (pueden borrarse del dashboard: `GROQ_API_KEY`, `MISTRAL_API_KEY`, `GEMINI_API_KEY`, `OPENAI_API_KEY`, `OPENROUTER_API_KEY`).
+  - `aiService.ts`: cadena simplificada a **2 niveles**: Cliente Directo BYOK (única IA real, clave solo en header hacia el proveedor) → Motor Determinista Local (único fallback, siempre etiquetado `isSimulated:true` + `simulatedReason`). Ya no se envían claves a ningún servidor intermediario (cierra el vector S1 por construcción). `getAvailableModels` ahora es directo→curado.
+  - Catálogos alineados con docs oficiales (cero suposiciones): retirados `llama-3.1-8b-instant` (deprecado por Groq el 17/06/2026), `llama-3.2-11b-vision-preview`, `deepseek-r1-distill-llama-70b`, `qwen/qwen3.8-27b`, `pixtral-12b-2409`, `open-mistral-nemo`, `google/gemini-2.0-flash-001` (inexistente en OpenRouter), `gpt-4o`/`gpt-4o-mini`/`o3-mini` (retirados por OpenAI), `gemini-1.5-flash`. Añadidos `gpt-4.1`/`gpt-4.1-mini`. Catálogo Groq vigente: `openai/gpt-oss-120b` (flagship), `groq/compound`, `qwen/qwen3.6-27b`, `openai/gpt-oss-20b`, `groq/compound-mini`.
+  - `SettingsModal.tsx`: la sección IA aclara "IA 100% local (BYOK)"; la sección Cloudflare Worker queda exclusivamente para sincronización de datos (D1/KV).
+  - `mockData.ts`: modelo demo por defecto `llama-3.3-70b-versatile` (retirado) → `openai/gpt-oss-120b`.
+  - Validación: `tsc` worker limpio; `tsc` frontend con los 9 errores pre-existentes documentados (cero nuevos); `vite build` OK; bundle sin rutas IA de servidor y con llamada directa a proveedores.
+- **E16 — Hallazgo (pendiente de decisión del propietario):** `DocumentUploadModal.tsx` invoca `/api/ai/vision-extract` (ruta relativa al server.ts Express local, solo disponible en desarrollo). En producción esa ruta no existe y el fallo se maneja con catch. Candidata a migración BYOK de visión directa desde el navegador o a retiro.
+- **server.ts (Express local):** NO modificado (no corre en producción; solo desarrollo). Mantiene rutas IA legadas inactivas para la app. Limpieza futura opcional con aprobación del propietario.
+- **Operativa post-migración:** (1) deploy del Worker con `wrangler deploy` (requiere sesión/token de Cloudflare — pendiente del propietario); (2) Cloudflare Pages se actualiza con el push (Ctrl+F5 en la app); (3) configurar la clave Groq en Ajustes → Motor de Inteligencia Artificial.
+
 ---
 
 ## 🚀 4. Hoja de Ruta y Pasos a Seguir

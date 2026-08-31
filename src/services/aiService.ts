@@ -12,12 +12,13 @@ export interface AiModelInfo {
 
 export class AiService {
   /**
-   * Obtiene la lista de modelos disponibles para el proveedor seleccionado
+   * Obtiene la lista de modelos disponibles para el proveedor seleccionado.
+   * ARQUITECTURA IA LOCAL (decisión del propietario 01/09/2026): sin intermediarios.
    * Consulta en orden:
-   * 1. Cloudflare Worker Edge
-   * 2. Servidor Backend Local Express
-   * 3. Consulta Directa al Proveedor (con API Key del usuario vía CORS)
-   * 4. Catálogo Curado Oficial verificado
+   * 1. Consulta Directa al Proveedor (API Key del usuario vía CORS, IP residencial del navegador)
+   * 2. Catálogo Curado Oficial verificado
+   * Nota: las rutas IA del Worker fueron retiradas (los proveedores bloquean egreso de
+   * datacenters: Groq responde 403 desde Cloudflare Workers). Ver AGENTS.md.
    */
   static async getAvailableModels(provider: string, customKey?: string): Promise<{
     models: AiModelInfo[];
@@ -25,50 +26,9 @@ export class AiService {
   }> {
     const p = provider.toLowerCase();
     const settings = AttendanceStorageService.getSettings();
-    const cleanWorkerUrl = (settings.cloudflareWorkerUrl || '').trim().replace(/\/+$/, '');
     const activeKey = (customKey || settings.customAiApiKey || '').trim();
 
-    // 1. Intentar vía Cloudflare Worker si está configurado
-    if (cleanWorkerUrl) {
-      try {
-        const query = new URLSearchParams({ provider: p });
-        const res = await fetch(`${cleanWorkerUrl}/api/ai/models?${query.toString()}`, {
-          method: 'GET',
-          headers: {
-            'Content-Type': 'application/json',
-            ...(activeKey ? { 'x-api-key': activeKey } : {}),
-            ...(settings.cloudflareApiToken ? { Authorization: `Bearer ${settings.cloudflareApiToken.trim()}` } : {})
-          }
-        });
-        if (res.ok) {
-          const data = await res.json();
-          if (Array.isArray(data.models) && data.models.length > 0) {
-            return { models: this.sortAndEnsureModels(p, data.models), source: data.source || 'Cloudflare Worker' };
-          }
-        }
-      } catch (e) {
-        console.warn('[AiService] Worker models fetch skipped:', e);
-      }
-    }
-
-    // 2. Intentar vía backend local Express
-    try {
-      const query = new URLSearchParams({ provider: p });
-      const res = await fetch(`/api/ai/models?${query.toString()}`, {
-        headers: {
-          'Content-Type': 'application/json',
-          ...(activeKey ? { 'x-api-key': activeKey } : {})
-        }
-      });
-      if (res.ok) {
-        const data = await res.json();
-        if (Array.isArray(data.models) && data.models.length > 0) {
-          return { models: this.sortAndEnsureModels(p, data.models), source: data.source || 'Servidor Local' };
-        }
-      }
-    } catch {}
-
-    // 3. Consulta Directa desde Navegador si hay API Key
+    // 1. Consulta Directa desde Navegador si hay API Key
     if (activeKey) {
       try {
         const directModels = await this.fetchDirectProviderModels(p, activeKey);
@@ -108,15 +68,13 @@ export class AiService {
               name: m.id === 'openai/gpt-oss-120b' ? 'GPT-OSS 120B (Groq Flagship)' :
                     m.id === 'groq/compound' ? 'Groq Compound (Sistema Integrado)' :
                     m.id === 'qwen/qwen3.6-27b' ? 'Qwen 3.6 27B' :
-                    m.id === 'llama-3.1-8b-instant' ? 'Llama 3.1 8B Instant' :
                     m.id === 'openai/gpt-oss-20b' ? 'GPT-OSS 20B' : m.id,
               contextWindow: m.context_window || 128000,
-              isRecommended: m.id === 'openai/gpt-oss-120b' || m.id === 'groq/compound' || m.id === 'qwen/qwen3.6-27b' || m.id === 'llama-3.1-8b-instant',
+              isRecommended: m.id === 'openai/gpt-oss-120b' || m.id === 'groq/compound' || m.id === 'qwen/qwen3.6-27b',
               isVision: m.id.includes('vision') || m.id.includes('compound'),
               description: m.id.includes('gpt-oss-120b') ? 'GPT-OSS 120B: Máxima precisión pedagógica y análisis profundo en LPU' :
                            m.id.includes('compound') ? 'Groq Compound: Sistema de razonamiento y síntesis optimizada' :
                            m.id.includes('qwen3.6') ? 'Qwen 3.6 27B: Razonamiento avanzado y síntesis de datos' :
-                           m.id.includes('llama-3.1-8b') ? 'Llama 3.1 8B: Ultra veloz para respuestas en milisegundos' :
                            m.id.includes('gpt-oss-20b') ? 'GPT-OSS 20B: Modelo balanceado de alta velocidad' :
                            m.id.includes('vision') ? 'Visión multimodal para lectura de carnés y documentos' : 'Modelo de producción Groq LPU'
             }));
@@ -135,7 +93,7 @@ export class AiService {
               id: m.id,
               name: m.name || m.id,
               contextWindow: m.max_context_length || 32000,
-              isRecommended: m.id === 'mistral-small-latest' || m.id === 'pixtral-12b-2409',
+              isRecommended: m.id === 'mistral-small-latest',
               isVision: m.id.includes('pixtral'),
               description: m.id.includes('mistral-small') ? 'Mistral Small: Inteligente, conciso y económico' :
                            m.id.includes('mistral-large') ? 'Mistral Large: Máxima capacidad analítica' :
@@ -175,11 +133,10 @@ export class AiService {
               id: m.id,
               name: m.id,
               contextWindow: 128000,
-              isRecommended: m.id === 'gpt-4o-mini' || m.id === 'gpt-4o',
-              isVision: m.id.includes('4o'),
-              description: m.id === 'gpt-4o-mini' ? 'GPT-4o Mini: Rápido, económico y con visión' :
-                           m.id === 'gpt-4o' ? 'GPT-4o Omnimodal: Máxima potencia' :
-                           m.id.includes('o3') ? 'OpenAI o3-mini: Razonamiento lógico profundo' : 'Modelo OpenAI GPT'
+              isRecommended: m.id === 'gpt-4.1-mini',
+              isVision: true,
+              description: m.id === 'gpt-4.1-mini' ? 'GPT-4.1 Mini: Rápido, económico y con visión' :
+                           m.id === 'gpt-4.1' ? 'GPT-4.1: Máxima potencia analítica' : 'Modelo OpenAI GPT'
             }));
         }
       }
@@ -246,7 +203,7 @@ export class AiService {
       case 'openrouter':
         return 'meta-llama/llama-3.3-70b-instruct';
       case 'openai':
-        return 'gpt-4o-mini';
+        return 'gpt-4.1-mini';
       default:
         return 'openai/gpt-oss-120b';
     }
@@ -262,36 +219,27 @@ export class AiService {
         { id: 'openai/gpt-oss-120b', name: 'GPT-OSS 120B (Flagship)', isRecommended: true, contextWindow: 128000, description: 'Recomendado Oficial Groq: Máxima precisión pedagógica y análisis profundo (<400ms)' },
         { id: 'groq/compound', name: 'Groq Compound (Sistema Compuesto)', isRecommended: true, isVision: true, contextWindow: 128000, description: 'Sistema de enrutamiento y síntesis multimodal optimizada' },
         { id: 'qwen/qwen3.6-27b', name: 'Qwen 3.6 27B', isRecommended: true, contextWindow: 128000, description: 'Modelo especializado en razonamiento complejo y análisis de planillas' },
-        { id: 'llama-3.1-8b-instant', name: 'Llama 3.1 8B Instant', isRecommended: false, contextWindow: 128000, description: 'Ultra-rápido: Respuestas instantáneas en menos de 100ms' },
         { id: 'openai/gpt-oss-20b', name: 'GPT-OSS 20B', isRecommended: false, contextWindow: 128000, description: 'Modelo balanceado y económico para alta concurrencia' },
-        { id: 'groq/compound-mini', name: 'Groq Compound Mini', isRecommended: false, contextWindow: 64000, description: 'Enrutamiento ultra veloz y ligero' },
-        { id: 'qwen/qwen3.8-27b', name: 'Qwen 3.8 27B (Preview)', isRecommended: false, contextWindow: 128000, description: 'Preview avanzado de última generación' },
-        { id: 'llama-3.2-11b-vision-preview', name: 'Llama 3.2 11B Vision', isVision: true, isRecommended: false, contextWindow: 128000, description: 'Visión multimodal para lectura de carnés o fotos' },
-        { id: 'deepseek-r1-distill-llama-70b', name: 'DeepSeek R1 Distill 70B', isRecommended: false, contextWindow: 128000, description: 'Razonamiento paso a paso ultraveloz en Groq LPU' }
+        { id: 'groq/compound-mini', name: 'Groq Compound Mini', isRecommended: false, contextWindow: 64000, description: 'Enrutamiento ultra veloz y ligero' }
       ];
     }
     if (p === 'mistral') {
       return [
         { id: 'mistral-small-latest', name: 'Mistral Small (Latest)', isRecommended: true, contextWindow: 32000, description: 'Recomendado Mistral: Inteligente, conciso y económico' },
         { id: 'mistral-large-latest', name: 'Mistral Large (Latest)', isRecommended: false, contextWindow: 128000, description: 'Máxima capacidad analítica y síntesis escolar' },
-        { id: 'pixtral-12b-2409', name: 'Pixtral 12B Vision', isVision: true, isRecommended: true, description: 'Visión multimodal oficial para carnés escolares' },
-        { id: 'open-mistral-nemo', name: 'Mistral Nemo 12B', isRecommended: false, contextWindow: 128000, description: 'Modelo ágil de última generación' },
         { id: 'codestral-latest', name: 'Codestral', isRecommended: false, contextWindow: 32000, description: 'Especializado en datos estructurados y JSON estricto' }
       ];
     }
     if (p === 'openrouter') {
       return [
         { id: 'meta-llama/llama-3.3-70b-instruct', name: 'Llama 3.3 70B Instruct', isRecommended: true, contextWindow: 128000, description: 'Recomendado OpenRouter: Llama 3.3 70B vía enrutamiento global' },
-        { id: 'mistralai/mistral-small-24b-instruct-2501', name: 'Mistral Small 24B Instruct', isRecommended: true, contextWindow: 32000, description: 'Excelente razonamiento de última hornada' },
-        { id: 'google/gemini-2.0-flash-001', name: 'Gemini 2.0 Flash (OpenRouter)', isVision: true, description: 'Contexto masivo y soporte de visión' },
-        { id: 'anthropic/claude-3.5-sonnet', name: 'Claude 3.5 Sonnet', isVision: true, description: 'Razonamiento avanzado' }
+        { id: 'mistralai/mistral-small-24b-instruct-2501', name: 'Mistral Small 24B Instruct', isRecommended: true, contextWindow: 32000, description: 'Excelente razonamiento de última hornada' }
       ];
     }
     if (p === 'openai') {
       return [
-        { id: 'gpt-4o-mini', name: 'GPT-4o Mini', isRecommended: true, isVision: true, contextWindow: 128000, description: 'Recomendado OpenAI: Rápido, económico y con visión' },
-        { id: 'gpt-4o', name: 'GPT-4o Omnimodal', isRecommended: false, isVision: true, contextWindow: 128000, description: 'Modelo insignia para análisis complejo' },
-        { id: 'o3-mini', name: 'o3-mini Reasoning', isRecommended: false, contextWindow: 200000, description: 'Razonamiento lógico profundo' }
+        { id: 'gpt-4.1-mini', name: 'GPT-4.1 Mini', isRecommended: true, isVision: true, contextWindow: 128000, description: 'Recomendado OpenAI: Rápido, económico y con visión' },
+        { id: 'gpt-4.1', name: 'GPT-4.1', isRecommended: false, isVision: true, contextWindow: 128000, description: 'Modelo insignia para análisis complejo' }
       ];
     }
     if (p === 'gemini') {
@@ -308,11 +256,10 @@ export class AiService {
 
   /**
    * Genera el resumen analítico con IA para un grado escolar
-   * Resuelve automáticamente Cliente Directo BYOK -> Worker Edge (solo IA real) -> Servidor Local (solo IA real) -> Motor Determinista Local
-   * Nota técnica (auditoría 01/09/2026): Groq y otros LLM bloquean el egreso de datacenters,
-   * incluido Cloudflare Workers (403 Forbidden), mientras que la IP residencial del navegador
-   * sí es aceptada. Por eso el cliente directo con la clave del usuario es la RUTA PRINCIPAL
-   * y un resultado isSimulated de un servidor ya NO corta la cadena ni se disfraza de éxito.
+   * ARQUITECTURA IA LOCAL (decisión del propietario 01/09/2026): Cliente Directo BYOK -> Motor Determinista Local.
+   * Sin intermediarios: el navegador llama directo al proveedor con la clave del administrador (IP residencial
+   * no bloqueada). Las rutas IA del Worker fueron retiradas (los proveedores bloquean egreso de datacenters).
+   * El Motor Local es el único fallback y SIEMPRE se etiqueta con isSimulated + simulatedReason.
    */
   static async generateGradeSummary(params: {
     grade: string;
@@ -322,7 +269,6 @@ export class AiService {
     records: AttendanceRecord[];
   }): Promise<GradeAiSummaryResult> {
     const settings = AttendanceStorageService.getSettings();
-    const cleanWorkerUrl = (settings.cloudflareWorkerUrl || '').trim().replace(/\/+$/, '');
     const { grade, timeframe, customQuestion, students, records } = params;
 
     const totalStudents = students.length || 35;
@@ -334,17 +280,7 @@ export class AiService {
 
     const fallbackMetrics = { totalStudents, overallAttendanceRate: attendanceRate, totalAbsences: absent, totalTardiness: tardy, punctual, tardy, absent };
 
-    const payload = {
-      grade,
-      timeframe,
-      customQuestion: customQuestion || `Genera un resumen analítico relevante y conciso del curso ${grade}`,
-      students,
-      records,
-      aiProvider: settings.aiProvider || 'groq',
-      apiKey: settings.customAiApiKey,
-      model: settings.aiModel,
-      temperature: settings.aiTemperature ?? 0.2
-    };
+    const resolvedQuestion = customQuestion || `Genera un resumen analítico relevante y conciso del curso ${grade}`;
 
     const aiAttempts: string[] = [];
 
@@ -360,7 +296,7 @@ export class AiService {
           temperature: settings.aiTemperature ?? 0.2,
           grade,
           timeframe,
-          customQuestion: payload.customQuestion,
+          customQuestion: resolvedQuestion,
           students,
           records
         });
@@ -374,76 +310,8 @@ export class AiService {
       }
     }
 
-    // 2. Cloudflare Worker Edge (acepta solo IA REAL; un isSimulated del worker NO corta la cadena)
-    let simulatedFromServer: any = null;
-    if (cleanWorkerUrl) {
-      try {
-        const workerAiUrl = cleanWorkerUrl.endsWith('/api/ai/grade-summary') 
-          ? cleanWorkerUrl 
-          : `${cleanWorkerUrl}/api/ai/grade-summary`;
-
-        const res = await fetch(workerAiUrl, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            ...(settings.cloudflareApiToken ? { Authorization: `Bearer ${settings.cloudflareApiToken.trim()}` } : {})
-          },
-          body: JSON.stringify(payload)
-        });
-
-        if (res.ok) {
-          const data = await res.json();
-          if (data && (data.success || data.summary)) {
-            if (data.isSimulated) {
-              simulatedFromServer = data;
-              aiAttempts.push(`Worker: ${data.simulatedReason || 'motor local del worker (IA real no disponible)'}`);
-            } else {
-              return this.normalizeSummaryResult(data, fallbackMetrics, grade);
-            }
-          }
-        } else {
-          aiAttempts.push(`Worker: HTTP ${res.status}`);
-        }
-      } catch (err: any) {
-        console.warn('[AiService] Cloudflare Worker IA error / timeout:', err);
-        aiAttempts.push(`Worker: ${err?.message || 'error de red'}`);
-      }
-    }
-
-    // 3. Servidor Local Express (mismo criterio: solo IA real corta la cadena)
-    try {
-      const res = await fetch('/api/ai/grade-summary', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload)
-      });
-
-      if (res.ok) {
-        const data = await res.json();
-        if (data && (data.success || data.summary)) {
-          if (data.isSimulated) {
-            if (!simulatedFromServer) {
-              simulatedFromServer = data;
-              aiAttempts.push(`Servidor local: ${data.simulatedReason || 'motor local del servidor (IA real no disponible)'}`);
-            }
-          } else {
-            return this.normalizeSummaryResult(data, fallbackMetrics, grade);
-          }
-        }
-      }
-    } catch (err) {
-      console.warn('[AiService] Servidor local no disponible:', err);
-    }
-
-    // 4. ÚLTIMO RECURSO: resultado simulado del servidor (siempre etiquetado con su motivo)
-    //    o motor analítico local determinista (garantía 100% de funcionamiento, $0)
-    if (simulatedFromServer) {
-      const simulated = this.normalizeSummaryResult(simulatedFromServer, fallbackMetrics, grade);
-      if (!simulated.simulatedReason && aiAttempts.length) {
-        simulated.simulatedReason = aiAttempts.join(' · ');
-      }
-      return simulated;
-    }
+    // 2. ÚNICO FALLBACK: motor analítico local determinista ($0, garantía 100%)
+    //    Siempre etiquetado: isSimulated:true + simulatedReason con el motivo real del fallo.
     const localResult = this.generateDeterministicLocalSummary(grade, timeframe, customQuestion, students, records);
     if (aiAttempts.length) {
       localResult.simulatedReason = aiAttempts.join(' · ');
@@ -508,16 +376,16 @@ Responde SIEMPRE en formato JSON con la siguiente estructura exacta:
       const primaryModel = params.model || (
         provider === 'groq' ? 'openai/gpt-oss-120b' :
         provider === 'mistral' ? 'mistral-small-latest' :
-        provider === 'openrouter' ? 'meta-llama/llama-3.3-70b-instruct' : 'gpt-4o-mini'
+        provider === 'openrouter' ? 'meta-llama/llama-3.3-70b-instruct' : 'gpt-4.1-mini'
       );
 
       const candidateModels = provider === 'groq'
-        ? [primaryModel, 'groq/compound', 'qwen/qwen3.6-27b', 'llama-3.1-8b-instant', 'openai/gpt-oss-20b', 'groq/compound-mini']
+        ? [primaryModel, 'groq/compound', 'qwen/qwen3.6-27b', 'openai/gpt-oss-20b', 'groq/compound-mini']
         : provider === 'mistral'
-        ? [primaryModel, 'mistral-small-latest', 'mistral-large-latest', 'open-mistral-nemo']
+        ? [primaryModel, 'mistral-small-latest', 'mistral-large-latest']
         : provider === 'openrouter'
-        ? [primaryModel, 'meta-llama/llama-3.3-70b-instruct', 'mistralai/mistral-small-24b-instruct-2501', 'google/gemini-2.0-flash-001']
-        : [primaryModel, 'gpt-4o-mini', 'gpt-4o', 'o3-mini'];
+        ? [primaryModel, 'meta-llama/llama-3.3-70b-instruct', 'mistralai/mistral-small-24b-instruct-2501']
+        : [primaryModel, 'gpt-4.1-mini', 'gpt-4.1'];
 
       const modelsToTry = candidateModels.filter((m, idx, arr) => m && arr.indexOf(m) === idx);
 
@@ -559,7 +427,7 @@ Responde SIEMPRE en formato JSON con la siguiente estructura exacta:
         } catch {}
       }
     } else if (provider === 'gemini') {
-      const candidateModels = [params.model || 'gemini-2.5-flash', 'gemini-2.0-flash', 'gemini-1.5-flash'];
+      const candidateModels = [params.model || 'gemini-2.5-flash', 'gemini-2.0-flash'];
       for (const modelName of candidateModels) {
         try {
           const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${apiKey}`;

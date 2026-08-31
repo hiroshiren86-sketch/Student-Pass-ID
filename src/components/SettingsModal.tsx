@@ -332,6 +332,9 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ onClose }) => {
                 {settings.aiProvider || 'groq'}
               </span>
             </div>
+            <p className="text-[10px] text-slate-500 dark:text-slate-400 leading-snug">
+              IA 100% local: el navegador consulta directo al proveedor con tu clave (BYOK). Sin proxies ni servidores intermedios — el Worker solo sincroniza datos.
+            </p>
 
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div>
@@ -350,7 +353,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ onClose }) => {
                   <option value="mistral">Mistral AI (Mistral Small / Pixtral Vision)</option>
                   <option value="openrouter">OpenRouter (Multi-model Router)</option>
                   <option value="gemini">Google Gemini (Gemini 2.5 Flash)</option>
-                  <option value="openai">OpenAI (GPT-4o Mini / GPT-4o)</option>
+                  <option value="openai">OpenAI (GPT-4.1 Mini / GPT-4.1)</option>
                 </select>
               </div>
 
@@ -396,7 +399,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ onClose }) => {
                 <label className="block text-[10px] font-bold uppercase text-slate-400">
                   API Key Personalizada ({settings.aiProvider?.toUpperCase() || 'MISTRAL/GROQ'})
                 </label>
-                <span className="text-[10px] text-slate-400">Opcional si está en variables de entorno</span>
+                <span className="text-[10px] text-slate-400">Se guarda solo en este dispositivo y viaja directo al proveedor</span>
               </div>
               <div className="relative">
                 <input

@@ -15,7 +15,7 @@ export const DEFAULT_SCHOOL_SETTINGS: SchoolSettings = {
   autoFocusUsb: true,
   rateLimitMaxPerMin: 30,
   aiProvider: 'groq',
-  aiModel: 'llama-3.3-70b-versatile',
+  aiModel: 'openai/gpt-oss-120b',
   aiPrivacyOptOut: true,
   cloudflareWorkerUrl: 'https://inas-attendance-worker.hiroshiren86.workers.dev',
   cloudflareD1DatabaseId: 'c577c8b3-6f07-4a63-8671-f447871325d6',
