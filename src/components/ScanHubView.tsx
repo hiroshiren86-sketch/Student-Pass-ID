@@ -26,7 +26,7 @@ interface ScanHubViewProps {
 
 export const ScanHubView: React.FC<ScanHubViewProps> = ({ onScanSuccess }) => {
   const [scanMethod, setScanMethod] = useState<'USB' | 'CAMERA'>('USB');
-  const [scanType, setScanType] = useState<AttendanceType>('ENTRADA');
+  const scanType: AttendanceType = 'CLASE';
   const [scanInput, setScanInput] = useState('');
   const [isProcessing, setIsProcessing] = useState(false);
   const [lastFeedback, setLastFeedback] = useState<ScanResultFeedback | null>(null);
@@ -221,53 +221,29 @@ export const ScanHubView: React.FC<ScanHubViewProps> = ({ onScanSuccess }) => {
       </div>
 
       {/* Unified Modifiers */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
-        {/* Toggle Entrada / Salida */}
-        <div className="p-1.5 bg-white/80 dark:bg-slate-900/80 border border-slate-200/80 dark:border-slate-800 rounded-2xl flex items-center gap-1 shadow-xs">
-          <button
-            onClick={() => setScanType('ENTRADA')}
-            className={`flex-1 py-2 rounded-xl text-xs font-bold transition-all ${
-              scanType === 'ENTRADA'
-                ? 'bg-emerald-600 text-white shadow-xs'
-                : 'text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800'
-            }`}
-          >
-            Jornada Entrada
-          </button>
-          <button
-            onClick={() => setScanType('SALIDA')}
-            className={`flex-1 py-2 rounded-xl text-xs font-bold transition-all ${
-              scanType === 'SALIDA'
-                ? 'bg-blue-600 text-white shadow-xs'
-                : 'text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800'
-            }`}
-          >
-            Jornada Salida
-          </button>
-        </div>
-
+      <div className="max-w-md mx-auto">
         {/* Toggle USB HID vs Cámara */}
         <div className="p-1.5 bg-white/80 dark:bg-slate-900/80 border border-slate-200/80 dark:border-slate-800 rounded-2xl flex items-center gap-1 shadow-xs">
           <button
             onClick={() => setScanMethod('USB')}
-            className={`flex-1 py-2 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-2 ${
+            className={`flex-1 py-2.5 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-2 ${
               scanMethod === 'USB'
                 ? 'bg-indigo-600 text-white shadow-xs'
                 : 'text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800'
             }`}
           >
-            <Keyboard className="w-3.5 h-3.5" />
+            <Keyboard className="w-4 h-4" />
             <span>Lector USB / OTG</span>
           </button>
           <button
             onClick={() => setScanMethod('CAMERA')}
-            className={`flex-1 py-2 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-2 ${
+            className={`flex-1 py-2.5 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-2 ${
               scanMethod === 'CAMERA'
                 ? 'bg-indigo-600 text-white shadow-xs'
                 : 'text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800'
             }`}
           >
-            <Camera className="w-3.5 h-3.5" />
+            <Camera className="w-4 h-4" />
             <span>Cámara Móvil / QR</span>
           </button>
         </div>
