@@ -453,7 +453,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ onClose }) => {
                   type="text"
                   value={settings.cloudflareWorkerUrl || ''}
                   onChange={(e) => handleChange('cloudflareWorkerUrl', e.target.value)}
-                  placeholder="https://asistencia-d1.tu-colegio.workers.dev"
+                  placeholder="https://inas-attendance-worker.hiroshiren86.workers.dev"
                   className="w-full bg-white dark:bg-slate-950 border border-amber-200 dark:border-amber-800 text-slate-900 dark:text-white text-xs px-2.5 py-2 rounded-xl outline-none font-mono"
                 />
               </div>
