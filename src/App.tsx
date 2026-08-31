@@ -63,6 +63,7 @@ export default function App() {
   const menuRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
+    AttendanceStorageService.initCloudSettingsSync();
     CloudflareSyncService.initAutoSync();
     const unsubscribe = AttendanceStorageService.subscribe(() => {
       setSettings(AttendanceStorageService.getSettings());

@@ -28,6 +28,7 @@ import { SchoolSettings, DayTemplateId } from '../types/attendance';
 import { AttendanceStorageService } from '../services/attendanceStorage';
 import { FirebaseService } from '../services/firebase';
 import { CloudflareSyncService, CloudflareSyncResult } from '../services/cloudflareSync';
+import { AiService } from '../services/aiService';
 import { DAY_TEMPLATES_DEFINITIONS } from '../services/mockData';
 
 interface SettingsModalProps {
@@ -53,25 +54,21 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ onClose }) => {
     setIsLoadingModels(true);
     setModelsFetchStatus(null);
     try {
-      const queryParams = new URLSearchParams({ provider });
-      if (customKey) queryParams.append('apiKey', customKey);
-      
-      const res拼 = await fetch(`/api/ai/models?${queryParams.toString()}`);
-      if (res拼.ok) {
-        const data = await res拼.json();
-        if (data.models && Array.isArray(data.models)) {
-          setAvailableModels(data.models);
-          setModelsFetchStatus(`✓ ${data.models.length} modelos cargados (${data.source === 'live-api' ? 'API en vivo' : 'Catálogo verificado'})`);
-          // Si no hay modelo seleccionado o el actual no pertenece a la lista, sugerir el recomendado
-          const recommended = data.models.find((m: any) => m.isRecommended) || data.models[0];
-          if (recommended && (!settings.aiModel || !data.models.some((m: any) => m.id === settings.aiModel))) {
-            setSettings(prev => ({ ...prev, aiModel: recommended.id }));
-          }
+      const data = await AiService.getAvailableModels(provider, customKey);
+      if (data.models && Array.isArray(data.models) && data.models.length > 0) {
+        setAvailableModels(data.models);
+        setModelsFetchStatus(`✓ ${data.models.length} modelos listos (${data.source})`);
+        // Si no hay modelo seleccionado o el actual no pertenece a la lista, sugerir el recomendado
+        const recommended = data.models.find((m: any) => m.isRecommended) || data.models[0];
+        if (recommended && (!settings.aiModel || !data.models.some((m: any) => m.id === settings.aiModel))) {
+          setSettings(prev => ({ ...prev, aiModel: recommended.id }));
         }
       }
     } catch (err: any) {
       console.warn('Error fetching models:', err);
-      setModelsFetchStatus('Catálogo local activo');
+      const fallback = AiService.getCuratedCatalog(provider);
+      setAvailableModels(fallback);
+      setModelsFetchStatus('Catálogo verificado activo');
     } finally {
       setIsLoadingModels(false);
     }
@@ -330,12 +327,14 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ onClose }) => {
                   value={settings.aiProvider || 'groq'}
                   onChange={(e) => {
                     const newProvider = e.target.value as any;
-                    handleChange('aiProvider', newProvider);
+                    const recommended = AiService.getDefaultModelForProvider(newProvider);
+                    setSettings(prev => ({ ...prev, aiProvider: newProvider, aiModel: recommended }));
+                    fetchProviderModels(newProvider, settings.customAiApiKey);
                   }}
                   className="w-full bg-white dark:bg-slate-950 border border-slate-300 dark:border-slate-700 text-slate-900 dark:text-white text-xs font-bold px-2.5 py-2 rounded-xl outline-none"
                 >
+                  <option value="groq">Groq Cloud (GPT-OSS 120B / Compound / LPU)</option>
                   <option value="mistral">Mistral AI (Mistral Small / Pixtral Vision)</option>
-                  <option value="groq">Groq Cloud (Llama 3.3 70B / Llama 3.2 Vision)</option>
                   <option value="openrouter">OpenRouter (Multi-model Router)</option>
                   <option value="gemini">Google Gemini (Gemini 2.5 Flash)</option>
                   <option value="openai">OpenAI (GPT-4o Mini / GPT-4o)</option>

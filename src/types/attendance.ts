@@ -302,6 +302,8 @@ export interface GradeChartPoint {
 }
 
 export interface GradeAiSummaryResult {
+  success?: boolean;
+  error?: string;
   summary: string;
   keyMetrics: {
     totalStudents: number;

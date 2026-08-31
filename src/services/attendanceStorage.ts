@@ -31,6 +31,7 @@ import {
 } from './mockData';
 import { parseAndVerifyScan } from '../utils/crypto';
 import { isValidGrade } from '../utils/documentParser';
+import { FirebaseService } from './firebase';
 
 const STUDENTS_KEY = 'inas_students_v5';
 const ATTENDANCE_KEY = 'inas_attendance_v5';
@@ -97,22 +98,85 @@ export class AttendanceStorageService {
   }
 
   // ==================== SETTINGS ====================
+  private static isCloudSyncInitialized = false;
+
   static getSettings(): SchoolSettings {
     try {
       const stored = localStorage.getItem(SETTINGS_KEY);
       if (stored) {
         const parsed = JSON.parse(stored);
         if (parsed && parsed.schoolName) {
-          return parsed;
+          // Merge with defaults for any newly introduced keys
+          return {
+            ...DEFAULT_SCHOOL_SETTINGS,
+            ...parsed,
+            cloudflareWorkerUrl: parsed.cloudflareWorkerUrl || DEFAULT_SCHOOL_SETTINGS.cloudflareWorkerUrl
+          };
         }
       }
     } catch {}
     return DEFAULT_SCHOOL_SETTINGS;
   }
 
-  static saveSettings(settings: SchoolSettings): void {
+  static saveSettings(settings: SchoolSettings, syncToCloud = true): void {
     localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
     this.notify();
+
+    if (syncToCloud) {
+      FirebaseService.saveSchoolSettings(settings).catch((e) => {
+        console.warn('Firestore async settings backup deferred:', e);
+      });
+    }
+  }
+
+  /**
+   * Initializes automatic bidirectional cloud sync with Firebase Firestore
+   * Restores institutional settings if browser storage was wiped or when switching devices
+   */
+  static initCloudSettingsSync(): void {
+    if (this.isCloudSyncInitialized) return;
+    this.isCloudSyncInitialized = true;
+
+    // 1. Initial fetch from Firestore
+    FirebaseService.loadSchoolSettings().then((cloudSettings) => {
+      if (cloudSettings) {
+        const local = this.getSettings();
+        // If local has empty or default worker URL but cloud has it, or if local is older
+        const merged: SchoolSettings = {
+          ...DEFAULT_SCHOOL_SETTINGS,
+          ...local,
+          ...cloudSettings,
+          cloudflareWorkerUrl: cloudSettings.cloudflareWorkerUrl || local.cloudflareWorkerUrl || DEFAULT_SCHOOL_SETTINGS.cloudflareWorkerUrl
+        };
+        this.saveSettings(merged, false);
+      }
+    }).catch(() => {});
+
+    // 2. Real-time listener for multi-device sync
+    FirebaseService.onSchoolSettingsChange((cloudSettings) => {
+      if (cloudSettings && (cloudSettings.schoolName || cloudSettings.cloudflareWorkerUrl)) {
+        const current = this.getSettings();
+        const updated = { ...current, ...cloudSettings };
+        this.saveSettings(updated as SchoolSettings, false);
+      }
+    });
+
+    // 3. Listen to auth changes (when Admin or Teacher logs in, restore their cloud profile settings)
+    FirebaseService.onAuthStateChange(async (user) => {
+      if (user) {
+        try {
+          const profile = await FirebaseService.getUserProfile(user.uid);
+          const cloudSettings = await FirebaseService.loadSchoolSettings();
+          if (cloudSettings) {
+            const current = this.getSettings();
+            const merged = { ...current, ...cloudSettings };
+            this.saveSettings(merged, false);
+          }
+        } catch (e) {
+          console.warn('Auth sync notice:', e);
+        }
+      }
+    });
   }
 
   // ==================== STUDENTS ====================

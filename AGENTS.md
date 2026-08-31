@@ -55,12 +55,22 @@ El sistema implementa una arquitectura híbrida de alta resiliencia y **Costo Ce
 - **Borrado en Cascada y Seguridad de Datos:**
   - *Motivo:* Al eliminar un estudiante, se limpian automáticamente delegaciones de representación, asistencias y se generan copias preventivas antes de resetear a datos demo.
 
-### ✅ Fase 2: Arquitectura Cloudflare Worker (D1 + KV + AI Proxy) (Completada y Lista)
+### ✅ Fase 2: Arquitectura Cloudflare Worker (D1 + KV + AI Proxy) y Estabilización (Completada y Lista)
 - **Creación de la suite `/cloudflare-worker/`:**
-  - `wrangler.toml`: Configuración de bindings para D1 (`DB`), KV (`ATTENDANCE_KV`), variables de colegio y secretos.
-  - `schema.sql`: Esquema D1 completo con tablas relacionales e índices para estudiantes, asistencias, horarios, docentes y snapshots.
-  - `src/index.ts`: Worker TypeScript unificado que atiende `/api/health`, `/api/sync/push`, `/api/sync/pull`, `/api/attendance` y `/api/ai/grade-summary`.
-- **Integración en el Frontend (`SettingsModal.tsx` & `cloudflareSync.ts`):**
+  - `wrangler.toml`: Configuración de bindings para D1 (`DB` = `c577c8b3-6f07-4a63-8671-f447871325d6`), KV (`ATTENDANCE_KV` = `3b249fb9b0014f918680646a5ae869f6`), variables de colegio y secretos.
+  - `schema.sql`: Esquema D1 completo con tablas relacionales e índices para estudiantes, asistencias, horarios, docentes, excusas y snapshots.
+  - `src/index.ts`: Worker TypeScript unificado que atiende `/api/health`, `/api/ai/status`, `/api/ai/models`, `/api/sync/push`, `/api/sync/pull`, `/api/attendance` y `/api/ai/grade-summary`.
+- **Integración y Resiliencia en Frontend (`SettingsModal.tsx`, `cloudflareSync.ts` & `firebase.ts`):**
+  - **Persistencia en la Nube con Firestore (`school_settings/main` y `users/{uid}`):** Al limpiar la caché del navegador o iniciar sesión desde cualquier dispositivo o celular de portería, la configuración institucional y la URL del Worker de Cloudflare se recuperan automáticamente desde Firebase Firestore en tiempo real.
+  - **Resolución de Error 405 en Módulo de IA (`AiService.ts`):** Se implementó una arquitectura de cuatro niveles de redundancia para análisis de IA:
+    1. *Nivel 1:* Cloudflare Worker Edge institucional (`https://inas-attendance-worker.hiroshiren86.workers.dev`).
+    2. *Nivel 2:* Servidor Local Express con soporte para todas las rutas y métodos HTTP.
+    3. *Nivel 3:* Cliente Directo BYOK (Groq, Mistral, OpenRouter, Google Gemini, OpenAI).
+    4. *Nivel 4:* Motor Analítico Heurístico Local determinista ($0, cero fallos y respuesta en milisegundos).
+  - **Manejo Resiliente de Modelos de IA y Corrección de Error 404 (Model Not Found):**
+    - *Motivo:* Si una clave o cuenta no tiene habilitado un modelo específico (ej. `llama-3.3-70b-versatile` en cuentas sin acceso a 70B en Groq), el servidor y Worker ahora ejecutan un bucle de reintento automático de modelos (`llama-3.1-8b-instant`, `llama3-70b-8192`, `mixtral-8x7b-32768`, etc.). Si todos fallan por credenciales o cuota, el sistema activa automáticamente el motor analítico determinista local garantizando 100% de disponibilidad sin errores en la interfaz.
+  - **Actualización del Catálogo Oficial de Modelos de IA (Agosto 2026):**
+    - *Motivo:* Groq retiró de sus planes de desarrollador/gratuitos el identificador `llama-3.3-70b-versatile` el 16 de agosto de 2026 para migrar a su nueva generación de hardware LPU. Se actualizó el catálogo predeterminado de Groq hacia los modelos insignia activos: `openai/gpt-oss-120b`, `groq/compound`, `qwen/qwen3.6-27b`, `llama-3.1-8b-instant`, `openai/gpt-oss-20b` y `groq/compound-mini`. Se mantuvieron sincronizados los catálogos en vivo y curados para Mistral (`mistral-small-latest`, `pixtral-12b-2409`), Gemini (`gemini-2.5-flash`), OpenRouter (`meta-llama/llama-3.3-70b-instruct`) y OpenAI (`gpt-4o-mini`).
   - Botón **"Probar Conexión"**: Realiza ping a `/api/health` para validar el estado del Worker y las bases D1/KV.
   - Botón **"Descargar (Pull)"**: Sincroniza y descarga datos desde Cloudflare hacia nuevos terminales o celulares en portería.
   - Botón **"Sincronizar (Push)"**: Envía datos locales a D1 y actualiza la caché KV de alta velocidad.

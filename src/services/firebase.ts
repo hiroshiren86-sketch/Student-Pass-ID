@@ -278,6 +278,101 @@ export class FirebaseService {
   }
 
   /**
+   * Save School Settings to Firestore (Cloud-backed persistence across devices and sessions)
+   */
+  static async saveSchoolSettings(settings: SchoolSettings): Promise<void> {
+    try {
+      const db = getFirebaseFirestore();
+      const docRef = doc(db, 'school_settings', 'main');
+      await setDoc(docRef, {
+        ...settings,
+        updatedAt: serverTimestamp(),
+        lastCloudSync: new Date().toISOString()
+      }, { merge: true });
+
+      // If user is logged in, link settings copy to user profile
+      const auth = getFirebaseAuth();
+      const currentUser = auth?.currentUser;
+      if (currentUser) {
+        const userDocRef = doc(db, 'users', currentUser.uid);
+        await setDoc(userDocRef, {
+          savedSettings: {
+            cloudflareWorkerUrl: settings.cloudflareWorkerUrl,
+            cloudflareApiToken: settings.cloudflareApiToken,
+            cloudflareD1DatabaseId: settings.cloudflareD1DatabaseId,
+            cloudflareKvNamespaceId: settings.cloudflareKvNamespaceId,
+            schoolCode: settings.schoolCode,
+            schoolName: settings.schoolName,
+            aiProvider: settings.aiProvider,
+            aiModel: settings.aiModel,
+            customAiApiKey: settings.customAiApiKey
+          },
+          lastActive: serverTimestamp()
+        }, { merge: true });
+      }
+    } catch (e) {
+      console.warn('Firestore offline / school settings cloud save deferred:', e);
+    }
+  }
+
+  /**
+   * Load School Settings from Firestore
+   */
+  static async loadSchoolSettings(): Promise<SchoolSettings | null> {
+    try {
+      const db = getFirebaseFirestore();
+      const docRef = doc(db, 'school_settings', 'main');
+      const snap = await getDoc(docRef);
+      if (snap.exists()) {
+        const data = snap.data();
+        if (data && (data.schoolName || data.cloudflareWorkerUrl)) {
+          return data as SchoolSettings;
+        }
+      }
+
+      // If not in main, check current user's profile
+      const auth = getFirebaseAuth();
+      const currentUser = auth?.currentUser;
+      if (currentUser) {
+        const userDocRef = doc(db, 'users', currentUser.uid);
+        const userSnap = await getDoc(userDocRef);
+        if (userSnap.exists()) {
+          const uData = userSnap.data();
+          if (uData?.savedSettings) {
+            return uData.savedSettings as SchoolSettings;
+          }
+        }
+      }
+      return null;
+    } catch (e) {
+      console.warn('Firestore load school settings offline/skipped:', e);
+      return null;
+    }
+  }
+
+  /**
+   * Listen to real-time changes in School Settings from Firestore
+   */
+  static onSchoolSettingsChange(callback: (settings: Partial<SchoolSettings>) => void) {
+    try {
+      const db = getFirebaseFirestore();
+      const docRef = doc(db, 'school_settings', 'main');
+      return onSnapshot(docRef, (snapshot) => {
+        if (snapshot.exists()) {
+          const data = snapshot.data();
+          if (data) {
+            callback(data as SchoolSettings);
+          }
+        }
+      }, (error) => {
+        console.warn('School settings real-time listener notice:', error.message);
+      });
+    } catch (e) {
+      return () => {};
+    }
+  }
+
+  /**
    * Listen to auth state changes
    */
   static onAuthStateChange(callback: (user: FirebaseUser | null) => void) {
