@@ -103,7 +103,7 @@ export class CloudflareSyncService {
     const timestamp = new Date().toLocaleTimeString('es-CO', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
 
     // 1. Si el usuario configuró una URL de Cloudflare Worker
-    if (settings.cloudflareWorkerUrl) {
+    if (settings.cloudflareWorkerUrl && settings.cloudflareWorkerUrl.trim()) {
       try {
         const cleanBaseUrl = settings.cloudflareWorkerUrl.trim().replace(/\/+$/, '');
         const pushUrl = cleanBaseUrl.endsWith('/api/sync/push') ? cleanBaseUrl : `${cleanBaseUrl}/api/sync/push`;
@@ -119,7 +119,7 @@ export class CloudflareSyncService {
 
         if (!response.ok) {
           const errText = await response.text();
-          throw new Error(`Cloudflare Worker HTTP ${response.status}: ${errText}`);
+          throw new Error(`Worker HTTP ${response.status}: ${errText}`);
         }
 
         const data = await response.json();
@@ -135,6 +135,14 @@ export class CloudflareSyncService {
         };
       } catch (err: any) {
         console.warn('Fallo de conexión con Cloudflare Worker URL:', err);
+        return {
+          success: false,
+          timestamp,
+          syncedRecordsCount: 0,
+          syncedStudentsCount: 0,
+          message: `Error al sincronizar con Cloudflare Worker: ${err.message || err}`,
+          target: 'Cloudflare Worker'
+        };
       }
     }
 

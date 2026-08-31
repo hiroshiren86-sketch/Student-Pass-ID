@@ -32,11 +32,11 @@ export class AiService {
     if (cleanWorkerUrl) {
       try {
         const query = new URLSearchParams({ provider: p });
-        if (activeKey) query.append('apiKey', activeKey);
         const res = await fetch(`${cleanWorkerUrl}/api/ai/models?${query.toString()}`, {
           method: 'GET',
           headers: {
             'Content-Type': 'application/json',
+            ...(activeKey ? { 'x-api-key': activeKey } : {}),
             ...(settings.cloudflareApiToken ? { Authorization: `Bearer ${settings.cloudflareApiToken.trim()}` } : {})
           }
         });
@@ -54,8 +54,12 @@ export class AiService {
     // 2. Intentar vía backend local Express
     try {
       const query = new URLSearchParams({ provider: p });
-      if (activeKey) query.append('apiKey', activeKey);
-      const res = await fetch(`/api/ai/models?${query.toString()}`);
+      const res = await fetch(`/api/ai/models?${query.toString()}`, {
+        headers: {
+          'Content-Type': 'application/json',
+          ...(activeKey ? { 'x-api-key': activeKey } : {})
+        }
+      });
       if (res.ok) {
         const data = await res.json();
         if (Array.isArray(data.models) && data.models.length > 0) {

@@ -220,7 +220,7 @@ export const GradeAiSummaryView: React.FC = () => {
               Analizando registros de asistencia para el Grado {selectedGrade}...
             </h3>
             <p className="text-xs text-slate-500">
-              Gemini 3.7 Flash está sintetizando patrones, ausentismo y tendencias.
+              El motor de IA está sintetizando patrones, ausentismo y tendencias en tiempo real.
             </p>
           </div>
         </div>

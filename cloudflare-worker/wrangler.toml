@@ -8,7 +8,7 @@ compatibility_flags = ["nodejs_compat"]
 SCHOOL_CODE = "INAS_2026"
 SCHOOL_NAME = "Institución Educativa Antonia Santos"
 DEFAULT_AI_PROVIDER = "groq"
-DEFAULT_AI_MODEL = "llama-3.3-70b-versatile"
+DEFAULT_AI_MODEL = "openai/gpt-oss-120b"
 
 # Enlace a Base de Datos Relacional Cloudflare D1
 [[d1_databases]]

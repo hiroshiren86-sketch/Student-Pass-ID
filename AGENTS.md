@@ -14,7 +14,9 @@ Este documento es la **fuente única de verdad técnica (Single Source of Truth)
    - Para cualquier integración interna o externa (Cloudflare D1/KV, WebCrypto, Web Audio, jsQR, pdf-lib, REST APIs de IA), se debe consultar e implementar estrictamente bajo la documentación oficial. Prohibido asumir esquemas, parámetros o comportamientos no verificados.
 3. **Regla de Bitácora Continua en `AGENTS.md`:**
    - Todo cambio significativo, corrección de bug, optimización o decisión técnica debe quedar registrado en este archivo de forma directa, concisa y explicando el **por qué** técnico de la decisión.
-4. **Regla de Desarrollo Modular y Fases Verificables:**
+4. **Regla de Seguimiento Obligatorio de Informes de Revisión de Errores:**
+   - Cada informe de seguridad o comprobación de errores suministrado por la auditoría técnica debe ser ingresado íntegramente en la bitácora de este archivo. Conforme se solucionen y validen los fallos detectados, las partes correspondientes serán tachadas (`~~punto solucionado~~`) indicando la corrección técnica realizada.
+5. **Regla de Desarrollo Modular y Fases Verificables:**
    - La construcción se realiza por módulos auto-contenidos, testeados en entorno escolar y listos para transición directa a semiproducción y producción real.
 
 ---
@@ -75,6 +77,25 @@ El sistema implementa una arquitectura híbrida de alta resiliencia y **Costo Ce
   - Botón **"Descargar (Pull)"**: Sincroniza y descarga datos desde Cloudflare hacia nuevos terminales o celulares en portería.
   - Botón **"Sincronizar (Push)"**: Envía datos locales a D1 y actualiza la caché KV de alta velocidad.
   - Auto-sincronización periódica configurable por minutos.
+
+### 🔍 Informe de Revisión y Manejo de Errores (Auditoría Técnica - 31/08/2026)
+
+- ~~**E1 — Retiro del Modelo `llama-3.3-70b-versatile`:** Groq retiró el modelo el 16 de agosto de 2026. *Solución:* Se actualizó el modelo por defecto en `wrangler.toml`, `server.ts` y `aiService.ts` a `openai/gpt-oss-120b` y `groq/compound` (Corregido y Validado).~~
+- ~~**E2 — Soporte de CORS y Rutas en Worker:** *Solución:* Se integraron encabezados OPTIONS y middleware en `/cloudflare-worker/src/index.ts` (Corregido y Validado).~~
+- ~~**E3 — Foco No Invasivo e `inputMode="none"`:** Evita despliegue no deseado de teclado virtual en Android/iOS con escáneres USB HID/OTG (Corregido y Validado).~~
+- ~~**E4 — Cierre de Streams de Cámara:** Garantiza que la cámara web o trasera libere los recursos del sensor al cambiar de dispositivo (Corregido y Validado).~~
+- ~~**E5 — Fallback Redundante en 4 Niveles de IA:** Si falla el Worker Edge, la llamada conmuta automáticamente a Servidor Local -> Cliente BYOK -> Motor Determinista Local ($0) sin errores visibles (Corregido y Validado).~~
+- ~~**E6 — Error Groq 403 (Autenticación/API Key):** *Solución:* El backend y frontend gestionan adecuadamente los encabezados de autenticación y ofrecen reintentos transparentes a modelos alternativos (Corregido y Validado).~~
+- ~~**E7 — Sincronización de Catálogo Dinámico de Modelos:** El selector de modelos realiza consultas en vivo a los endpoints oficiales de cada proveedor en lugar de depender únicamente de listas estáticas (Corregido y Validado).~~
+- ~~**E8 — Crash del Módulo de Análisis IA al Hacer Scroll:** *Solución:* Se corrigieron los hooks de renderizado y estructuras flexbox/overflow en `GradeAiSummaryView.tsx` (Corregido y Validado).~~
+- ~~**E9 — Transmisión Segura de API Keys (Headers vs URL):** *Solución:* Se eliminó el parámetro `?apiKey=` en la URL. Las API keys ahora se transmiten de forma segura en los encabezados HTTP (`x-api-key` / `x-provider-key`) tanto en el Worker Edge como en el servidor Express (Corregido y Validado).~~
+- ~~**E10 — Cierre de Modal de Ajustes con Tecla Escape:** *Solución:* Se añadió listener de teclado `KeyboardEvent` en `SettingsModal.tsx` para cerrar el modal al presionar Escape (Corregido y Validado).~~
+- ~~**E11 — Etiqueta "Gemini" Obsoleta en Interfaz:** *Solución:* Se reemplazaron referencias fijas a Gemini en los estados de carga por descripciones agnósticas y dinámicas según el proveedor activo (Corregido y Validado).~~
+- ~~**N1 a N6 — Seguridad, Criptografía HMAC-SHA256 y Resiliencia en D1/KV:** Verificación y validación de tokens de carné y base de datos (Corregido y Validado).~~
+- ~~**N7 — Notificación Falsa de Sincronización:** *Solución:* Se corrigió `performCloudflareSync()` en `cloudflareSync.ts` para que si falla la comunicación con la URL del Worker configurada, retorne `success: false` con el mensaje de error explícito (Corregido y Validado).~~
+- ~~**N8 — Manejo de `localStorage` Corrupto:** *Solución:* `AttendanceStorageService.getStudents()` detecta JSON malformado o corrupto, crea un respaldo automático `_corrupt_backup_...` y autorrecupera los datos demo iniciales (Corregido y Validado).~~
+- ~~**N9 — Persistencia Inmediata de Configuración de Worker:** *Solución:* `SettingsModal.tsx` guarda inmediatamente en `localStorage` la URL del Worker y el Token antes de ejecutar las acciones de prueba o descarga (Corregido y Validado).~~
+- ~~**N10 — Firma Criptográfica Determinista:** Carnés con firma digital HMAC inviolable (Corregido y Validado).~~
 
 ---
 

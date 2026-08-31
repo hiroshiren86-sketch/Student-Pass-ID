@@ -79,6 +79,17 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ onClose }) => {
     fetchProviderModels(settings.aiProvider || 'groq', settings.customAiApiKey);
   }, [settings.aiProvider]);
 
+  // Regla E10: Cerrar modal de ajustes con la tecla Escape
+  React.useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        onClose();
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [onClose]);
+
   const handleChange = (field: keyof SchoolSettings, value: string | number | boolean) => {
     setSettings(prev => ({ ...prev, [field]: value }));
   };
@@ -110,6 +121,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ onClose }) => {
   };
 
   const handleTestWorker = async () => {
+    AttendanceStorageService.saveSettings(settings);
     setIsTestingWorker(true);
     try {
       const res = await CloudflareSyncService.testWorkerConnection(settings.cloudflareWorkerUrl, settings.cloudflareApiToken);
@@ -127,6 +139,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ onClose }) => {
   };
 
   const handlePullCloudflare = async () => {
+    AttendanceStorageService.saveSettings(settings);
     if (!window.confirm('¿Deseas descargar los datos de asistencia y estudiantes desde Cloudflare para sincronizar este dispositivo?')) {
       return;
     }

@@ -30,7 +30,7 @@ function resolveAiConfig(override?: { provider?: string; apiKey?: string; model?
     return { provider: "mistral", apiKey: customKey || mistralKey || "", model: override?.model || "mistral-small-latest", temperature: override?.temperature ?? 0.2 };
   }
   if (preferred === "groq" && (groqKey || customKey)) {
-    return { provider: "groq", apiKey: customKey || groqKey || "", model: override?.model || "llama-3.3-70b-versatile", temperature: override?.temperature ?? 0.2 };
+    return { provider: "groq", apiKey: customKey || groqKey || "", model: override?.model || "openai/gpt-oss-120b", temperature: override?.temperature ?? 0.2 };
   }
   if (preferred === "openrouter" && (openRouterKey || customKey)) {
     return { provider: "openrouter", apiKey: customKey || openRouterKey || "", model: override?.model || "mistralai/mistral-small-24b-instruct-2501", temperature: override?.temperature ?? 0.2 };
@@ -44,7 +44,7 @@ function resolveAiConfig(override?: { provider?: string; apiKey?: string; model?
 
   // Auto fallback priority based on available keys: Mistral -> Groq -> OpenRouter -> Gemini -> OpenAI
   if (mistralKey) return { provider: "mistral", apiKey: mistralKey, model: "mistral-small-latest", temperature: 0.2 };
-  if (groqKey) return { provider: "groq", apiKey: groqKey, model: "llama-3.3-70b-versatile", temperature: 0.2 };
+  if (groqKey) return { provider: "groq", apiKey: groqKey, model: "openai/gpt-oss-120b", temperature: 0.2 };
   if (openRouterKey) return { provider: "openrouter", apiKey: openRouterKey, model: "mistralai/mistral-small-24b-instruct-2501", temperature: 0.2 };
   if (geminiKey) return { provider: "gemini", apiKey: geminiKey, model: "gemini-2.5-flash", temperature: 0.2 };
   if (openAiKey) return { provider: "openai", apiKey: openAiKey, model: "gpt-4o-mini", temperature: 0.2 };
@@ -138,7 +138,8 @@ async function startServer() {
   app.all("/api/ai/models", async (req, res) => {
     try {
       const provider = String(req.query.provider || req.body?.provider || "groq").toLowerCase();
-      const customKey = req.query.apiKey ? String(req.query.apiKey) : req.body?.apiKey;
+      const headerKey = (req.headers['x-api-key'] || req.headers['x-provider-key']) as string | undefined;
+      const customKey = headerKey ? headerKey : (req.query.apiKey ? String(req.query.apiKey) : req.body?.apiKey);
       const activeConfig = resolveAiConfig({ provider, apiKey: customKey });
 
       let liveModels: Array<{ id: string; name: string; contextWindow?: number; isRecommended?: boolean; isVision?: boolean; description?: string }> = [];

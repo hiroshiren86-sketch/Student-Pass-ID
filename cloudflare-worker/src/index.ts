@@ -144,7 +144,7 @@ export default {
 
       if (path === '/api/ai/models') {
         const provider = (url.searchParams.get('provider') || env.DEFAULT_AI_PROVIDER || 'groq').toLowerCase();
-        const customKey = url.searchParams.get('apiKey') || '';
+        const customKey = request.headers.get('x-api-key') || request.headers.get('x-provider-key') || url.searchParams.get('apiKey') || '';
         let activeKey = customKey.trim();
 
         if (!activeKey) {

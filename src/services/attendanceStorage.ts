@@ -190,13 +190,16 @@ export class AttendanceStorageService {
         }
       }
     } catch (err) {
-      console.error('Error parsing students from storage:', err);
+      console.error('[AttendanceStorageService] Error parsing students from storage (JSON corrupt):', err);
       try {
         const raw = localStorage.getItem(STUDENTS_KEY);
         if (raw) {
           localStorage.setItem(`${STUDENTS_KEY}_corrupt_backup_${Date.now()}`, raw);
         }
       } catch {}
+      // Auto-recover with demo data if JSON is corrupted
+      this.saveStudents(INITIAL_STUDENTS);
+      return INITIAL_STUDENTS;
     }
 
     // Only seed initial students if key has never been initialized
