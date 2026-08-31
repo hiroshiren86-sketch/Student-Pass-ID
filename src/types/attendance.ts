@@ -315,6 +315,7 @@ export interface GradeAiSummaryResult {
   insights: string[];
   chartData: GradeChartPoint[];
   isSimulated?: boolean;
+  simulatedReason?: string;
   provider?: string;
   model?: string;
 }

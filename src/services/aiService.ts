@@ -308,7 +308,11 @@ export class AiService {
 
   /**
    * Genera el resumen analítico con IA para un grado escolar
-   * Resuelve automáticamente Worker Edge -> Servidor Local -> Cliente Directo BYOK -> Motor Determinista Local
+   * Resuelve automáticamente Cliente Directo BYOK -> Worker Edge (solo IA real) -> Servidor Local (solo IA real) -> Motor Determinista Local
+   * Nota técnica (auditoría 01/09/2026): Groq y otros LLM bloquean el egreso de datacenters,
+   * incluido Cloudflare Workers (403 Forbidden), mientras que la IP residencial del navegador
+   * sí es aceptada. Por eso el cliente directo con la clave del usuario es la RUTA PRINCIPAL
+   * y un resultado isSimulated de un servidor ya NO corta la cadena ni se disfraza de éxito.
    */
   static async generateGradeSummary(params: {
     grade: string;
@@ -342,7 +346,36 @@ export class AiService {
       temperature: settings.aiTemperature ?? 0.2
     };
 
-    // 1. RUTA PRINCIPAL: Cloudflare Worker Edge (Si está configurado)
+    const aiAttempts: string[] = [];
+
+    // 1. RUTA PRINCIPAL: Cliente Directo BYOK (si hay clave configurada)
+    //    Única ruta de IA REAL comprobada para Groq: el navegador sale por IP residencial,
+    //    que no está bloqueada; el Worker sí lo está (egreso de datacenter => 403).
+    if (settings.customAiApiKey && settings.customAiApiKey.trim()) {
+      try {
+        const directResult = await this.callDirectAiProvider({
+          provider: settings.aiProvider || 'groq',
+          apiKey: settings.customAiApiKey.trim(),
+          model: settings.aiModel,
+          temperature: settings.aiTemperature ?? 0.2,
+          grade,
+          timeframe,
+          customQuestion: payload.customQuestion,
+          students,
+          records
+        });
+        if (directResult) {
+          return this.normalizeSummaryResult(directResult, fallbackMetrics, grade);
+        }
+        aiAttempts.push('Cliente directo: el proveedor no devolvió una respuesta utilizable');
+      } catch (err: any) {
+        console.warn('[AiService] Cliente directo BYOK falló:', err);
+        aiAttempts.push(`Cliente directo: ${err?.message || 'fallo de red'}`);
+      }
+    }
+
+    // 2. Cloudflare Worker Edge (acepta solo IA REAL; un isSimulated del worker NO corta la cadena)
+    let simulatedFromServer: any = null;
     if (cleanWorkerUrl) {
       try {
         const workerAiUrl = cleanWorkerUrl.endsWith('/api/ai/grade-summary') 
@@ -361,15 +394,23 @@ export class AiService {
         if (res.ok) {
           const data = await res.json();
           if (data && (data.success || data.summary)) {
-            return this.normalizeSummaryResult(data, fallbackMetrics, grade);
+            if (data.isSimulated) {
+              simulatedFromServer = data;
+              aiAttempts.push(`Worker: ${data.simulatedReason || 'motor local del worker (IA real no disponible)'}`);
+            } else {
+              return this.normalizeSummaryResult(data, fallbackMetrics, grade);
+            }
           }
+        } else {
+          aiAttempts.push(`Worker: HTTP ${res.status}`);
         }
-      } catch (err) {
+      } catch (err: any) {
         console.warn('[AiService] Cloudflare Worker IA error / timeout:', err);
+        aiAttempts.push(`Worker: ${err?.message || 'error de red'}`);
       }
     }
 
-    // 2. RUTA SECUNDARIA: Servidor Local Express / Full-Stack
+    // 3. Servidor Local Express (mismo criterio: solo IA real corta la cadena)
     try {
       const res = await fetch('/api/ai/grade-summary', {
         method: 'POST',
@@ -380,37 +421,34 @@ export class AiService {
       if (res.ok) {
         const data = await res.json();
         if (data && (data.success || data.summary)) {
-          return this.normalizeSummaryResult(data, fallbackMetrics, grade);
+          if (data.isSimulated) {
+            if (!simulatedFromServer) {
+              simulatedFromServer = data;
+              aiAttempts.push(`Servidor local: ${data.simulatedReason || 'motor local del servidor (IA real no disponible)'}`);
+            }
+          } else {
+            return this.normalizeSummaryResult(data, fallbackMetrics, grade);
+          }
         }
       }
     } catch (err) {
       console.warn('[AiService] Servidor local no disponible:', err);
     }
 
-    // 3. RUTA CLIENTE DIRECTO (BYOK - Bring Your Own Key en Frontend)
-    if (settings.customAiApiKey && settings.customAiApiKey.trim()) {
-      try {
-        const directResult = await this.callDirectAiProvider({
-          provider: settings.aiProvider || 'groq',
-          apiKey: settings.customAiApiKey.trim(),
-          model: settings.aiModel,
-          temperature: settings.aiTemperature ?? 0.2,
-          grade,
-          timeframe,
-          customQuestion: payload.customQuestion,
-          students,
-          records
-        });
-        if (directResult) {
-          return this.normalizeSummaryResult(directResult, fallbackMetrics, grade);
-        }
-      } catch (err: any) {
-        console.warn('[AiService] Fallback directo de proveedor falló:', err);
+    // 4. ÚLTIMO RECURSO: resultado simulado del servidor (siempre etiquetado con su motivo)
+    //    o motor analítico local determinista (garantía 100% de funcionamiento, $0)
+    if (simulatedFromServer) {
+      const simulated = this.normalizeSummaryResult(simulatedFromServer, fallbackMetrics, grade);
+      if (!simulated.simulatedReason && aiAttempts.length) {
+        simulated.simulatedReason = aiAttempts.join(' · ');
       }
+      return simulated;
     }
-
-    // 4. MOTOR ANALÍTICO LOCAL DETERMINISTA (Garantía 100% de funcionamiento y cero errores)
-    return this.generateDeterministicLocalSummary(grade, timeframe, customQuestion, students, records);
+    const localResult = this.generateDeterministicLocalSummary(grade, timeframe, customQuestion, students, records);
+    if (aiAttempts.length) {
+      localResult.simulatedReason = aiAttempts.join(' · ');
+    }
+    return localResult;
   }
 
   /**
@@ -605,6 +643,7 @@ Responde SIEMPRE en formato JSON con la siguiente estructura exacta:
       success: true,
       provider: raw.provider || 'ai',
       isSimulated: Boolean(raw.isSimulated),
+      simulatedReason: raw.simulatedReason ? String(raw.simulatedReason) : undefined,
       summary: typeof raw.summary === 'string' && raw.summary.trim()
         ? raw.summary
         : `Resumen analítico para el Grado ${grade}: Se registra una tasa global de asistencia del ${safeRate}% con ${safeTotalStudents} estudiantes matriculados activos.`,
@@ -658,7 +697,7 @@ Responde SIEMPRE en formato JSON con la siguiente estructura exacta:
       insights: [
         `El grupo ${grade} mantiene una participación activa en la primera mitad de la jornada.`,
         `Se sugiere reforzar el control en el bloque matutino de apertura para minimizar las ${tardy} tardanzas.`,
-        `Para análisis avanzado con modelos Llama 3.3, Mistral o Gemini, puedes configurar tu clave o Worker en Ajustes.`
+        `Para análisis avanzado con modelos GPT-OSS, Groq Compound o Gemini, configura tu clave API (BYOK) en Ajustes: funciona directo desde este dispositivo.`
       ],
       frequentAbsentees,
       chartData: [

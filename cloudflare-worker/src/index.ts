@@ -579,6 +579,7 @@ Datos: ${totalStudents} estudiantes, ${totalRecords} marcas (${punctual} puntual
         // Ejecutar llamada según proveedor seleccionado con reintento automático de modelos
         let rawContent = '';
         let resolvedModel = '';
+        let lastAiError = '';
 
         if (provider === 'groq' || provider === 'mistral' || provider === 'openrouter' || provider === 'openai') {
           const endpoint = provider === 'groq' ? 'https://api.groq.com/openai/v1/chat/completions'
@@ -637,6 +638,7 @@ Datos: ${totalStudents} estudiantes, ${totalRecords} marcas (${punctual} puntual
 
           if (!rawContent && lastErr) {
             console.warn('[Worker AI] All models failed, falling back to local synthesis:', lastErr);
+            lastAiError = lastErr.slice(0, 300);
           }
         } else if (provider === 'gemini') {
           // Google Gemini REST API v1beta
@@ -662,8 +664,14 @@ Datos: ${totalStudents} estudiantes, ${totalRecords} marcas (${punctual} puntual
                 rawContent = aiJson.candidates?.[0]?.content?.parts?.[0]?.text || '{}';
                 resolvedModel = modelName;
                 break;
+              } else {
+                try {
+                  lastAiError = `Gemini HTTP ${aiRes.status}: ${(await aiRes.text()).slice(0, 200)}`;
+                } catch { lastAiError = `Gemini HTTP ${aiRes.status}`; }
               }
-            } catch {}
+            } catch (e: any) {
+              lastAiError = `Gemini: ${e?.message || 'error de red'}`;
+            }
           }
         }
 
@@ -684,6 +692,7 @@ Datos: ${totalStudents} estudiantes, ${totalRecords} marcas (${punctual} puntual
           success: true,
           isSimulated: true,
           provider: 'worker-local-engine',
+          simulatedReason: lastAiError || 'proveedor de IA sin respuesta desde el Worker (posible bloqueo de egreso de datacenter)',
           summary: `Resumen analítico para el curso ${grade || 'General'}: Se procesaron ${totalRecords} marcas con un promedio de puntualidad del ${rate}%.`,
           keyMetrics: { totalStudents, overallAttendanceRate: rate, totalAbsences: absent, totalTardiness: tardy },
           insights: [

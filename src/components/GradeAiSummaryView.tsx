@@ -93,10 +93,10 @@ export const GradeAiSummaryView: React.FC = () => {
 
   const providerLabels: Record<string, { label: string; color: string; badge: string }> = {
     mistral: { label: 'Mistral AI', color: 'text-amber-600 dark:text-amber-400 bg-amber-500/10 border-amber-500/30', badge: 'Mistral Pixtral / Small' },
-    groq: { label: 'Groq Cloud', color: 'text-orange-600 dark:text-orange-400 bg-orange-500/10 border-orange-500/30', badge: 'Groq Llama 3.3 Ultra-Fast' },
+    groq: { label: 'Groq Cloud', color: 'text-orange-600 dark:text-orange-400 bg-orange-500/10 border-orange-500/30', badge: 'Groq GPT-OSS Ultra-Fast' },
     openrouter: { label: 'OpenRouter', color: 'text-emerald-600 dark:text-emerald-400 bg-emerald-500/10 border-emerald-500/30', badge: 'OpenRouter Multi-LLM' },
     gemini: { label: 'Google Gemini', color: 'text-indigo-600 dark:text-indigo-400 bg-indigo-500/10 border-indigo-500/30', badge: 'Gemini 2.5 Flash' },
-    openai: { label: 'OpenAI', color: 'text-teal-600 dark:text-teal-400 bg-teal-500/10 border-teal-500/30', badge: 'OpenAI GPT-4o' },
+    openai: { label: 'OpenAI', color: 'text-teal-600 dark:text-teal-400 bg-teal-500/10 border-teal-500/30', badge: 'OpenAI GPT' },
     none: { label: 'Motor Local', color: 'text-slate-600 dark:text-slate-400 bg-slate-500/10 border-slate-500/30', badge: 'Motor Local Heurístico ($0)' },
   };
 
@@ -247,6 +247,23 @@ export const GradeAiSummaryView: React.FC = () => {
       {/* Main Results View */}
       {result && !loading && (
         <div className="space-y-6">
+          {/* Banner de transparencia: distinguir IA real del motor local (auditoría 01/09/2026) */}
+          {result.isSimulated && (
+            <div className="glass-panel p-4 rounded-3xl border-l-4 border-l-amber-500 bg-amber-500/5">
+              <div className="flex items-start gap-3">
+                <AlertTriangle className="w-5 h-5 text-amber-500 shrink-0 mt-0.5" />
+                <div className="space-y-1 min-w-0">
+                  <p className="text-sm font-bold text-amber-700 dark:text-amber-400">
+                    Análisis generado por el Motor Local (sin IA real)
+                  </p>
+                  <p className="text-xs text-slate-600 dark:text-slate-400 break-words">
+                    El proveedor de IA no respondió desde esta red{result.simulatedReason ? ` — ${result.simulatedReason}` : ''}. Nota: Groq bloquea servidores intermedios; la ruta que funciona es tu clave API directa (BYOK) desde este dispositivo. Revísala en Ajustes ⚙️.
+                  </p>
+                </div>
+              </div>
+            </div>
+          )}
+
           {/* Key Metrics Strip */}
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-3.5">
             <div className="glass-panel p-4 rounded-3xl">
