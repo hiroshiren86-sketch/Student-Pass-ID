@@ -132,9 +132,10 @@ export async function generateStudentCardPdf(student: Student, settings: SchoolS
 
   // Textos y Campos en formato oficial (Apellidos, Nombres, Grado, Documento)
   const textX = 76;
-  const docTypeLabel = student.documentType ? `${student.documentType}. ` : 'TI. ';
+  const docTypeRaw = student.documentType || 'TI';
+  const docTypeLabel = docTypeRaw.includes('DOC') ? 'DOCUMENTO DE IDENTIDAD' : `${docTypeRaw}. DOCUMENTO DE IDENTIDAD`;
 
-  pageFront.drawText(`${docTypeLabel}DOCUMENTO DE IDENTIDAD`, {
+  pageFront.drawText(docTypeLabel, {
     x: textX,
     y: 110,
     size: 5,

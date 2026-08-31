@@ -138,7 +138,7 @@ export const CardsManagerView: React.FC = () => {
           <div className="p-3 bg-white/70 dark:bg-slate-900/60 rounded-2xl border border-slate-200/70 dark:border-slate-800 flex items-start gap-3">
             <span className="w-6 h-6 rounded-full bg-emerald-600 text-white font-black text-xs flex items-center justify-center shrink-0">3</span>
             <div>
-              <div className="text-xs font-bold text-slate-900 dark:text-white">Escaneo en Portería</div>
+              <div className="text-xs font-bold text-slate-900 dark:text-white">Escaneo de Asistencia</div>
               <p className="text-[11px] text-slate-500 dark:text-slate-400 leading-tight mt-0.5">El lector USB o cámara lee el código y registra la asistencia al instante.</p>
             </div>
           </div>
@@ -395,7 +395,7 @@ export const CardsManagerView: React.FC = () => {
 
                     <div className="space-y-0.5 min-w-0 flex-1">
                       <div className="text-[6.5px] font-bold text-slate-400 uppercase leading-none">
-                        {previewStudent.documentType || 'TI'}. DOCUMENTO
+                        {previewStudent.documentType && !previewStudent.documentType.includes('DOC') ? `${previewStudent.documentType}. ` : ''}DOCUMENTO DE IDENTIDAD
                       </div>
                       <div className="text-[10.5px] font-black font-mono text-indigo-950 leading-tight">
                         {previewStudent.documentId}

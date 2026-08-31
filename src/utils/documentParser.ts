@@ -16,19 +16,43 @@ export interface ExtractedStudentDraft {
 }
 
 /**
+ * Valida si un texto corresponde a un formato de grado escolar válido y no a texto corrupto
+ * Ejemplos válidos: "6°1", "10°4", "11°2", "TRANSICIÓN", "JARDÍN", "PARVULOS", "ACELERACIÓN"
+ * Inválidos: "JERONIMO,11°1", "13°9", "PRUEBA FANTASMA"
+ */
+export function isValidGrade(grade: string): boolean {
+  if (!grade) return false;
+  const clean = grade.trim().toUpperCase();
+  if (/^(?:[1-9]|1[0-1])[°\s-][1-9]$/.test(clean)) return true;
+  if (/^(?:TRANSICI[OÓ]N|JARD[IÍ]N|P[AÁ]RVULOS|ACELERACI[OÓ]N|BRICOL)$/.test(clean)) return true;
+  return false;
+}
+
+/**
  * Normaliza nombres de cursos/grados comunes en colegios colombianos
- * Ej: "605" -> "6°5", "10-4" -> "10°4", "11 2" -> "11°2", "DECIMO CUATRO" -> "10°4"
+ * Ej: "605" -> "6°5", "10-4" -> "10°4", "11 2" -> "11°2", "DECIMO CUATRO" -> "10°4", "JERONIMO,11°1" -> "11°1"
  */
 export function normalizeGradeName(input: string): string {
   if (!input) return '6°1';
-  let clean = input.trim().toUpperCase()
+  const chunk = input.trim().toUpperCase()
     .replace(/\s+/g, ' ')
     .replace(/GRADO\s*/i, '')
     .replace(/CURSO\s*/i, '')
     .replace(/GRUPO\s*/i, '');
 
+  // Si viene contaminado con nombres o comas (ej: "JERONIMO,11°1" o "LOPEZ 10-2")
+  const embeddedGradeMatch = chunk.match(/\b(1[0-1]|[1-9])\s*[°\s-]\s*([1-9])\b/);
+  if (embeddedGradeMatch) {
+    return `${embeddedGradeMatch[1]}°${embeddedGradeMatch[2]}`;
+  }
+
   // Reemplazo textual de grados
-  clean = clean
+  let clean = chunk
+    .replace(/PRIMERO/i, '1')
+    .replace(/SEGUNDO/i, '2')
+    .replace(/TERCERO/i, '3')
+    .replace(/CUARTO/i, '4')
+    .replace(/QUINTO/i, '5')
     .replace(/SEXTO/i, '6')
     .replace(/SÉPTIMO|SEPTIMO/i, '7')
     .replace(/OCTAVO/i, '8')
@@ -37,29 +61,43 @@ export function normalizeGradeName(input: string): string {
     .replace(/ONCE/i, '11');
 
   // Si viene como "605", "1004", "1102"
-  const match3Digits = clean.match(/^([1]?[0-9])([0-9])$/);
+  const match3Digits = clean.match(/^([1]?[0-9])0?([1-9])$/);
   if (match3Digits) {
-    return `${match3Digits[1]}°${match3Digits[2]}`;
+    const g = parseInt(match3Digits[1], 10);
+    if (g >= 1 && g <= 11) {
+      return `${g}°${match3Digits[2]}`;
+    }
   }
 
   // Si viene con guión ej "6-5", "10-4"
   const matchHyphen = clean.match(/^([1]?[0-9])\s*[-–—/.]\s*([0-9A-Za-z]+)$/);
   if (matchHyphen) {
-    return `${matchHyphen[1]}°${matchHyphen[2]}`;
+    const g = parseInt(matchHyphen[1], 10);
+    if (g >= 1 && g <= 11) {
+      return `${g}°${matchHyphen[2]}`;
+    }
   }
 
   // Si ya tiene el símbolo °
   if (clean.includes('°')) {
-    return clean;
+    const parts = clean.split('°');
+    const g = parseInt(parts[0].trim(), 10);
+    const s = parts[1]?.trim();
+    if (g >= 1 && g <= 11 && s) {
+      return `${g}°${s}`;
+    }
   }
 
   // Si viene "10 4"
   const matchSpace = clean.match(/^([1]?[0-9])\s+([0-9A-Za-z]+)$/);
   if (matchSpace) {
-    return `${matchSpace[1]}°${matchSpace[2]}`;
+    const g = parseInt(matchSpace[1], 10);
+    if (g >= 1 && g <= 11) {
+      return `${g}°${matchSpace[2]}`;
+    }
   }
 
-  return clean;
+  return isValidGrade(clean) ? clean : '6°1';
 }
 
 /**
@@ -98,26 +136,45 @@ export async function parseDocumentFile(file: File): Promise<ExtractedStudentDra
   if (fileExt === 'json') {
     try {
       const content = await file.text();
-      const parsed = JSON.parse(content);
-      const items = Array.isArray(parsed) ? parsed : [parsed];
-      return items.map((item, idx) => {
-        const doc = normalizeDocumentOrCode(String(item.documentId || item.documento || item.identificacion || item.ti || item.cc || `1000${idx}`));
-        const grade = normalizeGradeName(String(item.grade || item.grado || item.curso || '6°1'));
+      const parsed不易 = JSON.parse(content);
+      const items = Array.isArray(parsed不易) ? parsed不易 : (parsed不易.students || parsed不易.estudiantes || [parsed不易]);
+      return items.map((item: any, idx: number) => {
+        const rawDoc = String(
+          item.documentId ?? item.documento ?? item.identificacion ?? item.numeroDocumento ?? item.doc ?? item.ti ?? item.cc ?? `1000${idx}`
+        ).trim();
+        const doc = normalizeDocumentOrCode(rawDoc);
+
+        const rawGrade = String(item.grade ?? item.grado ?? item.curso ?? item.grupo ?? item.seccion ?? '6°1');
+        const grade = normalizeGradeName(rawGrade);
+
+        const fName = String(
+          item.firstName ?? item.nombres ?? item.nombre ?? item.primerNombre ?? item.primer_nombre ?? 'ESTUDIANTE'
+        ).toUpperCase().trim();
+
+        const lName = String(
+          item.lastName ?? item.apellidos ?? item.apellido ?? item.primerApellido ?? item.primer_apellido ?? ''
+        ).toUpperCase().trim();
+
+        const isValidDoc = /^\d{6,12}$/.test(doc);
+        const isValidGr = isValidGrade(grade);
+        const isFullyValid迁移 = isValidDoc && isValidGr;
+
         return {
           id: `draft_${Date.now()}_${idx}`,
           fileName,
-          documentType: (item.documentType || detectDocumentType(item.tipoDoc || '', doc)) as DocumentType,
+          documentType: (item.documentType || detectDocumentType(item.tipoDoc || item.tipoDocumento || '', doc)) as DocumentType,
           documentId: doc,
-          firstName: String(item.firstName || item.nombres || item.nombre || 'ESTUDIANTE').toUpperCase().trim(),
-          lastName: String(item.lastName || item.apellidos || item.apellido || '').toUpperCase().trim(),
+          firstName: fName,
+          lastName: lName,
           grade,
-          photoUrl: item.photoUrl || item.foto,
-          confidence: 0.95,
-          status: doc && (item.firstName || item.nombre) ? 'valid' : 'warning'
+          photoUrl: item.photoUrl || item.foto || item.photo,
+          confidence: isFullyValid迁移 ? 0.98 : 0.7,
+          status: isFullyValid迁移 ? 'valid' : 'warning',
+          errorMessage: !isValidDoc ? 'Documento debe tener entre 6 y 12 dígitos' : (!isValidGr ? `Grado "${grade}" inválido` : undefined)
         };
       });
-    } catch {
-      // Fallback
+    } catch (e: any) {
+      console.warn('Error parsing JSON students:', e);
     }
   }
 

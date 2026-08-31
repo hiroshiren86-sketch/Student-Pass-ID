@@ -41,6 +41,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ onClose }) => {
   const [cloudSyncMsg, setCloudSyncMsg] = useState<string | null>(null);
   const [isSyncingCloudflare, setIsSyncingCloudflare] = useState(false);
   const [cloudflareSyncResult, setCloudflareSyncResult] = useState<CloudflareSyncResult | null>(null);
+  const [isTestingWorker, setIsTestingWorker] = useState(false);
+  const [isPullingCloudflare, setIsPullingCloudflare] = useState(false);
   const [showApiKey, setShowApiKey] = useState(false);
   const [showCloudflareToken, setShowCloudflareToken] = useState(false);
   const [availableModels, setAvailableModels] = useState<Array<{ id: string; name: string; isRecommended?: boolean; isVision?: boolean; description?: string }>>([]);
@@ -107,6 +109,43 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ onClose }) => {
       setCloudSyncMsg(`Error al respaldar en Firebase: ${e.message || e}`);
     } finally {
       setIsSyncingCloud(false);
+    }
+  };
+
+  const handleTestWorker = async () => {
+    setIsTestingWorker(true);
+    try {
+      const res = await CloudflareSyncService.testWorkerConnection(settings.cloudflareWorkerUrl, settings.cloudflareApiToken);
+      setCloudflareSyncResult({
+        success: res.success,
+        timestamp: new Date().toLocaleTimeString('es-CO'),
+        syncedRecordsCount: 0,
+        syncedStudentsCount: 0,
+        message: res.message,
+        target: 'Cloudflare Worker'
+      });
+    } finally {
+      setIsTestingWorker(false);
+    }
+  };
+
+  const handlePullCloudflare = async () => {
+    if (!window.confirm('¿Deseas descargar los datos de asistencia y estudiantes desde Cloudflare para sincronizar este dispositivo?')) {
+      return;
+    }
+    setIsPullingCloudflare(true);
+    try {
+      const res = await CloudflareSyncService.pullFromCloudflare();
+      setCloudflareSyncResult({
+        success: res.success,
+        timestamp: new Date().toLocaleTimeString('es-CO'),
+        syncedRecordsCount: 0,
+        syncedStudentsCount: 0,
+        message: res.message,
+        target: 'Cloudflare D1'
+      });
+    } finally {
+      setIsPullingCloudflare(false);
     }
   };
 
@@ -229,7 +268,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ onClose }) => {
           <div className="grid grid-cols-2 gap-3">
             <div>
               <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 uppercase tracking-wider mb-1.5">
-                Hora de Inicio Portería
+                Hora de Inicio de Jornada
               </label>
               <div className="relative">
                 <Clock className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
@@ -473,19 +512,45 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ onClose }) => {
               </div>
             </div>
 
-            <div className="flex flex-col sm:flex-row items-center justify-between gap-2 pt-1 border-t border-amber-200/60 dark:border-amber-900/60">
+            <div className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-amber-200/60 dark:border-amber-900/60">
               <span className="text-[11px] text-amber-800 dark:text-amber-300">
-                Última sincronización: {settings.lastCloudflareSync || 'No realizada aún'}
+                Última sync: {settings.lastCloudflareSync || 'No realizada aún'}
               </span>
-              <button
-                type="button"
-                onClick={handleCloudflareSync}
-                disabled={isSyncingCloudflare}
-                className="px-3.5 py-1.5 bg-amber-600 hover:bg-amber-500 text-white rounded-xl text-xs font-bold shadow-xs flex items-center gap-1.5 transition-all disabled:opacity-50"
-              >
-                <RefreshCw className={`w-3.5 h-3.5 ${isSyncingCloudflare ? 'animate-spin' : ''}`} />
-                <span>{isSyncingCloudflare ? 'Sincronizando...' : 'Sincronizar Cloudflare Ahora'}</span>
-              </button>
+              
+              <div className="flex flex-wrap items-center gap-1.5">
+                <button
+                  type="button"
+                  onClick={handleTestWorker}
+                  disabled={isTestingWorker || !settings.cloudflareWorkerUrl}
+                  className="px-2.5 py-1.5 bg-amber-500/20 hover:bg-amber-500/30 text-amber-900 dark:text-amber-200 border border-amber-500/30 rounded-xl text-[11px] font-bold flex items-center gap-1 transition-all disabled:opacity-40"
+                  title="Verificar que el Worker responda correctamente"
+                >
+                  <Globe className={`w-3 h-3 ${isTestingWorker ? 'animate-spin' : ''}`} />
+                  <span>{isTestingWorker ? 'Probando...' : 'Probar Conexión'}</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={handlePullCloudflare}
+                  disabled={isPullingCloudflare || !settings.cloudflareWorkerUrl}
+                  className="px-2.5 py-1.5 bg-sky-600/15 hover:bg-sky-600/25 text-sky-900 dark:text-sky-200 border border-sky-500/30 rounded-xl text-[11px] font-bold flex items-center gap-1 transition-all disabled:opacity-40"
+                  title="Descargar estudiantes y asistencias desde Cloudflare a este dispositivo"
+                >
+                  <RefreshCw className={`w-3 h-3 ${isPullingCloudflare ? 'animate-spin' : ''}`} />
+                  <span>{isPullingCloudflare ? 'Descargando...' : 'Descargar (Pull)'}</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={handleCloudflareSync}
+                  disabled={isSyncingCloudflare}
+                  className="px-3 py-1.5 bg-amber-600 hover:bg-amber-500 text-white rounded-xl text-xs font-bold shadow-xs flex items-center gap-1.5 transition-all disabled:opacity-50"
+                  title="Subir datos locales a la base de datos D1 y KV de Cloudflare"
+                >
+                  <RefreshCw className={`w-3.5 h-3.5 ${isSyncingCloudflare ? 'animate-spin' : ''}`} />
+                  <span>{isSyncingCloudflare ? 'Subiendo...' : 'Sincronizar (Push)'}</span>
+                </button>
+              </div>
             </div>
 
             {cloudflareSyncResult && (

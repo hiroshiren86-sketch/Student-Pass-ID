@@ -1,62 +1,97 @@
-# Reglas y Convenciones del Proyecto: Sistema de Registro de Asistencia Escolar
+# Manual Técnico, Convenciones y Bitácora de Desarrollo
+## Sistema de Control de Asistencia Escolar y Carnetización Criptográfica (INAS)
 
-Este archivo define la arquitectura, lineamientos de diseño, etapas del proyecto y convenciones técnicas para el Asistente de IA y futuros desarrollos.
-
----
-
-## 1. Contexto y Visión del Proyecto
-- **Propósito:** Sistema de control de asistencia escolar en portería con alta velocidad de captura (<0.5s por estudiante), soporte multiplataforma (PC, Android, iOS), prevención de fraudes mediante carnés con firma HMAC-SHA256 y cumplimiento estricto de protección de datos (Ley 1581).
-- **Enfoque de Costo Cero ($0 Inicial - Etapa 1):**
-  - Todo el procesamiento de escaneo, validación criptográfica y almacenamiento local se realiza en el cliente (LocalStorage / IndexedDB / WebCrypto API).
-  - No requiere servidores de pago ni infraestructura pesada en la fase inicial.
+Este documento es la **fuente única de verdad técnica (Single Source of Truth)** del proyecto. Define las reglas obligatorias de desarrollo, la arquitectura, el registro de correcciones y decisiones técnicas, así como la hoja de ruta por fases.
 
 ---
 
-## 2. Hoja de Ruta y Etapas (Roadmap)
+## 📌 1. Reglas Obligatorias de Desarrollo
 
-### ✅ Etapa 1: Prototipo $0 y Núcleo de Portería (Completado)
-1. **Lector de Código de Barras / QR USB HID:** Captura ultrarrápida por teclado por ráfaga (50ms) y enter sin necesidad de hacer clic.
-2. **Cámara Web / Móvil QR:** Integración con jsQR, cambio de cámara (frontal/trasera), zoom táctico y linterna (Torch).
-3. **Prevención de Teclado Virtual en Móviles:** Atributo `inputMode="none"` y foco no invasivo para evitar que el teclado táctil de Android/iOS tape la pantalla al conectar escáneres USB OTG o Bluetooth.
-4. **Firma Criptográfica HMAC-SHA256:** Carnés escolares con firma determinista para evitar clonación o manipulación de códigos QR.
-5. **Auditoría & Reglas de Horario:** Detección automática de "Puntual" vs "Tardanza" según horario escolar y minutos de tolerancia configurables.
-6. **Efectos de Sonido Web Audio API:** Alertas sonoras sintetizadas sin archivos pesados para confirmación instantánea.
-7. **Directorio Escolar & Generador de Carnés:** Vista con fotos, datos del estudiante, acudiente y opción de imprimir carné.
-8. **Exportación de Reportes:** Descarga de planilla de asistencia diaria en formato CSV.
-9. **Modo Claro / Modo Oscuro:** Sistema dual de temas con persistencia local y soporte visual adaptativo.
-10. **Tutorial / Onboarding Interactivo:** Guía paso a paso adaptable para PC y móviles.
-
-### ⏳ Etapa 2: Almacenamiento Centralizado y Sincronización (Futura)
-- Integración con base de datos en tiempo real (Firebase / Cloud SQL) para sincronización entre múltiples porterías simultáneas.
-- Roles de usuario (Administrador, Portero, Docente, Coordinador).
-- Notificaciones automáticas a acudientes (SMS / WhatsApp / Webhook) ante inasistencia o tardanza.
-
-### ⏳ Etapa 3: Analítica Avanzada e Inteligencia Artificial (Futura)
-- Panel de reportes acumulados semanales/mensuales y detección temprana de ausentismo crónico.
-- Reconocimiento facial asistido opcional o validaciones biométricas.
-- Integración con sistemas de gestión académica institucional.
+1. **Regla de Estabilización Previa (Cero Regresiones):**
+   - Siempre se debe verificar y asegurar el correcto funcionamiento del 100% de las características anteriores antes de agregar nuevas funciones.
+   - Si se detecta un fallo, bug o inconsistencia en una fase previa, se detiene la adición de nuevas pantallas hasta corregirlo y validar con `lint_applet` y `compile_applet`.
+2. **Regla de Documentación Oficial (Cero Suposiciones):**
+   - Para cualquier integración interna o externa (Cloudflare D1/KV, WebCrypto, Web Audio, jsQR, pdf-lib, REST APIs de IA), se debe consultar e implementar estrictamente bajo la documentación oficial. Prohibido asumir esquemas, parámetros o comportamientos no verificados.
+3. **Regla de Bitácora Continua en `AGENTS.md`:**
+   - Todo cambio significativo, corrección de bug, optimización o decisión técnica debe quedar registrado en este archivo de forma directa, concisa y explicando el **por qué** técnico de la decisión.
+4. **Regla de Desarrollo Modular y Fases Verificables:**
+   - La construcción se realiza por módulos auto-contenidos, testeados en entorno escolar y listos para transición directa a semiproducción y producción real.
 
 ---
 
-## 3. Principios de Diseño y Experiencia de Usuario (UI/UX)
-1. **Estilo Moderno & Efecto de Relieve/Glassmorphism:**
-   - Tarjetas con sutil elevación, bordes translúcidos con gradientes suaves (`border-slate-200/80` y `dark:border-slate-700/60`).
-   - Fondos con desenfoque de fondo (`backdrop-blur-md`), iluminación perimetral y sombras de varias capas para dar profundidad tangible.
-2. **Sistema Dual de Temas:**
-   - **Modo Claro:** Estilo corporativo ejecutivo, fondo suave `#F8FAFC`, tarjetas blancas con sombras nítidas, textos contrastados y acentos índigo/esmeralda.
-   - **Modo Oscuro:** Estilo tecnológico de alta visibilidad para turnos matutinos con poca luz, fondo `#020617` / `#0B1120`, acentos cian/neón y contrastes WCAG AA.
-3. **No Disruptividad en Portería:**
-   - Los modales deben cerrarse ágilmente con la tecla `Escape` o clic exterior.
-   - Las alertas de confirmación deben desaparecer automáticamente tras 4 segundos o permitir escaneo continuo sin bloqueos.
-4. **Responsive Total:**
-   - PC: Tablas detalladas, atajos de teclado y vista panorámica.
-   - Móvil: Tarjetas compactas, botones táctiles de mínimo 44px, selector de cámara y prevención de teclado virtual.
+## 🏛️ 2. Arquitectura del Sistema
+
+El sistema implementa una arquitectura híbrida de alta resiliencia y **Costo Cero ($0 Inicial)**:
+
+- **Frontend / Cliente (React 19 + TypeScript + Tailwind CSS v4 + Vite):**
+  - **Captura Ultrarrápida (<0.5s):** Soporte dual para escáneres de código de barras/QR USB HID (lectura ráfaga por teclado sin clic) y cámara web/móvil con `jsQR`.
+  - **Criptografía Determinista:** Generación y verificación de tokens QR con firma `HMAC-SHA256` mediante `WebCrypto API` en el navegador (previene duplicación y falsificación de carnés).
+  - **Audio Sintetizado:** Web Audio API puro (oscilador senoidal con envolvente gain) para feedback sonoro sin latencia de red ni archivos pesados.
+  - **Persistencia Local y Resiliencia:** `LocalStorage` con respaldo automático y sincronización en segundo plano.
+- **Backend Edge / Nube (Cloudflare Worker Unificado):**
+  - **Base de Datos Relacional (Cloudflare D1 - SQLite Edge):** Almacena tablas de estudiantes, registros de asistencia, horarios, docentes y auditoría.
+  - **Caché Clave-Valor (Cloudflare KV):** Acceso y validación de carnés en <20ms para porterías de alto tráfico.
+  - **Proxy de Inteligencia Artificial:** Punto de enlace seguro para modelos de lenguaje (Groq Llama 3.3, Mistral Small, Google Gemini, OpenAI) protegiendo las credenciales institucionales.
+- **Modo Híbrido de IA (BYOK o Proxy):**
+  - Permite al usuario/docente usar su propia API Key directamente en el navegador (sin servidores intermediarios) O consumir el Worker central institucional sin exponer llaves privadas.
 
 ---
 
-## 4. Convenciones Técnicas
-- **Framework:** React 19 + TypeScript + Vite + Tailwind CSS v4.
-- **Iconografía:** Únicamente `lucide-react`.
-- **Animaciones:** `motion/react` para transiciones fluidas.
-- **Audio:** Sintetizador Web Audio API puro (oscilador senoidal con envolvente gain) para evitar retardos de descarga.
-- **Criptografía:** `crypto.subtle` (WebCrypto API) con algoritmo `HMAC-SHA256`.
+## 📋 3. Bitácora de Implementaciones y Correcciones Realizadas
+
+### ✅ Fase 1: Núcleo de Portería, Criptografía y Gestión Escolar (Completada)
+- **Lector USB HID y Prevención de Teclado Virtual en Móviles:**
+  - *Motivo:* Al conectar lectores de código de barras OTG/Bluetooth en celulares, el teclado táctil de Android/iOS tapaba la pantalla de escaneo. Se solucionó con `inputMode="none"` y foco no invasivo.
+- **Validación Criptográfica HMAC-SHA256:**
+  - *Motivo:* Evitar que los estudiantes generen códigos QR falsos con su documento. El carné contiene una firma digital cifrada con la clave secreta institucional.
+- **Carga Masiva e Importación de Estudiantes (JSON / CSV):**
+  - *Motivo:* Los colegios manejan planillas con diversos encabezados (`identificacion`, `documentId`, `curso`, `grado`). Se normalizaron expresiones regulares para grados (`6°1`, `10°4`, `Transición`) y mapeo inteligente de columnas.
+- **Planilla de Asistencia, Auto-Cierre y Filtros:**
+  - *Motivo:* Se corrigió la asignación visual para que los estudiantes marcados como `AUSENTE` (incluyendo cierre automático de jornada) aparezcan con su badge rojo distintivo y no se confundan con tardanzas. Se añadió filtro de inasistencias y exportación fiel a CSV/Excel.
+- **Impresión de Carnés Escolares (Estándar CR80):**
+  - *Motivo:* Se eliminó la duplicación del texto "Documento de Identidad" en la previsualización y en el motor PDF (`pdf-lib`), logrando medidas milimétricas estándar de tarjeta PVC.
+- **Cámara y Selector Multi-dispositivo:**
+  - *Motivo:* Se optimizó el cambio de cámara (frontal/trasera/externa) asegurando que el stream anterior libere los tracks de video antes de iniciar el nuevo sensor.
+- **Borrado en Cascada y Seguridad de Datos:**
+  - *Motivo:* Al eliminar un estudiante, se limpian automáticamente delegaciones de representación, asistencias y se generan copias preventivas antes de resetear a datos demo.
+
+### ✅ Fase 2: Arquitectura Cloudflare Worker (D1 + KV + AI Proxy) (Completada y Lista)
+- **Creación de la suite `/cloudflare-worker/`:**
+  - `wrangler.toml`: Configuración de bindings para D1 (`DB`), KV (`ATTENDANCE_KV`), variables de colegio y secretos.
+  - `schema.sql`: Esquema D1 completo con tablas relacionales e índices para estudiantes, asistencias, horarios, docentes y snapshots.
+  - `src/index.ts`: Worker TypeScript unificado que atiende `/api/health`, `/api/sync/push`, `/api/sync/pull`, `/api/attendance` y `/api/ai/grade-summary`.
+- **Integración en el Frontend (`SettingsModal.tsx` & `cloudflareSync.ts`):**
+  - Botón **"Probar Conexión"**: Realiza ping a `/api/health` para validar el estado del Worker y las bases D1/KV.
+  - Botón **"Descargar (Pull)"**: Sincroniza y descarga datos desde Cloudflare hacia nuevos terminales o celulares en portería.
+  - Botón **"Sincronizar (Push)"**: Envía datos locales a D1 y actualiza la caché KV de alta velocidad.
+  - Auto-sincronización periódica configurable por minutos.
+
+---
+
+## 🚀 4. Hoja de Ruta y Pasos a Seguir
+
+### ⏳ Fase Actual (Inmediata): Despliegue y Validación del Worker en Semiproducción
+1. Desplegar el Worker en Cloudflare (`wrangler deploy` y ejecución de `schema.sql` en D1).
+2. Conectar la URL del Worker y el Token en la Configuración del Sistema.
+3. Ejecutar pruebas de carga de escaneo continuo y verificar la réplica en D1 y KV.
+4. Validar sincronización bidireccional entre 2 dispositivos simultáneos (PC portería + Móvil docente).
+
+### ⏳ Fase Futura Planificada: Módulo de Excusas Médicas / Permisos Anticipados y Buzón Escolar
+- **Propósito:** Permitir a los estudiantes/acudientes reportar inasistencias programadas (citas médicas, incapacidades, calamidades) fuera del horario lectivo (después de la 1:00 p.m. o fines de semana) para proteger su registro de asistencia.
+- **Mecanismo de "Escudo de Justificación":**
+  - No es un formulario burocrático engorroso, sino un selector rápido en el Portal de Estudiante donde se define el rango de fechas (ej. 1 día específico o varios días por incapacidad médica).
+  - Al registrarse la excusa, el sistema le asigna un estado justificado a esas fechas futuras.
+  - Cuando el escáner de portería o el algoritmo de auto-cierre de jornada procesa el día, el estudiante **no es marcado como ausente injustificado**, sino como `EXCUSA / JUSTIFICADO`.
+- **Buzón en Rectoría / Coordinación:**
+  - Panel administrativo para revisar, validar y auditar las justificaciones radicadas por los estudiantes con soporte físico o digital.
+- **Preparación en Base de Datos:**
+  - La tabla `student_excuses` ya ha sido incorporada preventivamente en `schema.sql` de Cloudflare D1.
+
+---
+
+## 🛠️ 5. Convenciones de Código
+- **Estilo:** TypeScript estricto, componentes funcionales, React hooks.
+- **Iconografía:** Exclusivamente `lucide-react`.
+- **Animaciones:** `motion/react` para transiciones fluidas de interfaz.
+- **Estilos:** Tailwind CSS v4.
+- **Validaciones:** Linter (`tsc --noEmit`) y build (`vite build`) antes de dar por cerrada cualquier tarea.

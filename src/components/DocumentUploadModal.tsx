@@ -17,12 +17,12 @@ import {
 } from 'lucide-react';
 import { Student, DocumentType } from '../types/attendance';
 import { AttendanceStorageService } from '../services/attendanceStorage';
-import { parseDocumentFile, ExtractedStudentDraft, normalizeGradeName } from '../utils/documentParser';
+import { parseDocumentFile, ExtractedStudentDraft, normalizeGradeName, isValidGrade } from '../utils/documentParser';
 
 interface DocumentUploadModalProps {
   isOpen: boolean;
   onClose: () => void;
-  onSuccess: (savedCount: number) => void;
+  onSuccess: (savedCount: number, skippedCount?: number) => void;
   availableGrades: string[];
 }
 
@@ -150,9 +150,18 @@ export const DocumentUploadModal: React.FC<DocumentUploadModalProps> = ({
       prev.map((d) => {
         if (d.id !== id) return d;
         const updated = { ...d, ...updates };
-        // Recalcular estado
-        if (updated.documentId && updated.firstName) {
+        const cleanDoc = updated.documentId?.trim();
+        const hasValidDoc = cleanDoc && /^\d{6,12}$/.test(cleanDoc);
+        const hasValidName = (updated.firstName?.trim().length || 0) > 0;
+        const hasValidGrade = isValidGrade(updated.grade || '');
+
+        if (hasValidDoc && hasValidName && hasValidGrade) {
           updated.status = 'valid';
+          updated.errorMessage = undefined;
+        } else {
+          updated.status = 'warning';
+          if (!hasValidDoc) updated.errorMessage = 'Documento debe tener entre 6 y 12 dígitos';
+          else if (!hasValidGrade) updated.errorMessage = `Grado "${updated.grade}" no es válido`;
         }
         return updated;
       })
@@ -170,13 +179,15 @@ export const DocumentUploadModal: React.FC<DocumentUploadModalProps> = ({
   };
 
   const handleSaveAll = () => {
-    const validDrafts = drafts.filter((d) => d.documentId && d.firstName);
+    const validDrafts = drafts.filter((d) => d.documentId && d.firstName && d.status === 'valid');
     if (validDrafts.length === 0) {
-      alert('No hay registros válidos para guardar.');
+      alert('No hay registros válidos para guardar. Revise los campos resaltados.');
       return;
     }
 
     let savedCount = 0;
+    let skippedCount = 0;
+
     validDrafts.forEach((draft) => {
       const cleanDoc = draft.documentId.trim();
       const grade = normalizeGradeName(draft.grade || '6°1');
@@ -197,10 +208,13 @@ export const DocumentUploadModal: React.FC<DocumentUploadModalProps> = ({
       const res = AttendanceStorageService.addStudent(newStudent);
       if (res.success) {
         savedCount++;
+      } else {
+        skippedCount++;
       }
     });
 
-    onSuccess(savedCount);
+    setDrafts([]);
+    onSuccess(savedCount, skippedCount);
     onClose();
   };
 

@@ -26,7 +26,7 @@ import { generateStudentCardPdf, downloadPdfBlob } from '../utils/pdfGenerator';
 import { matchStudentFuzzy, normalizeDocumentOrCode } from '../utils/searchHelper';
 import { generateBarcodeDataUrl } from '../utils/barcode';
 import { DocumentUploadModal } from './DocumentUploadModal';
-import { normalizeGradeName } from '../utils/documentParser';
+import { normalizeGradeName, isValidGrade } from '../utils/documentParser';
 
 interface StudentsManagerViewProps {
   onGenerateCard?: (student: Student) => void;
@@ -144,8 +144,8 @@ export const StudentsManagerView: React.FC<StudentsManagerViewProps> = ({ onGene
       return;
     }
 
-    if (!grade) {
-      setFormError('Por favor indique el grado escolar (ej: 6°5, 10°4, 11°2).');
+    if (!grade || !isValidGrade(grade)) {
+      setFormError('Por favor indique un grado escolar válido (ej: 6°1, 10°4, 11°2, Transición).');
       return;
     }
 
@@ -802,9 +802,17 @@ export const StudentsManagerView: React.FC<StudentsManagerViewProps> = ({ onGene
         isOpen={showUploadModal}
         onClose={() => setShowUploadModal(false)}
         availableGrades={uniqueGrades}
-        onSuccess={(count) => {
+        onSuccess={(count, skipped) => {
           refreshList();
-          setToastMessage(`¡Éxito! Se registraron ${count} estudiantes y sus carnés están listos.`);
+          if (count === 1) {
+            const skipMsg = skipped && skipped > 0 ? ` (${skipped} omitido por duplicado)` : '';
+            setToastMessage(`¡Éxito! Se matriculó 1 estudiante y su carné está listo.${skipMsg}`);
+          } else if (count > 1) {
+            const skipMsg = skipped && skipped > 0 ? ` (${skipped} omitidos por duplicado)` : '';
+            setToastMessage(`¡Éxito! Se matricularon ${count} estudiantes y sus carnés están listos.${skipMsg}`);
+          } else if (skipped && skipped > 0) {
+            setToastMessage(`No se agregaron nuevos estudiantes (${skipped} ya estaban matriculados).`);
+          }
           setTimeout(() => setToastMessage(null), 4000);
         }}
       />

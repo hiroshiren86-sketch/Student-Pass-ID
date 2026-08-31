@@ -70,8 +70,8 @@ export const ScanHubView: React.FC<ScanHubViewProps> = ({ onScanSuccess }) => {
   // Cargar registros recientes
   const refreshRecent = () => {
     const today = getTodayDateString();
-    const records技巧 = AttendanceStorageService.getAttendanceByDate(today);
-    setRecentScans(records技巧.slice(0, 6));
+    const records = AttendanceStorageService.getAttendanceByDate(today);
+    setRecentScans(records.slice(0, 6));
   };
 
   useEffect(() => {
@@ -86,9 +86,9 @@ export const ScanHubView: React.FC<ScanHubViewProps> = ({ onScanSuccess }) => {
     setIsProcessing(true);
 
     try {
-      const cleanInput技巧 = rawCode.trim();
+      const cleanInput = rawCode.trim();
       const feedback = await AttendanceStorageService.registerScan({
-        scanInput: cleanInput技巧,
+        scanInput: cleanInput,
         method: method,
         scanType: scanType
       });
@@ -104,7 +104,7 @@ export const ScanHubView: React.FC<ScanHubViewProps> = ({ onScanSuccess }) => {
             origin: { y: 0.8 },
             colors: ['#10B981', '#6366F1', '#3B82F6']
           });
-        } else if (feedback.type === 'success_tardy' || feedback.type === 'success_exit') {
+        } else if (feedback.type === 'success_tardy') {
           SoundService.playBeepTardy();
         } else {
           SoundService.playBeepError();
@@ -139,7 +139,7 @@ export const ScanHubView: React.FC<ScanHubViewProps> = ({ onScanSuccess }) => {
 
       const now = Date.now();
       const timeDiff = now - lastKeyTimeRef.current;
-      lastKeyTimeRef.current技巧 = now;
+      lastKeyTimeRef.current = now;
 
       if (e.key === 'Enter') {
         if (bufferRef.current.trim().length > 0) {
@@ -311,8 +311,6 @@ export const ScanHubView: React.FC<ScanHubViewProps> = ({ onScanSuccess }) => {
                 ? 'bg-emerald-50/90 dark:bg-emerald-950/60 border-emerald-200 dark:border-emerald-800/80 text-emerald-950 dark:text-emerald-100'
                 : lastFeedback.type === 'success_tardy'
                 ? 'bg-amber-50/90 dark:bg-amber-950/60 border-amber-200 dark:border-amber-800/80 text-amber-950 dark:text-amber-100'
-                : lastFeedback.type === 'success_exit'
-                ? 'bg-blue-50/90 dark:bg-blue-950/60 border-blue-200 dark:border-blue-800/80 text-blue-950 dark:text-blue-100'
                 : lastFeedback.type === 'already_scanned'
                 ? 'bg-indigo-50/90 dark:bg-indigo-950/60 border-indigo-200 dark:border-indigo-800/80 text-indigo-950 dark:text-indigo-100'
                 : 'bg-rose-50/90 dark:bg-rose-950/60 border-rose-200 dark:border-rose-800/80 text-rose-950 dark:text-rose-100'
@@ -324,8 +322,6 @@ export const ScanHubView: React.FC<ScanHubViewProps> = ({ onScanSuccess }) => {
                   <CheckCircle2 className="w-8 h-8 text-emerald-600 dark:text-emerald-400" />
                 ) : lastFeedback.type === 'success_tardy' ? (
                   <AlertTriangle className="w-8 h-8 text-amber-600 dark:text-amber-400" />
-                ) : lastFeedback.type === 'success_exit' ? (
-                  <ArrowRight className="w-8 h-8 text-blue-600 dark:text-blue-400" />
                 ) : (
                   <XCircle className="w-8 h-8 text-rose-600 dark:text-rose-400" />
                 )}

@@ -141,7 +141,9 @@ export const TeacherClassroomView: React.FC<TeacherClassroomViewProps> = ({
   }, [students, selectedGrade]);
 
   const activeDelegations = useMemo(() => {
-    return AttendanceStorageService.getEphemeralDelegations().filter(d => d.grade === selectedGrade && d.slotId === selectedSlotId && d.date === today);
+    return AttendanceStorageService.getEphemeralDelegations()
+      .filter(d => d.grade === selectedGrade && d.slotId === selectedSlotId && d.date === today)
+      .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
   }, [selectedGrade, selectedSlotId, today]);
 
   const isDirectorOfCurrentGrade = useMemo(() => {

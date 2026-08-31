@@ -1,0 +1,18 @@
+{
+  "name": "inas-attendance-worker",
+  "version": "1.0.0",
+  "description": "Cloudflare Worker con base de datos relacional D1, caché KV y Proxy de Inteligencia Artificial para el Sistema de Asistencia Escolar",
+  "main": "src/index.ts",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "db:init": "wrangler d1 execute inas_attendance_db --file=./schema.sql",
+    "db:init:local": "wrangler d1 execute inas_attendance_db --local --file=./schema.sql"
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20240923.0",
+    "typescript": "^5.5.4",
+    "wrangler": "^3.78.10"
+  }
+}

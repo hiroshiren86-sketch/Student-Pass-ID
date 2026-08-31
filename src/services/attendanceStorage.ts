@@ -30,6 +30,7 @@ import {
   DAY_TEMPLATES_DEFINITIONS
 } from './mockData';
 import { parseAndVerifyScan } from '../utils/crypto';
+import { isValidGrade } from '../utils/documentParser';
 
 const STUDENTS_KEY = 'inas_students_v5';
 const ATTENDANCE_KEY = 'inas_attendance_v5';
@@ -119,11 +120,27 @@ export class AttendanceStorageService {
     try {
       const stored = localStorage.getItem(STUDENTS_KEY);
       if (stored) {
-        return JSON.parse(stored);
+        const parsed = JSON.parse(stored);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          return parsed;
+        }
       }
-    } catch {}
-    this.saveStudents(INITIAL_STUDENTS);
-    return INITIAL_STUDENTS;
+    } catch (err) {
+      console.error('Error parsing students from storage:', err);
+      try {
+        const raw = localStorage.getItem(STUDENTS_KEY);
+        if (raw) {
+          localStorage.setItem(`${STUDENTS_KEY}_corrupt_backup_${Date.now()}`, raw);
+        }
+      } catch {}
+    }
+
+    // Only seed initial students if key has never been initialized
+    if (localStorage.getItem(STUDENTS_KEY) === null) {
+      this.saveStudents(INITIAL_STUDENTS);
+      return INITIAL_STUDENTS;
+    }
+    return [];
   }
 
   static saveStudents(students: Student[]): void {
@@ -134,10 +151,20 @@ export class AttendanceStorageService {
   static getUniqueGrades(): string[] {
     const students = this.getStudents();
     const set = new Set<string>();
-    SCHOOL_GRADES_LIST.forEach(g => set.add(g));
-    students.forEach(s => {
-      if (s.grade) set.add(s.grade);
+    SCHOOL_GRADES_LIST.forEach(g => {
+      if (isValidGrade(g)) set.add(g);
     });
+    students.forEach(s => {
+      if (s.grade && isValidGrade(s.grade)) set.add(s.grade);
+    });
+    // Include schedule assignments grades to prevent orphaned schedules
+    try {
+      const assignments = this.getScheduleAssignments();
+      assignments.forEach(a => {
+        if (a.grade && isValidGrade(a.grade)) set.add(a.grade);
+      });
+    } catch {}
+
     return Array.from(set).sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
   }
 
@@ -190,6 +217,16 @@ export class AttendanceStorageService {
     const filtered = students.filter(s => s.code !== code);
     if (filtered.length !== students.length) {
       this.saveStudents(filtered);
+
+      // Cascading cleanup of any active delegation for this student
+      try {
+        const delegations = this.getEphemeralDelegations();
+        const activeDelegations = delegations.filter(d => d.studentCode !== code);
+        if (activeDelegations.length !== delegations.length) {
+          this.saveEphemeralDelegations(activeDelegations);
+        }
+      } catch {}
+
       return true;
     }
     return false;
@@ -1375,8 +1412,8 @@ export class AttendanceStorageService {
   }
 
   // ==================== EXPORTACIÓN CSV ====================
-  static exportAttendanceCsv(dateStr: string = getTodayDateString()): void {
-    const records = this.getAttendanceByDate(dateStr);
+  static exportAttendanceCsv(dateStr: string = getTodayDateString(), recordsToExport?: AttendanceRecord[]): void {
+    const records = recordsToExport || this.getAttendanceByDate(dateStr);
     if (records.length === 0) {
       alert('No hay registros de asistencia para exportar en esta fecha.');
       return;
@@ -1414,7 +1451,7 @@ export class AttendanceStorageService {
       `"${r.scannedBy || 'DOCENTE'}"`,
       `"${r.scannedByName || ''}"`,
       `"${r.method}"`,
-      `"${r.verifiedHmac ? 'VÁLIDA' : 'NO'}"`,
+      `"${r.verifiedHmac ? 'Token QR Firmado (VÁLIDO)' : (r.method === 'AUTO_CIERRE' ? 'N/A (Auto-Cierre)' : 'Manual / Teclado (N/A)')}"`,
       `"${r.notes || ''}"`
     ]);
 
@@ -1473,12 +1510,20 @@ export class AttendanceStorageService {
       slotId,
       grade,
       scannedBy: 'DOCENTE',
-      scannedByName: 'Portería / Terminal Principal',
+      scannedByName: 'Terminal Escolar Principal',
       notes: params.notes
     });
   }
 
   static resetToDemo(): void {
+    // Backup before resetting
+    try {
+      const curStudents = localStorage.getItem(STUDENTS_KEY);
+      const curAtt = localStorage.getItem(ATTENDANCE_KEY);
+      if (curStudents) localStorage.setItem('inas_students_backup_prior_reset', curStudents);
+      if (curAtt) localStorage.setItem('inas_attendance_backup_prior_reset', curAtt);
+    } catch {}
+
     localStorage.removeItem(ATTENDANCE_KEY);
     localStorage.removeItem(OFFLINE_QUEUE_KEY);
     localStorage.removeItem(USER_SESSION_KEY);

@@ -191,14 +191,45 @@ export const CameraScanner: React.FC<CameraScannerProps> = ({ onScan, isPaused }
     };
   }, [isScanning, tick]);
 
+  const [facingMode, setFacingMode] = useState<'environment' | 'user'>('environment');
+
   // Switch camera toggle
   const handleSwitchCamera = () => {
-    if (videoDevices.length <= 1) return;
-    const currentIndex = videoDevices.findIndex(d => d.deviceId === selectedDeviceId);
-    const nextIndex = (currentIndex + 1) % videoDevices.length;
-    const nextDeviceId = videoDevices[nextIndex].deviceId;
-    setSelectedDeviceId(nextDeviceId);
-    startCamera(nextDeviceId);
+    if (videoDevices.length > 1) {
+      const currentIndex = videoDevices.findIndex(d => d.deviceId === selectedDeviceId);
+      const nextIndex = (currentIndex + 1) % videoDevices.length;
+      const nextDeviceId = videoDevices[nextIndex].deviceId;
+      setSelectedDeviceId(nextDeviceId);
+      startCamera(nextDeviceId);
+    } else {
+      const nextMode = facingMode === 'environment' ? 'user' : 'environment';
+      setFacingMode(nextMode);
+      if (currentStreamRef.current) {
+        currentStreamRef.current.getTracks().forEach(track => track.stop());
+        currentStreamRef.current = null;
+      }
+      navigator.mediaDevices.getUserMedia({
+        video: { facingMode: { ideal: nextMode }, width: { ideal: 1280 }, height: { ideal: 720 } }
+      }).then(stream => {
+        if (!isMountedRef.current) {
+          stream.getTracks().forEach(t => t.stop());
+          return;
+        }
+        currentStreamRef.current = stream;
+        if (videoRef.current) {
+          videoRef.current.srcObject = stream;
+          videoRef.current.setAttribute('playsinline', 'true');
+          videoRef.current.play().then(() => {
+            if (isMountedRef.current) {
+              setIsScanning(true);
+              setHasPermission(true);
+            }
+          }).catch(() => {});
+        }
+      }).catch(err => {
+        console.warn('FacingMode switch error:', err);
+      });
+    }
   };
 
   return (
@@ -211,11 +242,11 @@ export const CameraScanner: React.FC<CameraScannerProps> = ({ onScan, isPaused }
         </div>
 
         <div className="flex items-center gap-2">
-          {videoDevices.length > 1 && (
+          {isScanning && (
             <button
               onClick={handleSwitchCamera}
               className="p-2 rounded-full bg-slate-900/80 hover:bg-slate-800 backdrop-blur-md border border-slate-700/60 text-slate-200 hover:text-white transition-colors"
-              title="Cambiar Cámara"
+              title="Cambiar Cámara (Frontal / Trasera)"
             >
               <RefreshCw className="w-4 h-4" />
             </button>

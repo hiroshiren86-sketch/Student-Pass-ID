@@ -342,7 +342,7 @@ export default function App() {
                         <UserCheck2 className="w-4 h-4 text-indigo-500" />
                         <span>Cambiar Rol / Perfil</span>
                       </div>
-                      <span className="text-[10px] text-slate-400">4 roles</span>
+                      <span className="text-[10px] text-slate-400">3 roles</span>
                     </button>
 
                     <button
@@ -428,7 +428,7 @@ export default function App() {
                 Cambio Rápido de Perfil de Acceso
               </h3>
               <p className="text-xs text-slate-500 dark:text-slate-400">
-                Cambie instantáneamente entre los 4 módulos escolares del sistema.
+                Cambie instantáneamente entre los 3 perfiles de acceso institucional.
               </p>
             </div>
 

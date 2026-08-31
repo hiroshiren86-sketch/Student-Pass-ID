@@ -1,0 +1,29 @@
+name = "inas-attendance-worker"
+main = "src/index.ts"
+compatibility_date = "2024-09-23"
+compatibility_flags = ["nodejs_compat"]
+
+# Variables de entorno públicas
+[vars]
+SCHOOL_CODE = "INAS_2026"
+SCHOOL_NAME = "Institución Educativa Antonia Santos"
+DEFAULT_AI_PROVIDER = "groq"
+DEFAULT_AI_MODEL = "llama-3.3-70b-versatile"
+
+# Enlace a Base de Datos Relacional Cloudflare D1
+[[d1_databases]]
+binding = "DB"
+database_name = "inas_attendance_db"
+database_id = "REEMPLAZAR_CON_TU_D1_DATABASE_ID"
+
+# Enlace a Almacenamiento Clave-Valor Cloudflare KV (Caché ultrarrápida <20ms para portería)
+[[kv_namespaces]]
+binding = "ATTENDANCE_KV"
+id = "REEMPLAZAR_CON_TU_KV_NAMESPACE_ID"
+
+# NOTA DE SECRETOS (Configurar vía `wrangler secret put <NOMBRE>`):
+# - AUTH_TOKEN : Token secreto de autorización de la institución para conectar terminales
+# - GROQ_API_KEY : Clave de API de Groq Cloud
+# - MISTRAL_API_KEY : Clave de API de Mistral AI
+# - GEMINI_API_KEY : Clave de API de Google Gemini
+# - OPENAI_API_KEY : Clave de API de OpenAI
