@@ -385,7 +385,7 @@ Esta sección documenta el mapa exhaustivo de comunicaciones, protocolos, plataf
 
 ---
 
-### 🧪 Ronda 7 (madrugada del 02/09/2026): QA Integral de Producción (Tester) — Hallazgos PENDIENTES de luz verde
+### 🧪 Ronda 7 (madrugada del 02/09/2026): QA Integral de Producción (Tester) — Hallazgos B1–B6/O1–O2 → **ARREGLADOS en Ronda 8 (mismo día, con luz verde)**
 
 **Mandato del propietario:** "Hice unos cambios hoy con el otro agente y hay que testearlo, entonces me puedes servir de tester… ves a la página web con sesión limpia, navegador totalmente limpio… y haz este checklist de principio a fin. Y luego al pull… ingresa en agent.md, anotas los errores que encontraste con todo el checklist, más agregas que está pendiente la revisión para de una vez yo vea todo lo que encontraste tú, te doy la luz verde y comienzas a arreglar."
 
@@ -411,8 +411,35 @@ Esta sección documenta el mapa exhaustivo de comunicaciones, protocolos, plataf
 - **O2 (consistencia) · confirm() nativo:** eliminación de plantilla custom y de "Mi horario" usa `window.confirm` del navegador, inconsistente con el resto de modales propios.
 - **⚠ Datos de prueba left-overs:** en el localStorage del navegador headless quedó el estudiante "QA TESTER JORNADA" (1000000999, 10°1) creado para el test de F3 — NO está en el repo ni en la nube (sin push); irrelevante para dispositivos reales.
 
-#### ⏸️ ESTADO: PENDIENTE DE REVISIÓN DEL PROPIETARIO
-Este QA es **solo lectura/diagnóstico**: no se tocó código de la app. Los arreglos B1–B6/O1/O2 esperan **luz verde explícita** del propietario (su mensaje: "te doy la luz verde y comienzas a arreglar"). Nota operativa del propietario documentada: el Worker está sincronizado con GitHub — editar `wrangler.toml`/código del worker y pushear despliega solo; NO entrar a Cloudflare a modificar el worker a mano.
+#### ✔️ ESTADO (actualizado 02/09/2026): ARREGLADO
+Los hallazgos B1–B6/O1/O2 recibieron **luz verde explícita del propietario** ("te doy luz verde para que corrija lo que encontraste en los bugs… hazlo de inmediato") y fueron corregidos en la **Ronda 8** (sección siguiente). Esta sección se conserva como registro del QA. Nota operativa del propietario documentada: el Worker está sincronizado con GitHub — editar `wrangler.toml`/código del worker y pushear despliega solo; NO entrar a Cloudflare a modificar el worker a mano.
+
+---
+
+### 🔧 Ronda 8 (02/09/2026): Arreglos con luz verde — B1–B6, O1, O2
+
+**Mandato del propietario:** "te doy luz verde para que corrija lo que encontraste en los bugs. Y si hay cosas por corregir o fases sin terminar o pruebas sin marcar en agent.md, hazlo de inmediato."
+
+#### Arreglos aplicados (archivo → cambio)
+- **B1 · Escape cierra modales (familia U1/Regla E10):**
+  - `StudentsManagerView.tsx`: nuevo `useEffect` con listener global `Escape` → cierra primero la **Previsualización de Carné** (`inspectStudent`) y, si no hay, el **Drawer de Matrícula/Edición** (`showDrawer`).
+  - `DocumentUploadModal.tsx`: `useEffect` que cierra con Escape cuando `isOpen` (declarado ANTES del early-return `if (!isOpen) return null` para no romper el orden de hooks).
+  - `ConfirmDialog.tsx` (nuevo): el modal de confirmación propio también responde a Escape.
+- **B2 · Editor de plantillas con auto-scroll:** `ScheduleBuilderView.tsx` añade `templateEditorRef` + `useEffect` con `scrollIntoView({behavior:'smooth', block:'start'})` al abrir el editor (Nueva plantilla / Duplicar / Editar). Dependencia por `editingTemplate?.id` (NO por objeto) para que el scroll no salte en cada pulsación de teclado dentro del editor; `scroll-mt-24` para que no quede tapado por el header.
+- **B3 · F2 aplica en caliente:** el Portal del Estudiante era la ÚNICA vista grande **sin suscripción al storage**; su guard `templatesOnlyMode` solo se evaluaba al remontar. `StudentPortalView.tsx` ahora se suscribe a `AttendanceStorageService.subscribe()` y el guard lee del estado reactivo `settings.templatesOnlyMode`. Cualquier toggle F2 (Horarios/Ajustes) refleja al instante sin recargar ni relogin.
+- **B4 · Fin de la "ventana fantasma" (plantilla eliminada vs slots):** diagnóstico con simulación en bun: el flujo de storage regeneraba bien los slots, por lo que la divergencia observada en QA provenía de un estado heredado (`settings.activeDayTemplate` apuntando a id inexistente + fallback silencioso de `getActiveTemplate()` que pinta badge "Plantilla A" con slots ajenos). Blindaje en `attendanceStorage.ts`:
+  1. `deleteCustomTemplate(id)` ahora garantiza a nivel SERVICIO el reset: si la eliminada estaba activa → `applyDayTemplate('tmpl-normal')` (regenera slots). Ningún llamador puede dejar el estado divergente.
+  2. Nuevo `ensureActiveTemplateConsistency()`: sanación al arranque (invocada en `App.tsx` antes de `initCloudSettingsSync`) — si `activeDayTemplate` apunta a un id que ya no existe, realinea setting + slots una vez por sesión. **Sana también los dispositivos que quedaron con el estado divergente del QA.**
+- **B5 · CSV ya no descarta errores en silencio:** causa raíz exacta en `parsePersonalScheduleCSV`: la heurística de encabezado descartaba cualquier línea que EMPEZARA con "dia"/"día" → el repro del QA ("DiaInvalido, Química, 08:00") se comía la línea sin reportar nada. Ahora el header solo se ignora si la PRIMERA CELDA es exactamente "dia"/"día"; una línea como "DiaInvalido,…" produce "Línea 1: día no reconocido…". (El render de `scheduleCsvPreview.errors` ya existía en el portal; el problema estaba solo en el parser.)
+- **B6 · Drag & drop implementado (se opta por implementar, no por editar la doc):** zona "Opción A" de **Personalizar Foto** (`StudentPortalView.tsx`) ahora acepta arrastrar la imagen: `onDragOver/onDragLeave/onDrop` + anillo de resaltado cuando está activa; handler compartido `handlePhotoFile` para clic y drop (valida `image/*`); el `onChange` resetea `e.target.value` para poder re-subir el mismo archivo. Texto actualizado: "Haz clic aquí o arrastra tu foto hasta esta zona". La documentación de Ronda 6 queda ahora correcta.
+- **O1 · Texto del banner (Regla de Oro):** `TeacherClassroomView.tsx` → "…los no escaneados **con jornada iniciada** quedaron AUSENTE…" (quien tiene 0 escaneos en el día queda no-computable por diseño).
+- **O2 · confirm() nativo reemplazado:** nuevo componente `src/components/ConfirmDialog.tsx` (estilo del sistema, Escape, autofocus en el botón peligroso). Sustituye `window.confirm` en: (1) Eliminar plantilla CUSTOM (`ScheduleBuilderView`, ahora avisa si estaba aplicada), (2) Eliminar bloque del editor de slots (misma vista, misma familia — incluido por consistencia), (3) Eliminar "Mi horario" del portal. En los 3 casos la acción se ejecuta tras confirmar.
+
+#### Validación (cero regresiones)
+- `tsc --noEmit`: **27 errores = los mismos 27 pre-existentes** (comparación ordenada contra baseline guardada; solo cambió el nº de línea de 3 errores antiguos de `ScheduleBuilderView` por las inserciones). Cero errores nuevos.
+- `vite build`: limpio (8.7 s, solo el aviso conocido de chunk > 500 kB).
+- Suite funcional en bun (`scripts/verify_ronda8.ts`): **12/12 OK** — B4: eliminar custom aplicada → setting + badge + slots realineados a Plantilla A (55 m, fin 12:30); sanación de estado fantasma OK; B5: "DiaInvalido" reporta error con nº de línea, header legítimo sigue ignorándose, línea incompleta reporta error.
+- No se tocó el worker ni `wrangler.toml` (los 8 arreglos son 100% frontend/localStorage).
 
 ---
 
@@ -424,7 +451,8 @@ Este QA es **solo lectura/diagnóstico**: no se tocó código de la app. Los arr
 3. Ejecutar pruebas de escaneo continuo y verificar la réplica en D1 y KV (usar la guía de prueba de sincronización entregada al propietario; el primer "Sincronizar ahora" desde la app creará el snapshot real).
 4. Validar sincronización bidireccional entre 2 dispositivos simultáneos (PC + Móvil docente).
 5. Decidir si se configura `AUTH_TOKEN` (hoy: acceso abierto).
-6. **Siguiente frente (plan completo arriba, Ronda 4): implementar F1→F3→F2→F4→F5 cuando el propietario dé luz verde (revisión 02/09/2026).**
+6. ~~Implementar F1→F3→F2→F4→F5~~ **HECHO (Ronda 4)** y verificado en producción (Ronda 7); hallazgos de QA arreglados (Ronda 8).
+7. **Siguiente frente sugerido (decisión del propietario):** (a) prueba de sincronización bidireccional con 2 dispositivos físicos (PC + móvil docente) — único ítem de esta fase que no es automatizable desde el QA; (b) decidir `AUTH_TOKEN` del worker; (c) módulo de Excusas Médicas / Buzón (Fase Futura, tabla `student_excuses` ya prevista en D1).
 
 ### ⏳ Fase Futura Planificada: Módulo de Excusas Médicas / Permisos Anticipados y Buzón Escolar
 - **Propósito:** Permitir a los estudiantes/acudientes reportar inasistencias programadas (citas médicas, incapacidades, calamidades) fuera del horario lectivo (después de la 1:00 p.m. o fines de semana) para proteger su registro de asistencia.

@@ -38,6 +38,7 @@ import { generateStudentQrPayload, generateSignedQRPayload } from '../utils/cryp
 import { generateStudentCardPdf, downloadPdfBlob } from '../utils/pdfGenerator';
 import { generateBarcodeDataUrl } from '../utils/barcode';
 import { SoundService } from '../utils/sound';
+import { ConfirmDialog } from './ConfirmDialog';
 
 interface StudentPortalViewProps {
   onLogout?: () => void;
@@ -57,6 +58,22 @@ export const StudentPortalView: React.FC<StudentPortalViewProps> = ({ onLogout, 
   const [studentStats, setStudentStats] = useState<StudentAttendanceStats | null>(null);
   const [qrDataUrl, setQrDataUrl] = useState<string | null>(null);
   const [settings, setSettings] = useState<SchoolSettings>(AttendanceStorageService.getSettings());
+
+  // Ronda 8 (B3): el portal era la ÚNICA vista grande sin suscripción al storage — el guard
+  // de templatesOnlyMode quedaba stale al cambiar de rol en caliente. Con esta suscripción,
+  // cualquier escritura local (toggle F2, Ajustes, plantillas) re-renderiza el portal con
+  // datos frescos sin necesidad de recargar.
+  useEffect(() => {
+    const unsubscribe = AttendanceStorageService.subscribe(() => {
+      setSettings(AttendanceStorageService.getSettings());
+    });
+    return unsubscribe;
+  }, []);
+
+  // Ronda 8 (O2): confirmación propia del portal
+  const [confirmState, setConfirmState] = useState<{ title: string; message: string; action: () => void } | null>(null);
+  // Ronda 8 (B6): feedback visual de arrastre sobre la zona de foto
+  const [photoDragActive, setPhotoDragActive] = useState(false);
 
   // Representative Scanner State
   const [repScannerOpen, setRepScannerOpen] = useState(false);
@@ -78,6 +95,20 @@ export const StudentPortalView: React.FC<StudentPortalViewProps> = ({ onLogout, 
 
   const allStudents = AttendanceStorageService.getStudents();
   const sampleStudents = allStudents.slice(0, 4);
+
+  // Ronda 8 (B6): handler compartido para la foto — clic (picker) y drag & drop usan el mismo camino
+  const handlePhotoFile = (file: File | undefined | null) => {
+    if (!file || !activeStudent) return;
+    if (!file.type.startsWith('image/')) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      const dataUrl = reader.result as string;
+      AttendanceStorageService.updateStudent(activeStudent.code, { photoUrl: dataUrl });
+      const updated = { ...activeStudent, photoUrl: dataUrl };
+      setActiveStudent(updated);
+    };
+    reader.readAsDataURL(file);
+  };
 
   useEffect(() => {
     if (activeStudentCode) {
@@ -845,10 +876,20 @@ export const StudentPortalView: React.FC<StudentPortalViewProps> = ({ onLogout, 
                     </div>
                   </div>
 
-                  <label className="cursor-pointer border-2 border-dashed border-indigo-200 hover:border-indigo-500 dark:border-indigo-900/60 dark:hover:border-indigo-500/80 rounded-xl p-4 flex flex-col items-center justify-center gap-2 text-center bg-white/50 dark:bg-slate-950/50 hover:bg-indigo-50/40 dark:hover:bg-indigo-950/30 transition-all">
+                  <label
+                    className={`cursor-pointer border-2 border-dashed rounded-xl p-4 flex flex-col items-center justify-center gap-2 text-center transition-all ${photoDragActive ? 'border-indigo-500 bg-indigo-100/60 dark:bg-indigo-950/60 ring-2 ring-indigo-400' : 'border-indigo-200 hover:border-indigo-500 dark:border-indigo-900/60 dark:hover:border-indigo-500/80 bg-white/50 dark:bg-slate-950/50 hover:bg-indigo-50/40 dark:hover:bg-indigo-950/30'}`}
+                    onDragOver={(e) => { e.preventDefault(); setPhotoDragActive(true); }}
+                    onDragLeave={(e) => { e.preventDefault(); setPhotoDragActive(false); }}
+                    onDrop={(e) => {
+                      e.preventDefault();
+                      setPhotoDragActive(false);
+                      // Ronda 8 (B6): drag & drop implementado — mismo camino que el picker
+                      handlePhotoFile(e.dataTransfer?.files?.[0]);
+                    }}
+                  >
                     <Camera className="w-6 h-6 text-indigo-600 dark:text-indigo-400" />
                     <span className="text-xs font-bold text-slate-800 dark:text-slate-200">
-                      Haz clic aquí para seleccionar tu foto
+                      Haz clic aquí o arrastra tu foto hasta esta zona
                     </span>
                     <span className="text-[10px] text-slate-400">
                       Se ajustará automáticamente al tamaño del carné
@@ -858,17 +899,8 @@ export const StudentPortalView: React.FC<StudentPortalViewProps> = ({ onLogout, 
                       accept="image/*"
                       className="hidden"
                       onChange={(e) => {
-                        const file = e.target.files?.[0];
-                        if (file) {
-                          const reader = new FileReader();
-                          reader.onload = () => {
-                            const dataUrl = reader.result as string;
-                            AttendanceStorageService.updateStudent(activeStudent.code, { photoUrl: dataUrl });
-                            const updated = { ...activeStudent, photoUrl: dataUrl };
-                            setActiveStudent(updated);
-                          };
-                          reader.readAsDataURL(file);
-                        }
+                        handlePhotoFile(e.target.files?.[0]);
+                        e.target.value = ''; // permite re-seleccionar el mismo archivo
                       }}
                     />
                   </label>
@@ -952,7 +984,9 @@ export const StudentPortalView: React.FC<StudentPortalViewProps> = ({ onLogout, 
 
       {/* Ronda 4 (F4): MI HORARIO OPCIONAL — oculto si Rectoría activó "Solo plantillas oficiales" */}
       {(() => {
-        const templatesOnly = AttendanceStorageService.getSettings().templatesOnlyMode === true;
+        // Ronda 8 (B3): ahora lee del estado reactivo (suscripción al storage arriba);
+        // antes solo se refrescaba al remontar y quedaba stale en cambio de rol caliente.
+        const templatesOnly = settings.templatesOnlyMode === true;
         const dayNames = ['', 'Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado'];
         return (
           <div className="glass-panel rounded-3xl p-5 sm:p-6 space-y-4">
@@ -994,7 +1028,18 @@ export const StudentPortalView: React.FC<StudentPortalViewProps> = ({ onLogout, 
                     className="px-3 py-1.5 rounded-xl bg-slate-200 dark:bg-slate-800 hover:bg-slate-300 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 text-xs font-bold"
                   >Reemplazar con CSV</button>
                   <button
-                    onClick={() => { if (window.confirm('¿Eliminar tu horario personal?')) { AttendanceStorageService.deleteStudentPersonalSchedule(activeStudent!.code); setMySchedule(null); } }}
+                    onClick={() => {
+                      // Ronda 8 (O2): confirmación con modal propio (antes window.confirm nativo)
+                      if (!activeStudent) return;
+                      setConfirmState({
+                        title: 'Eliminar horario',
+                        message: '¿Eliminar tu horario personal? Podrás volver a crearlo después con un CSV.',
+                        action: () => {
+                          AttendanceStorageService.deleteStudentPersonalSchedule(activeStudent.code);
+                          setMySchedule(null);
+                        }
+                      });
+                    }}
                     className="px-3 py-1.5 rounded-xl bg-red-100 dark:bg-red-950 hover:bg-red-200 dark:hover:bg-red-900 text-red-600 dark:text-red-400 text-xs font-bold"
                   >Eliminar horario</button>
                 </div>
@@ -1235,6 +1280,15 @@ export const StudentPortalView: React.FC<StudentPortalViewProps> = ({ onLogout, 
           </div>
         </div>
       )}
+
+      {/* Ronda 8 (O2): modal de confirmación propio del portal (reemplaza window.confirm) */}
+      <ConfirmDialog
+        open={!!confirmState}
+        title={confirmState?.title || ''}
+        message={confirmState?.message || ''}
+        onConfirm={() => { const a = confirmState?.action; setConfirmState(null); a?.(); }}
+        onCancel={() => setConfirmState(null)}
+      />
     </div>
   );
 };

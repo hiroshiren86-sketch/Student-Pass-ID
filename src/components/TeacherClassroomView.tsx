@@ -564,7 +564,7 @@ export const TeacherClassroomView: React.FC<TeacherClassroomViewProps> = ({
                   {open
                     ? `Jornada abierta (${win.start} – ${win.end}) · Plantilla: ${AttendanceStorageService.getActiveDayTemplate().name}`
                     : AttendanceStorageService.getDayCloseState(today).closedAt
-                      ? `Jornada cerrada (${win.start} – ${win.end}) · El cierre del día ya se ejecutó: los no escaneados quedaron AUSENTE y el escáner no registra más hasta mañana.`
+                      ? `Jornada cerrada (${win.start} – ${win.end}) · El cierre del día ya se ejecutó: los no escaneados con jornada iniciada quedaron AUSENTE y el escáner no registra más hasta mañana.`
                       : `Jornada cerrada (${win.start} – ${win.end}) · Fuera de este rango el escáner no registra asistencia (la plantilla define la jornada).`}
                 </span>
               </div>

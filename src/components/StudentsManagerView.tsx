@@ -56,6 +56,18 @@ export const StudentsManagerView: React.FC<StudentsManagerViewProps> = ({ onGene
     return unsubscribe;
   }, []);
 
+  // Ronda 8 (B1): Escape cierra los modales de esta vista — primero la Previsualización
+  // de Carné y, si no, el Drawer de Matrícula/Edición (patrón Regla E10 de SettingsModal).
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return;
+      if (inspectStudent) setInspectStudent(null);
+      else if (showDrawer) setShowDrawer(false);
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [inspectStudent, showDrawer]);
+
   // Form State con soporte para Tipo de Doc y Foto Opcional
   const [formData, setFormData] = useState({
     firstName: '',

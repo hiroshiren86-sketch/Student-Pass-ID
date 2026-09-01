@@ -1,4 +1,4 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { 
   Upload, 
   FileText, 
@@ -39,6 +39,17 @@ export const DocumentUploadModal: React.FC<DocumentUploadModalProps> = ({
   const [dragActive, setDragActive] = useState(false);
   const [filterStatus, setFilterStatus] = useState<'all' | 'valid' | 'warning'>('all');
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Ronda 8 (B1): Escape cierra el modal de carga masiva (patrón Regla E10 de SettingsModal).
+  // Declarado ANTES del early-return para no romper el orden de hooks.
+  useEffect(() => {
+    if (!isOpen) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose();
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isOpen, onClose]);
 
   if (!isOpen) return null;
 

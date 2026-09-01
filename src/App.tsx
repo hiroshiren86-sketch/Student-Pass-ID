@@ -63,6 +63,7 @@ export default function App() {
   const menuRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
+    AttendanceStorageService.ensureActiveTemplateConsistency(); // Ronda 8 (B4): realinea plantilla activa vs slots
     AttendanceStorageService.initCloudSettingsSync();
     CloudflareSyncService.initAutoSync();
     const unsubscribe = AttendanceStorageService.subscribe(() => {

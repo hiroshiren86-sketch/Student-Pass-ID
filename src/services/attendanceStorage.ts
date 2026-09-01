@@ -555,8 +555,27 @@ export class AttendanceStorageService {
     this.saveCustomTemplates(list);
   }
 
+  // Ronda 8 (B4): al eliminar una plantilla CUSTOM que estaba APLICADA, el reset a la
+  // plantilla oficial + regeneración de slots se hace AQUÍ (fuente única de verdad),
+  // no en la UI. Así ningún llamador puede dejar settings.activeDayTemplate apuntando
+  // a un id inexistente con los slots de la plantilla borrada ("ventana fantasma").
   static deleteCustomTemplate(id: string): void {
     this.saveCustomTemplates(this.getCustomTemplates().filter(t => t.id !== id));
+    if (this.getSettings().activeDayTemplate === id) {
+      this.applyDayTemplate('tmpl-normal');
+    }
+  }
+
+  // Ronda 8 (B4): auto-sanación al arranque. Si settings.activeDayTemplate apunta a un
+  // id que ya no existe (p. ej. estado heredado de una plantilla custom borrada antes de
+  // este fix), getActiveDayTemplate() haría fallback silencioso a "Plantilla A" en el
+  // badge mientras los slots siguen siendo los de la plantilla eliminada. Esto realinea
+  // slots + setting una sola vez por sesión.
+  static ensureActiveTemplateConsistency(): void {
+    const activeId = this.getSettings().activeDayTemplate;
+    if (activeId && !this.resolveTemplate(activeId)) {
+      this.applyDayTemplate('tmpl-normal');
+    }
   }
 
   // Ronda 4 (F1): resuelve una plantilla por ID (canónico) o por TYPE legado ('NORMAL'…)
@@ -833,7 +852,11 @@ export class AttendanceStorageService {
 
     (text || '').split(/\r?\n/).forEach((line, i) => {
       const trimmed = line.trim();
-      if (!trimmed || trimmed.toLowerCase().startsWith('dia') || trimmed.toLowerCase().startsWith('día')) return; // header o vacío
+      // Ronda 8 (B5): encabezado = primera celda EXACTAMENTE "día"/"dia" (separada por ; o ,).
+      // Antes se descartaba en silencio cualquier línea que EMPEZARA con "dia" (p. ej.
+      // "DiaInvalido, Química, 08:00"), lo que escondía errores reales del CSV.
+      const headerCell = trimmed.split(/[;,]/)[0].trim().toLowerCase();
+      if (!trimmed || headerCell === 'dia' || headerCell === 'día') return; // header o vacío
       const cells = trimmed.split(/[;,]/).map(c => c.trim()).filter(c => c.length > 0);
       if (cells.length < 3) {
         errors.push(`Línea ${i + 1}: se requieren al menos día, materia y hora de inicio.`);

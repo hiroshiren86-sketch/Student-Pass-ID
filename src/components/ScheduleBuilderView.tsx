@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { 
   Clock, 
   Calendar, 
@@ -39,6 +39,7 @@ import {
 } from '../types/attendance';
 import { AttendanceStorageService } from '../services/attendanceStorage';
 import { ToggleSwitch } from './ToggleSwitch';
+import { ConfirmDialog } from './ConfirmDialog';
 
 const DAYS_OF_WEEK = [
   { id: 1, name: 'Lunes', short: 'LUN' },
@@ -112,6 +113,19 @@ export const ScheduleBuilderView: React.FC = () => {
   // Ronda 4 (F1): editor de plantillas propias de Rectoría
   const [editingTemplate, setEditingTemplate] = useState<DayTemplateConfig | null>(null);
   const [templatesOnlyMode, setTemplatesOnlyMode] = useState<boolean>(AttendanceStorageService.getSettings().templatesOnlyMode ?? false);
+
+  // Ronda 8 (B2): auto-scroll al editor al abrirlo (Nueva plantilla / Duplicar / Editar)
+  const templateEditorRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (editingTemplate && templateEditorRef.current) {
+      const t = setTimeout(() => templateEditorRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 80);
+      return () => clearTimeout(t);
+    }
+    // Dependencia por ID: evita re-scroll en cada pulsación del teclado dentro del editor
+  }, [editingTemplate?.id]);
+
+  // Ronda 8 (O2): confirmación propia en lugar de window.confirm nativo
+  const [confirmState, setConfirmState] = useState<{ title: string; message: string; action: () => void } | null>(null);
 
   // Filters for Grid view
   const [selectedGrade, setSelectedGrade] = useState<string>(grades[0] || '10°1');
@@ -280,11 +294,16 @@ export const ScheduleBuilderView: React.FC = () => {
   };
 
   const handleDeleteSlot = (id: string) => {
-    if (window.confirm('¿Eliminar este bloque del horario escolar?')) {
-      const updated = slots.filter(s => s.id !== id).map((s, idx) => ({ ...s, order: idx + 1 }));
-      AttendanceStorageService.saveScheduleSlots(updated);
-      showToast('Bloque eliminado.');
-    }
+    // Ronda 8 (O2): confirmación con modal propio (antes window.confirm nativo)
+    setConfirmState({
+      title: 'Eliminar bloque',
+      message: '¿Eliminar este bloque del horario escolar? Esta acción no se puede deshacer.',
+      action: () => {
+        const updated = slots.filter(s => s.id !== id).map((s, idx) => ({ ...s, order: idx + 1 }));
+        AttendanceStorageService.saveScheduleSlots(updated);
+        showToast('Bloque eliminado.');
+      }
+    });
   };
 
   const handleStartEditSlot = (slot: ScheduleSlot) => {
@@ -1119,13 +1138,20 @@ export const ScheduleBuilderView: React.FC = () => {
                       {isCustom && (
                         <button
                           onClick={() => {
-                            if (window.confirm(`¿Eliminar la plantilla "${tpl.name}"?`)) {
-                              AttendanceStorageService.deleteCustomTemplate(tpl.id);
-                              if (AttendanceStorageService.getSettings().activeDayTemplate === tpl.id) {
-                                AttendanceStorageService.applyDayTemplate('tmpl-normal');
-                                showToast('Plantilla eliminada. Se aplicó la Plantilla A (Normal).');
-                              } else { showToast('Plantilla eliminada.'); }
-                            }
+                            // Ronda 8 (O2 + B4): confirmación con modal propio. El reset de
+                            // plantilla activa y regeneración de slots lo garantiza ahora el
+                            // servicio (deleteCustomTemplate), aquí solo se decide el aviso.
+                            const wasActive = AttendanceStorageService.getSettings().activeDayTemplate === tpl.id;
+                            setConfirmState({
+                              title: 'Eliminar plantilla',
+                              message: `¿Eliminar la plantilla "${tpl.name}"?${wasActive ? ' Está aplicada hoy: se aplicará la Plantilla A (Normal) y los bloques se regenerarán.' : ''}`,
+                              action: () => {
+                                AttendanceStorageService.deleteCustomTemplate(tpl.id);
+                                if (wasActive) {
+                                  showToast('Plantilla eliminada. Se aplicó la Plantilla A (Normal) y se regeneraron los bloques.');
+                                } else { showToast('Plantilla eliminada.'); }
+                              }
+                            });
                           }}
                           className="px-2 py-1 rounded-lg bg-red-100 dark:bg-red-950 hover:bg-red-200 dark:hover:bg-red-900 text-red-600 dark:text-red-400 text-[10px] font-bold flex items-center gap-1"
                         ><Trash2 className="w-2.5 h-2.5" /> Eliminar</button>
@@ -1138,7 +1164,7 @@ export const ScheduleBuilderView: React.FC = () => {
 
             {/* EDITOR PARAMÉTRICO + PREVISUALIZACIÓN */}
             {editingTemplate && (
-              <div className="mt-4 p-4 rounded-2xl border border-indigo-300 dark:border-indigo-800 bg-indigo-50/50 dark:bg-indigo-950/30 space-y-3">
+              <div ref={templateEditorRef} className="mt-4 p-4 rounded-2xl border border-indigo-300 dark:border-indigo-800 bg-indigo-50/50 dark:bg-indigo-950/30 space-y-3 scroll-mt-24">
                 <div className="flex items-center justify-between">
                   <h4 className="text-xs font-black text-indigo-900 dark:text-indigo-200">Editor de plantilla</h4>
                   <button onClick={() => setEditingTemplate(null)} className="p-1 hover:opacity-70"><X className="w-3.5 h-3.5 text-slate-500" /></button>
@@ -1246,6 +1272,15 @@ export const ScheduleBuilderView: React.FC = () => {
           </div>
         </div>
       )}
+
+      {/* Ronda 8 (O2): modal de confirmación propio (reemplaza window.confirm nativo) */}
+      <ConfirmDialog
+        open={!!confirmState}
+        title={confirmState?.title || ''}
+        message={confirmState?.message || ''}
+        onConfirm={() => { const a = confirmState?.action; setConfirmState(null); a?.(); }}
+        onCancel={() => setConfirmState(null)}
+      />
     </div>
   );
 };
