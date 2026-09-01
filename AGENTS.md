@@ -159,7 +159,7 @@ El sistema implementa una arquitectura híbrida de alta resiliencia y **Costo Ce
 - Para operar el Worker hace falta `CLOUDFLARE_API_TOKEN` en el entorno del comando (el propietario lo entrega por chat; puede rotarlo/revocarlo en el dashboard). Wrangler 3.x: `kv key delete` es remoto por defecto (no acepta `--remote`); `d1 execute` SÍ exige `--remote` para producción.
 - `sync/pull` es **GET** con `?schoolCode=`; `sync/push` es **POST** con el snapshot completo (estudiantes + asistencias) desde el navegador. `POST /api/sync/push` con `{}` se acepta y guarda 0 registros (sobrescribe el snapshot): no usar como "ping" en producción.
 
-### 🧭 Ronda 4 (noche del 01/09/2026): INVESTIGACIÓN + PLAN — Horarios a medida, interruptor "Solo plantillas" y Cierre de Jornada configurable
+### ✅ Ronda 4 IMPLEMENTADA (noche del 01/09/2026): Horarios a medida, interruptor "Solo plantillas" y Cierre de Jornada configurable
 
 **Mandato del propietario (cita):** "que no te dejen modificar solamente las plantillas que están ahí hechas… que tú mismo crees tus propias plantillas… eso es solo para rectoría, ¿no?… darle la oportunidad a los estudiantes, el que quiera poner su horario lo pone en su perfil… desde rectoría, en la gestión de horarios, un interruptor de solo usar plantillas y pum, se deshabilite para todas las cuentas, ya sea maestros o estudiantes, la visualización de horarios… si ya se pasa de la una de la tarde ya se cierra la jornada y no deja escanear más nada y el contador se detiene y vuelve a iniciar otra vez el día siguiente conforme se haya puesto la plantilla (si dice inicio 7:00, cuenta desde 7:00; si dice fin 13:30 o 14:00, se detiene ahí). Todo debe ser sincronizado y revisado antes de cualquier push. Planifica bien, te reviso mañana." — **Orden explícito: NO tocar código hoy** ("basta de hacer cambios hoy, para no hacer algo que podría dañar el código"). Hoy solo: investigar + planificar + documentar.
 
@@ -178,9 +178,9 @@ El sistema implementa una arquitectura híbrida de alta resiliencia y **Costo Ce
 10. **Deuda de seguridad detectada (NO tocar hoy)**: el push sube `settings` completas al snapshot CF — incluidos `qrSecret`, `sessionSecret`, `cloudflareApiToken` y API keys IA — y quedan en D1/KV. Futura limpieza: excluir secretos del snapshot. Documentado como deuda.
 11. **Incidente operativo resuelto en esta ronda**: el workspace local amaneció con un checkout viejo (mezcla de épocas; reflog terminaba en 6f3425c). Verificado con `git diff origin/main --numstat` que solo faltaba contenido (Rondas 2-3) y no había nada local superior → recuperación con `git config core.fileMode false` + `git reset --hard origin/main` (72e5cef). Lección: ante un workspace sospechoso, comparar SIEMPRE contra origin/main antes de tocar nada; GitHub es la verdad canónica.
 
----
+**PLAN APROBADO POR EL PROPIETARIO EN LA MISMA NOCHE ("Me arrepentí… aplica los cambios") → IMPLEMENTADO. Commit `997ea8e` (9 archivos, +765/−34). Validación: `tsc` mismos 27 errores pre-existentes (cero nuevos) + `vite build` OK.**
 
-**PLAN APROBADO PARA IMPLEMENTACIÓN (esperando luz verde del propietario mañana 02/09/2026):**
+**Lo implementado (resumen ejecutivo + cómo probarlo):**
 
 **F1 — CRUD de plantillas propias (solo Rectoría)**
 - Nueva persistencia `inas_custom_templates_v1: DayTemplateConfig[]` (type `'CUSTOM'`). `getDayTemplates()` pasa a devolver FIJAS + CUSTOM (las fijas quedan como semilla; se pueden duplicar→editar; las fijas no se eliminan).
@@ -217,7 +217,26 @@ El sistema implementa una arquitectura híbrida de alta resiliencia y **Costo Ce
 3. ¿DIA_ESPECIAL: escaneo permitido en ventana y cero ausencias? → PROPUESTO: sí (no-computable ya lo garantiza en el cierre).
 4. ¿Pull manual o auto-pull para plantillas? → PROPUESTO: manual al inicio (menos riesgo).
 
-**Pasos NO realizados hoy (por orden explícita de no tocar código):** todo el código de F1-F5 queda pendiente; hoy solo investigación, este plan y documentación. El worker NO requiere re-deploy para F1-F5 (es frontend + datos del snapshot).
+**Pasos NO realizados hoy (por orden explícita de no tocar código):** ~~todo el código de F1-F5 queda pendiente~~ → **SUPERADO: el propietario aprobó esa misma noche y F1-F5 quedaron implementados (ver abajo)**. El worker NO requiere re-deploy para F1-F5 (es frontend + datos del snapshot).
+
+**ESTADO FINAL Ronda 4 — implementación (commit `997ea8e`, push a main):**
+- **F1 ✅**: `attendanceStorage.ts`: `getCustomTemplates/saveCustomTemplates/upsertCustomTemplate/deleteCustomTemplate` (key `inas_custom_templates_v1`), `resolveTemplate(id)` (busca por ID y compat por TYPE), `getDayTemplates()` fusionada, `generateSlotsFromTemplate()` puro (mismo algoritmo extraído), `applyDayTemplate(id)` que guarda SIEMPRE el ID. UI: sub-vista "Plantillas" en `ScheduleBuilderView` (lista oficial con candado + CUSTOM con editar/eliminar/duplicar, editor paramétrico con `dayStartTime`/`dayEndTime`, validaciones y previsualización de bloques). Selector de `SettingsModal` lista fusionada con sufijo "· Personalizada".
+- **FIX crítico incluido (bug latente):** el selector de plantillas enviaba el ID (`'tmpl-recorte-10'`) pero `applyDayTemplate`/`getActiveDayTemplate` buscaban por `type` → **elegir la plantilla B/C/D/E siempre aplicaba la NORMAL**. Corregido con `resolveTemplate` por ID (compat: valores TYPE legados en settings viejos siguen resolviendo).
+- **F2 ✅**: `SchoolSettings.templatesOnlyMode` + ToggleSwitch en "Horarios Escolares → Plantillas". El portal del estudiante lo respeta (F4). Las plantillas/bloques oficiales siguen mandando el escaneo igual. Se propaga a todos los dispositivos por el canal existente de settings (Firestore realtime + snapshot CF).
+- **F3 ✅**: `getSchoolDayWindow(date)` (plantilla → settings.daily* → slots; domingo/sábado = sin jornada), `isWithinSchoolDay()`, `getDayCloseState()`, `closeDayAttendance()` (itera grados activos × slots no-descanso reutilizando `closeBlockAttendance`: Regla de Oro, 30%→PENDIENTE_REVISION, no-computables respetados; flag `inas_day_closed_v1` por fecha), `maybeAutoCloseDay()` perezoso e idempotente. **Validación central en `registerClassScan`** (antes de unicidad/re-apertura): fuera de ventana → `'out_of_window'` con mensaje de horario, sin registrar. Timer de 60s en `App.tsx` (evalúa también al abrir la app). Banners de jornada abierta/cerrada en aula (`TeacherClassroomView`) y portería (`ScanHubView`).
+- **F4 ✅**: tipos `StudentPersonalSchedule(+Entry)`; storage `getAllStudentSchedules/saveAllStudentSchedules/getStudentPersonalSchedule/saveStudentPersonalSchedule/deleteStudentPersonalSchedule/parsePersonalScheduleCSV` (key `inas_student_schedules_v1`; CSV `día, materia, horaInicio, horaFin?`, coma o punto y coma, días Lunes–Sábado o 1-6, errores por línea). UI "Mi horario (opcional)" en `StudentPortalView` con guard `templatesOnlyMode` (aviso de bloqueo), tabla por día, validar/guardar/reemplazar/eliminar.
+- **F5 ✅**: push añade `customTemplates` + `studentSchedules` al `data` del snapshot; pull los restaura con reemplazo total (igual que slots/assignments). Tolerante a clientes viejos (destructura excluyente). Adopción: actualizar todos los dispositivos antes de editar plantillas (un push de cliente viejo omite estos campos).
+- **Ajuste F1 adicional:** `SettingsModal` ahora expone también el campo **"Fin de Jornada"** (`dailyEndTime`) que era inaccesible por UI (fallback de F3).
+
+**Guía de prueba para el propietario (Ronda 4):**
+1. **Plantillas**: Rectoría → Horarios Escolares → Plantillas → "Duplicar" sobre una oficial → cambia parámetros (ej. fin de jornada 14:00) → Guardar → "Aplicar hoy" → verifica en "Estructura" los bloques regenerados y en el aula el banner "Jornada abierta (…)".
+2. **Ventana de jornada**: con plantilla aplicada (ej. inicio 06:30/fin 12:30), prueba un escaneo a las 14:00 → feedback "Jornada Cerrada" y NO se registra. Al día siguiente el contador inicia en cero y la ventana es la de la plantilla de ese día.
+3. **Cierre automático**: tras la hora de fin, el timer (60 s) ejecuta el cierre del día; verifica en la Planilla de Asistencia los AUSENTE `AUTO_CIERRE` (Regla de Oro: bloques sin ningún escaneo no marcan ausencias; <30% quedan PENDIENTE_REVISION).
+4. **Interruptor**: Horarios Escolares → Plantillas → "Solo plantillas oficiales" ON → abre el Portal del estudiante: "Mi horario" muestra el aviso de bloqueo. OFF → reaparece.
+5. **Horario del estudiante**: Portal → "Cargar mi horario (CSV)" → pega líneas tipo `Lunes, Matemáticas, 07:00, 07:55` → Validar → Guardar → tabla por día. No afecta asistencia.
+6. **Sync**: desde el dispositivo de Rectoría "Sincronizar ahora" (push incluye plantillas custom y horarios); en otro dispositivo "Descargar de Cloudflare" → verificar plantillas y horarios replicados.
+
+**Decisiones de la Ronda 4 cerradas (propuestas aplicadas tal como se documentaron):** fin de jornada por plantilla con fallback a settings; fines de semana sin jornada (escaneo bloqueado; override humano del docente intacto); DIA_ESPECIAL permite escanear dentro de la ventana pero el cierre no marca ausencias; pull manual al inicio.
 
 ---
 
