@@ -8,8 +8,8 @@ compatibility_flags = ["nodejs_compat"]
 SCHOOL_CODE = "INAS_2026"
 SCHOOL_NAME = "Institución Educativa Antonia Santos"
 # NOTA: la IA ya NO se integra en el Worker (se ejecuta local en el navegador, BYOK).
-# Los secrets GROQ_API_KEY / MISTRAL_API_KEY / GEMINI_API_KEY / OPENAI_API_KEY del
-# dashboard quedaron sin uso y pueden eliminarse. Ver AGENTS.md (01/09/2026).
+# El secret residual GROQ_API_KEY fue ELIMINADO del dashboard el 01/09/2026 (Ronda 3
+# de AGENTS.md). El Worker no declara ningún secret de IA y no debe volver a hacerlo.
 
 # Enlace a Base de Datos Relacional Cloudflare D1
 [[d1_databases]]
@@ -24,4 +24,6 @@ id = "3b249fb9b0014f918680646a5ae869f6"
 
 # NOTA DE SECRETOS (Configurar vía `wrangler secret put <NOMBRE>`):
 # - AUTH_TOKEN : Token secreto de autorización de la institución para conectar terminales
-# (Los secrets de IA quedaron obsoletos con la migración a IA local BYOK — pueden borrarse del dashboard)
+#   (OPCIONAL, decisión pendiente del propietario; hoy el Worker está abierto. Ver AGENTS.md Ronda 3).
+# Los secrets de IA quedaron obsoletos con la migración a IA local BYOK: GROQ_API_KEY fue
+# borrado del dashboard el 01/09/2026. No recrear secrets de IA bajo ninguna circunstancia.

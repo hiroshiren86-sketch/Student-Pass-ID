@@ -102,9 +102,9 @@ El sistema implementa una arquitectura híbrida de alta resiliencia y **Costo Ce
 **Diagnóstico:** el Worker, al fallar contra Groq (bloqueo de IP, ver E6), respondía `HTTP 200 + success:true + isSimulated:true + provider:worker-local-engine` con texto genérico; el frontend aceptaba esa respuesta como éxito en `generateGradeSummary` y **cortaba la cadena antes de llegar al cliente directo BYOK** — la clave válida del usuario jamás se usaba. Además `GradeAiSummaryView` nunca mostraba el flag `isSimulated`, así que el texto de relleno se veía como IA real.
 
 - ~~**E12 — Cadena de resiliencia bloqueada por éxito fingido:** Se reordenó la cadena a Cliente Directo BYOK (primero, IP residencial) -> Worker (solo si IA real) -> Servidor Local (solo si IA real) -> Motor Local; un `isSimulated:true` de un servidor ya NO termina la cadena. Cada nivel fallido se registra en `simulatedReason`. (Corregido en `aiService.ts`; validado con `tsc --noEmit` + `vite build`).~~
-- **E13 — Transparencia del motor de contingencia del Worker:** El worker ahora incluye `simulatedReason` (error real del proveedor, truncado a 300 chars) en su respuesta de contingencia, incluida la rama Gemini que antes tragaba errores en silencio. (Corregido en `cloudflare-worker/src/index.ts`; **deploy pendiente de acceso a Cloudflare** — hasta entonces el worker en producción seguirá sin el campo).
+- **E13 — Transparencia del motor de contingencia del Worker:** (Histórico) El worker llegó a incluir `simulatedReason` (error real del proveedor, truncado a 300 chars) en su respuesta de contingencia. **Obsoleto desde la Ronda 3 (01/09/2026):** el deploy de producción retiró la IA del Worker por completo (stub 410 en `/api/ai/*`); la transparencia ahora vive en el frontend (Motor Determinista Local siempre etiquetado con `simulatedReason`).
 - ~~**E14 — Banner de verdad en la UI de análisis:** `GradeAiSummaryView` muestra un banner ámbar "Análisis generado por el Motor Local (sin IA real)" con el motivo cuando `isSimulated:true`, y las etiquetas obsoletas ('Groq Llama 3.3 Ultra-Fast', 'OpenAI GPT-4o', 'modelos Llama 3.3') se actualizaron a denominaciones vigentes. (Corregido y Validado con `tsc --noEmit` + `vite build`).~~
-- **Nota operativa:** la clave Groq institucional del Worker (secreto `GROQ_API_KEY`) sigue sin poder actualizarse remotamente sin token de API de Cloudflare; con la cadena BYOK-first esto deja de ser bloqueante para la IA real del usuario. El Worker también sigue sin `AUTH_TOKEN` (acceso abierto).
+- **Nota operativa (ACTUALIZADA 01/09/2026, ver Ronda 3):** el secreto `GROQ_API_KEY` fue **ELIMINADO del dashboard** del Worker (residuo de la arquitectura antigua; eliminación vía API con token del propietario). El Worker quedó sin secrets. Sigue sin `AUTH_TOKEN` (acceso abierto — configurarlo sin coordinar rompería el sync de los dispositivos desplegados; decisión pendiente del propietario).
 
 ### 🏠 Decisión de Arquitectura: IA 100% Local BYOK (01/09/2026)
 
@@ -120,7 +120,7 @@ El sistema implementa una arquitectura híbrida de alta resiliencia y **Costo Ce
   - Validación: `tsc` worker limpio; `tsc` frontend con los 9 errores pre-existentes documentados (cero nuevos); `vite build` OK; bundle sin rutas IA de servidor y con llamada directa a proveedores.
 - **E16 — Hallazgo (RESUELTO en la Ronda 2, ver abajo):** `DocumentUploadModal.tsx` invocaba `/api/ai/vision-extract` (ruta relativa al server.ts Express local, solo disponible en desarrollo). En producción esa ruta no existía y el fallo se manejaba con catch. El propietario aprobó migrarla a visión BYOK directa desde el navegador — implementada con `AiService.extractStudentsFromImage()`.
 - **server.ts (Express local):** NO modificado (no corre en producción; solo desarrollo). Mantiene rutas IA legadas inactivas para la app. Limpieza futura opcional con aprobación del propietario.
-- **Operativa post-migración:** (1) deploy del Worker con `wrangler deploy` (requiere sesión/token de Cloudflare — pendiente del propietario); (2) Cloudflare Pages se actualiza con el push (Ctrl+F5 en la app); (3) configurar la clave Groq en Ajustes → Motor de Inteligencia Artificial.
+- **Operativa post-migración:** (1) ~~deploy del Worker~~ **EJECUTADO 01/09/2026 — ver Ronda 3**; (2) Cloudflare Pages se actualiza con el push (Ctrl+F5 en la app); (3) configurar la clave Groq en Ajustes → Motor de Inteligencia Artificial.
 
 ### ✅ Ronda 2 (01/09/2026): Respuestas del propietario e implementación aprobada
 
@@ -139,15 +139,36 @@ El sistema implementa una arquitectura híbrida de alta resiliencia y **Costo Ce
 - **Logos oficiales de proveedores (`AiProviderMark.tsx`):** vectores oficiales inline con `fill="currentColor"` (Simple Icons CC0: Gemini/OpenAI/Mistral/OpenRouter; Wikimedia Commons: símbolo Groq). A todo color (color de marca) solo cuando hay proveedor con clave API configurada; gris tenue si no. Insertado en: chip de estado de la sección IA de `SettingsModal` ("Activa / Sin clave") y badge de proveedor de `GradeAiSummaryView`. Excepción aprobada a la regla lucide-react para marcas de terceros.
 - Nota: los 9 grupos de errores pre-existentes de `tsc` (CameraScanner/ScanFeedbackBanner/ScanHubView/ScannerHub) son de TIPOS, no de runtime — los escáneres funcionan (comprobado por el propietario en campo). No tocar sin evidencia de fallo real.
 
+### ✅ Ronda 3 (01/09/2026): Limpieza de residuos IA + Despliegue del Worker en producción
+
+**Mandato del propietario:** "tú encárgate de eliminar los residuos y desplegar el worker, por favor. Y todo, comunícalo o tú sabes, la bitácora en agents.md".
+
+**Ejecutado y verificado (versión desplegada `f04ead07-29ff-4a83-ba5f-0fd4a7cd9345`):**
+1. **Token de API de Cloudflare** entregado por el propietario (verificado con `/user/tokens/verify` → `active`; cuenta `Hiroshiren86@gmail.com's Account`, id `5d4e4bd4e310c75d5b8e375944647026`). ⚠️ Tratar como secreto: NO committearlo ni dejarlo en logs persistentes.
+2. **Residuos eliminados del dashboard:** secret `GROQ_API_KEY` borrado vía API (`DELETE /accounts/{id}/workers/scripts/inas-attendance-worker/secrets/GROQ_API_KEY`). El Worker quedó **sin secrets** (los demás de IA ya no existían). Las vars públicas `SCHOOL_CODE`/`SCHOOL_NAME` se conservan (declaradas en `wrangler.toml`).
+3. **Deploy limpio:** `wrangler deploy` (3.114.17) desde `cloudflare-worker/` con `CLOUDFLARE_API_TOKEN` en el entorno (aviso "last published via Dashboard" → confirmado, el código local manda). Bindings intactos: D1 `inas_attendance_db` (`c577c8b3…`), KV `ATTENDANCE_KV` (`3b249fb9…`). 29.56 KiB / gzip 7.37 KiB, startup 20 ms.
+4. **Verificación post-deploy (producción, `https://inas-attendance-worker.hiroshiren86.workers.dev`):**
+   - `GET /api/health` → `"ai":{"mode":"client-side-byok",…}`, `d1: connected`, `kv: connected`. ✅
+   - `GET /api/ai/status` → **HTTP 410** `AI_REMOVED_FROM_WORKER` con instrucción Ctrl+F5 para clientes en caché. ✅
+   - `GET /api/sync/pull?schoolCode=INAS_2026` → ruta viva (el 404 "No se encontraron datos de sincronización previos" es el estado original: nunca hubo snapshot real en producción). ✅
+   - `POST /api/sync/push` y `POST /api/attendance` → rutas vivas (responden sus validaciones). ✅
+5. **Limpieza del efecto colateral de la prueba:** el push de prueba `{}` creó un snapshot vacío; se restauró el estado original borrando la key KV `latest_snapshot_INAS_2026` (`wrangler kv key delete --binding ATTENDANCE_KV`) y la fila D1 `sync_snapshots WHERE school_code='INAS_2026'` (`wrangler d1 execute --remote`). Verificado: pull volvió al 404 original.
+6. **No se configuró `AUTH_TOKEN`:** el código lo trata como opcional (sin él, acceso abierto). Configurarlo sin coordinar rompería el sync de los dispositivos ya desplegados — decisión pendiente del propietario.
+
+**Lecciones operativas para futuros agentes:**
+- Para operar el Worker hace falta `CLOUDFLARE_API_TOKEN` en el entorno del comando (el propietario lo entrega por chat; puede rotarlo/revocarlo en el dashboard). Wrangler 3.x: `kv key delete` es remoto por defecto (no acepta `--remote`); `d1 execute` SÍ exige `--remote` para producción.
+- `sync/pull` es **GET** con `?schoolCode=`; `sync/push` es **POST** con el snapshot completo (estudiantes + asistencias) desde el navegador. `POST /api/sync/push` con `{}` se acepta y guarda 0 registros (sobrescribe el snapshot): no usar como "ping" en producción.
+
 ---
 
 ## 🚀 4. Hoja de Ruta y Pasos a Seguir
 
-### ⏳ Fase Actual (Inmediata): Despliegue y Validación del Worker en Semiproducción
-1. Desplegar el Worker en Cloudflare (`wrangler deploy` y ejecución de `schema.sql` en D1).
-2. Conectar la URL del Worker y el Token en la Configuración del Sistema.
-3. Ejecutar pruebas de carga de escaneo continuo y verificar la réplica en D1 y KV.
-4. Validar sincronización bidireccional entre 2 dispositivos simultáneos (PC portería + Móvil docente).
+### ⏳ Fase Actual (Inmediata): Validación de campo del Worker desplegado
+1. ~~Desplegar el Worker en Cloudflare~~ **HECHO (Ronda 3, 01/09/2026 — versión `f04ead07`)**.
+2. Conectar la URL del Worker en la Configuración del Sistema (`https://inas-attendance-worker.hiroshiren86.workers.dev` — ya es la URL por defecto).
+3. Ejecutar pruebas de escaneo continuo y verificar la réplica en D1 y KV (usar la guía de prueba de sincronización entregada al propietario; el primer "Sincronizar ahora" desde la app creará el snapshot real).
+4. Validar sincronización bidireccional entre 2 dispositivos simultáneos (PC + Móvil docente).
+5. Decidir si se configura `AUTH_TOKEN` (hoy: acceso abierto).
 
 ### ⏳ Fase Futura Planificada: Módulo de Excusas Médicas / Permisos Anticipados y Buzón Escolar
 - **Propósito:** Permitir a los estudiantes/acudientes reportar inasistencias programadas (citas médicas, incapacidades, calamidades) fuera del horario lectivo (después de la 1:00 p.m. o fines de semana) para proteger su registro de asistencia.
