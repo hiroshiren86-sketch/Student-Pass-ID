@@ -20,7 +20,7 @@ import {
   ShieldCheck,
   Crown
 } from 'lucide-react';
-import { Student, SchoolSettings, DocumentType } from '../types/attendance';
+import { Student, SchoolSettings, DocumentType, UserRole } from '../types/attendance';
 import { AttendanceStorageService } from '../services/attendanceStorage';
 import { generateStudentCardPdf, downloadPdfBlob } from '../utils/pdfGenerator';
 import { matchStudentFuzzy, normalizeDocumentOrCode } from '../utils/searchHelper';
@@ -30,9 +30,10 @@ import { normalizeGradeName, isValidGrade } from '../utils/documentParser';
 
 interface StudentsManagerViewProps {
   onGenerateCard?: (student: Student) => void;
+  currentRole?: UserRole;
 }
 
-export const StudentsManagerView: React.FC<StudentsManagerViewProps> = ({ onGenerateCard }) => {
+export const StudentsManagerView: React.FC<StudentsManagerViewProps> = ({ onGenerateCard, currentRole = 'ADMIN' }) => {
   const [students, setStudents] = useState<Student[]>(AttendanceStorageService.getStudents());
   const [settings, setSettings] = useState<SchoolSettings>(AttendanceStorageService.getSettings());
   const [searchQuery, setSearchQuery] = useState('');
@@ -228,37 +229,41 @@ export const StudentsManagerView: React.FC<StudentsManagerViewProps> = ({ onGene
         <div>
           <div className="flex items-center gap-2">
             <span className="text-[11px] font-bold px-2.5 py-0.5 rounded-full bg-indigo-50 dark:bg-indigo-950/60 text-indigo-600 dark:text-indigo-400 border border-indigo-200 dark:border-indigo-800 uppercase tracking-wider">
-              Directorio Escolar
+              {currentRole === 'DOCENTE' ? 'Directorio Docente' : 'Directorio Escolar'}
             </span>
           </div>
           <h2 className="text-xl sm:text-2xl font-black text-slate-900 dark:text-white tracking-tight mt-1">
-            Registro y Gestión de Estudiantes
+            {currentRole === 'DOCENTE' ? 'Consulta de Estudiantes y Carnés' : 'Registro y Gestión de Estudiantes'}
           </h2>
           <p className="text-xs sm:text-sm text-slate-500 dark:text-slate-400 mt-0.5">
-            Matricula estudiantes individuales o carga fichas masivas con fotos de carné opcionales.
+            {currentRole === 'DOCENTE'
+              ? 'Consulta la lista general de estudiantes, busca por curso o documento y genera o descarga sus carnés.'
+              : 'Matricula estudiantes individuales o carga fichas masivas con fotos de carné opcionales.'}
           </p>
         </div>
 
-        <div className="flex items-center gap-2 w-full sm:w-auto">
-          {/* Botón Cargar Archivo / Upload File */}
-          <button
-            onClick={() => setShowUploadModal(true)}
-            className="flex-1 sm:flex-initial px-4 py-2.5 bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-800 dark:text-slate-200 rounded-2xl text-xs font-bold transition-all border border-slate-200 dark:border-slate-700 shadow-xs flex items-center justify-center gap-2"
-            title="Cargar Fichas PDF, Fotos Carné, Planillas CSV o Listas de Matrícula"
-          >
-            <Upload className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />
-            <span>Cargar Archivo(s)</span>
-          </button>
+        {currentRole === 'ADMIN' && (
+          <div className="flex items-center gap-2 w-full sm:w-auto">
+            {/* Botón Cargar Archivo / Upload File */}
+            <button
+              onClick={() => setShowUploadModal(true)}
+              className="flex-1 sm:flex-initial px-4 py-2.5 bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-800 dark:text-slate-200 rounded-2xl text-xs font-bold transition-all border border-slate-200 dark:border-slate-700 shadow-xs flex items-center justify-center gap-2"
+              title="Cargar Fichas PDF, Fotos Carné, Planillas CSV o Listas de Matrícula"
+            >
+              <Upload className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />
+              <span>Cargar Archivo(s)</span>
+            </button>
 
-          {/* Botón Nuevo Estudiante */}
-          <button
-            onClick={handleOpenAdd}
-            className="flex-1 sm:flex-initial px-4 py-2.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-2xl text-xs font-bold transition-all shadow-md shadow-indigo-600/20 flex items-center justify-center gap-2"
-          >
-            <UserPlus className="w-4 h-4" />
-            <span>+ Nuevo Estudiante</span>
-          </button>
-        </div>
+            {/* Botón Nuevo Estudiante */}
+            <button
+              onClick={handleOpenAdd}
+              className="flex-1 sm:flex-initial px-4 py-2.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-2xl text-xs font-bold transition-all shadow-md shadow-indigo-600/20 flex items-center justify-center gap-2"
+            >
+              <UserPlus className="w-4 h-4" />
+              <span>+ Nuevo Estudiante</span>
+            </button>
+          </div>
+        )}
       </div>
 
       {/* Main Student Directory Table */}
@@ -380,20 +385,24 @@ export const StudentsManagerView: React.FC<StudentsManagerViewProps> = ({ onGene
                       <Download className="w-3.5 h-3.5" />
                       <span className="hidden sm:inline">PDF</span>
                     </button>
-                    <button
-                      onClick={() => handleOpenEdit(std)}
-                      className="p-2 hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-500 rounded-xl transition-all inline-block"
-                      title="Editar"
-                    >
-                      <Edit2 className="w-3.5 h-3.5" />
-                    </button>
-                    <button
-                      onClick={() => handleDelete(std.code, `${std.firstName} ${std.lastName}`)}
-                      className="p-2 hover:bg-rose-50 dark:hover:bg-rose-950/40 text-slate-400 hover:text-rose-600 rounded-xl transition-all inline-block"
-                      title="Eliminar"
-                    >
-                      <Trash2 className="w-3.5 h-3.5" />
-                    </button>
+                    {currentRole === 'ADMIN' && (
+                      <>
+                        <button
+                          onClick={() => handleOpenEdit(std)}
+                          className="p-2 hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-500 rounded-xl transition-all inline-block"
+                          title="Editar"
+                        >
+                          <Edit2 className="w-3.5 h-3.5" />
+                        </button>
+                        <button
+                          onClick={() => handleDelete(std.code, `${std.firstName} ${std.lastName}`)}
+                          className="p-2 hover:bg-rose-50 dark:hover:bg-rose-950/40 text-slate-400 hover:text-rose-600 rounded-xl transition-all inline-block"
+                          title="Eliminar"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      </>
+                    )}
                   </td>
                 </tr>
               ))}
@@ -529,6 +538,50 @@ export const StudentsManagerView: React.FC<StudentsManagerViewProps> = ({ onGene
                     <option value="10°4" />
                     <option value="11°4" />
                   </datalist>
+                </div>
+
+                {/* 5. Fotografía del Carné (Exclusiva del Formulario Individual) */}
+                <div className="space-y-1.5 p-3 rounded-2xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800">
+                  <div className="flex items-center justify-between">
+                    <label className="text-xs font-bold text-slate-700 dark:text-slate-300 flex items-center gap-1.5">
+                      <Camera className="w-3.5 h-3.5 text-indigo-500" />
+                      <span>5. Foto del Carné (Individual)</span>
+                    </label>
+                    {formData.photoUrl && (
+                      <button
+                        type="button"
+                        onClick={() => setFormData({ ...formData, photoUrl: '' })}
+                        className="text-[10px] font-bold text-rose-500 hover:underline"
+                      >
+                        Quitar Foto
+                      </button>
+                    )}
+                  </div>
+
+                  <p className="text-[10px] text-slate-400 leading-tight">
+                    Ingresa una URL o sube una imagen. La personalización de fotos se gestiona únicamente de forma individual aquí o por el estudiante en su portal.
+                  </p>
+
+                  <div className="flex items-center gap-2 pt-1">
+                    <input
+                      type="url"
+                      value={formData.photoUrl}
+                      onChange={(e) => setFormData({ ...formData, photoUrl: e.target.value })}
+                      placeholder="https://ejemplo.com/foto.jpg"
+                      className="flex-1 px-3 py-2 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl text-xs font-mono text-slate-900 dark:text-white outline-none focus:ring-2 focus:ring-indigo-500"
+                    />
+
+                    <label className="cursor-pointer px-3 py-2 bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 text-slate-700 dark:text-slate-300 rounded-xl text-xs font-bold transition-all border border-slate-200 dark:border-slate-700 flex items-center gap-1.5 shrink-0">
+                      <Upload className="w-3 h-3 text-indigo-500" />
+                      <span>Subir</span>
+                      <input
+                        type="file"
+                        accept="image/*"
+                        className="hidden"
+                        onChange={handleSinglePhotoSelect}
+                      />
+                    </label>
+                  </div>
                 </div>
 
                 <div className="p-3.5 rounded-2xl bg-indigo-50/50 dark:bg-indigo-950/30 border border-indigo-100 dark:border-indigo-900/50 text-[11px] text-slate-600 dark:text-slate-300 space-y-1">

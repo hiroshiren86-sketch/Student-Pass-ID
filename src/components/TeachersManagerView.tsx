@@ -44,6 +44,7 @@ export const TeachersManagerView: React.FC = () => {
     phone: '',
     subjectsText: '',
     assignedGrades: [] as string[],
+    directorGrade: '',
     username: '',
     tempPassword: ''
   });
@@ -74,6 +75,7 @@ export const TeachersManagerView: React.FC = () => {
       phone: '',
       subjectsText: 'Matemáticas, Física',
       assignedGrades: ['10°1', '10°2'],
+      directorGrade: '',
       username: '',
       tempPassword: `Docente${Math.floor(1000 + Math.random() * 9000)}*`
     });
@@ -89,6 +91,7 @@ export const TeachersManagerView: React.FC = () => {
       phone: t.phone || '',
       subjectsText: t.subjects.join(', '),
       assignedGrades: t.assignedGrades,
+      directorGrade: t.directorGrade || '',
       username: t.username,
       tempPassword: t.tempPassword || ''
     });
@@ -107,6 +110,8 @@ export const TeachersManagerView: React.FC = () => {
     const generatedUsername = formData.username.trim() || 
       formData.fullName.toLowerCase().split(' ')[0] + '.' + formData.documentId.slice(-4);
 
+    const isGroupDirector = Boolean(formData.directorGrade && formData.directorGrade.trim() !== '');
+
     if (editingTeacher) {
       AttendanceStorageService.updateTeacher(editingTeacher.id, {
         documentId: formData.documentId,
@@ -115,6 +120,8 @@ export const TeachersManagerView: React.FC = () => {
         phone: formData.phone,
         subjects,
         assignedGrades: formData.assignedGrades,
+        isGroupDirector,
+        directorGrade: isGroupDirector ? formData.directorGrade : undefined,
         username: generatedUsername,
         tempPassword: formData.tempPassword
       });
@@ -128,6 +135,8 @@ export const TeachersManagerView: React.FC = () => {
         phone: formData.phone,
         subjects,
         assignedGrades: formData.assignedGrades,
+        isGroupDirector,
+        directorGrade: isGroupDirector ? formData.directorGrade : undefined,
         username: generatedUsername,
         tempPassword: formData.tempPassword || `Docente${Math.floor(1000 + Math.random() * 9000)}*`,
         active: true,
@@ -294,6 +303,20 @@ export const TeachersManagerView: React.FC = () => {
 
               {/* Subjects & Grades Badges */}
               <div className="space-y-1.5 pt-2 border-t border-slate-100 dark:border-slate-800">
+                {/* Director de Grupo Badge */}
+                <div className="flex items-center gap-1.5">
+                  {teacher.directorGrade ? (
+                    <span className="text-[10px] font-black px-2.5 py-0.5 rounded-lg bg-amber-100 dark:bg-amber-950/80 text-amber-800 dark:text-amber-300 border border-amber-300 dark:border-amber-800 flex items-center gap-1 shadow-xs">
+                      <span>⭐ Director de Grupo:</span>
+                      <span className="underline font-black">{teacher.directorGrade}</span>
+                    </span>
+                  ) : (
+                    <span className="text-[10px] text-slate-400 font-medium italic">
+                      Sin dirección de grupo (N/A)
+                    </span>
+                  )}
+                </div>
+
                 <div className="flex flex-wrap gap-1">
                   {teacher.subjects.map(s => (
                     <span key={s} className="text-[10px] font-bold px-2 py-0.5 rounded-lg bg-indigo-50 dark:bg-indigo-950/60 text-indigo-700 dark:text-indigo-300 border border-indigo-100 dark:border-indigo-900">
@@ -486,6 +509,33 @@ export const TeachersManagerView: React.FC = () => {
                     );
                   })}
                 </div>
+              </div>
+
+              {/* Director de Grupo Selection */}
+              <div className="p-3 rounded-2xl bg-amber-50/60 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-900/60 space-y-1.5">
+                <div className="flex items-center justify-between">
+                  <label className="block text-xs font-black text-amber-950 dark:text-amber-200 uppercase tracking-wider">
+                    ⭐ Dirección de Grupo (Opcional)
+                  </label>
+                  <span className="text-[10px] text-amber-700 dark:text-amber-400 font-medium">
+                    {formData.directorGrade ? `Asignado a: ${formData.directorGrade}` : 'Sin asignar (N/A)'}
+                  </span>
+                </div>
+                <select
+                  value={formData.directorGrade}
+                  onChange={(e) => setFormData({ ...formData, directorGrade: e.target.value })}
+                  className="w-full px-3 py-2 bg-white dark:bg-slate-950 border border-amber-300 dark:border-amber-800 rounded-xl text-xs font-bold text-slate-900 dark:text-white outline-none focus:ring-2 focus:ring-amber-500"
+                >
+                  <option value="">N/A - Sin dirección de grupo asignada</option>
+                  {uniqueGrades.map(g => (
+                    <option key={g} value={g}>
+                      Director de Grupo de: {g}
+                    </option>
+                  ))}
+                </select>
+                <p className="text-[10px] text-slate-500 dark:text-slate-400 leading-tight">
+                  Al asignar un curso, el docente tendrá acceso a la supervisión general de jornada y mensajes motivacionales de su grupo a cargo.
+                </p>
               </div>
 
               {/* Credentials Section */}

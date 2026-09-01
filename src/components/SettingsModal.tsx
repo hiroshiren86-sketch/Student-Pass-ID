@@ -48,6 +48,30 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ onClose }) => {
   const [availableModels, setAvailableModels] = useState<Array<{ id: string; name: string; isRecommended?: boolean; isVision?: boolean; description?: string }>>([]);
   const [isLoadingModels, setIsLoadingModels] = useState(false);
   const [modelsFetchStatus, setModelsFetchStatus] = useState<string | null>(null);
+  
+  // AI Connection Test state
+  const [isTestingAi, setIsTestingAi] = useState(false);
+  const [aiTestResult, setAiTestResult] = useState<{ success: boolean; message: string; latencyMs?: number; model?: string } | null>(null);
+
+  const handleTestAiConnection = async () => {
+    setIsTestingAi(true);
+    setAiTestResult(null);
+    try {
+      const res = await AiService.testProviderConnection(
+        settings.aiProvider || 'groq',
+        settings.customAiApiKey,
+        settings.aiModel
+      );
+      setAiTestResult(res);
+    } catch (e: any) {
+      setAiTestResult({
+        success: false,
+        message: `Error al ejecutar prueba de conexión: ${e?.message || e}`
+      });
+    } finally {
+      setIsTestingAi(false);
+    }
+  };
 
   const fetchProviderModels = async (provider: string, customKey?: string) => {
     setIsLoadingModels(true);
@@ -463,6 +487,40 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ onClose }) => {
                   className="accent-indigo-600 w-4 h-4 rounded cursor-pointer"
                 />
               </div>
+            </div>
+
+            {/* AI Test Connection Button & Result */}
+            <div className="pt-2 border-t border-slate-200 dark:border-slate-800 space-y-2">
+              <div className="flex items-center justify-between">
+                <button
+                  type="button"
+                  onClick={handleTestAiConnection}
+                  disabled={isTestingAi}
+                  className="px-3.5 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white text-xs font-bold transition-all shadow-xs flex items-center gap-1.5"
+                >
+                  <Sparkles className={`w-3.5 h-3.5 ${isTestingAi ? 'animate-spin' : ''}`} />
+                  <span>{isTestingAi ? 'Probando Conexión...' : `Probar Conexión (${settings.aiProvider?.toUpperCase() || 'IA'})`}</span>
+                </button>
+
+                {aiTestResult && (
+                  <div className="flex items-center gap-1.5">
+                    <div className={`w-2.5 h-2.5 rounded-full ${aiTestResult.success ? 'bg-emerald-500 animate-pulse' : 'bg-rose-500'}`} />
+                    <span className={`text-[11px] font-bold ${aiTestResult.success ? 'text-emerald-600 dark:text-emerald-400' : 'text-rose-600 dark:text-rose-400'}`}>
+                      {aiTestResult.success ? 'Conexión Exitosa' : 'Fallo en Conexión'}
+                    </span>
+                  </div>
+                )}
+              </div>
+
+              {aiTestResult && (
+                <div className={`p-2.5 rounded-xl text-xs font-medium border animate-fadeIn ${
+                  aiTestResult.success 
+                    ? 'bg-emerald-50 dark:bg-emerald-950/60 border-emerald-200 dark:border-emerald-800 text-emerald-800 dark:text-emerald-200' 
+                    : 'bg-rose-50 dark:bg-rose-950/60 border-rose-200 dark:border-rose-800 text-rose-800 dark:text-rose-200'
+                }`}>
+                  <p>{aiTestResult.message}</p>
+                </div>
+              )}
             </div>
           </div>
 

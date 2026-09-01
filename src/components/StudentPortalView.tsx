@@ -20,29 +20,43 @@ import {
   BookOpen,
   Volume2,
   VolumeX,
-  Keyboard
+  Keyboard,
+  CreditCard,
+  Download,
+  Eye,
+  FileDown,
+  Upload,
+  Trash2,
+  Image as ImageIcon,
+  Info
 } from 'lucide-react';
 import jsQR from 'jsqr';
-import { Student, AttendanceRecord, StudentAttendanceStats, StudentPersonalSchedule, StudentPersonalScheduleEntry } from '../types/attendance';
+import QRCode from 'qrcode';
+import { Student, AttendanceRecord, StudentAttendanceStats, StudentPersonalSchedule, StudentPersonalScheduleEntry, SchoolSettings } from '../types/attendance';
 import { AttendanceStorageService, getTodayDateString, getCurrentTimeString } from '../services/attendanceStorage';
-import { generateSignedQRPayload } from '../utils/crypto';
+import { generateStudentQrPayload, generateSignedQRPayload } from '../utils/crypto';
+import { generateStudentCardPdf, downloadPdfBlob } from '../utils/pdfGenerator';
+import { generateBarcodeDataUrl } from '../utils/barcode';
 import { SoundService } from '../utils/sound';
 
 interface StudentPortalViewProps {
   onLogout?: () => void;
+  activeStudentCode?: string;
 }
 
-export const StudentPortalView: React.FC<StudentPortalViewProps> = ({ onLogout }) => {
-  const initialStudent = AttendanceStorageService.getStudents().find(s => s.code === '1000000002') || AttendanceStorageService.getStudents()[0];
+export const StudentPortalView: React.FC<StudentPortalViewProps> = ({ onLogout, activeStudentCode }) => {
+  const initialStudent = AttendanceStorageService.getStudents().find(s => s.code === (activeStudentCode || '1000000002')) || AttendanceStorageService.getStudents()[0];
   const [studentCodeInput, setStudentCodeInput] = useState(initialStudent?.code || '1000000002');
   const [passwordInput, setPasswordInput] = useState(initialStudent?.tempPassword || 'SJ-1274');
-  const [activeStudent, setActiveStudent] = useState<Student | null>(null);
+  const [activeStudent, setActiveStudent] = useState<Student | null>(activeStudentCode ? (AttendanceStorageService.getStudentByCodeOrDoc(activeStudentCode) || initialStudent) : null);
   const [loginError, setLoginError] = useState<string | null>(null);
   const [isFirstLogin, setIsFirstLogin] = useState(false);
   const [newPassword, setNewPassword] = useState('');
   const [passwordUpdated, setPasswordUpdated] = useState(false);
   const [showPasswordModal, setShowPasswordModal] = useState(false);
   const [studentStats, setStudentStats] = useState<StudentAttendanceStats | null>(null);
+  const [qrDataUrl, setQrDataUrl] = useState<string | null>(null);
+  const [settings, setSettings] = useState<SchoolSettings>(AttendanceStorageService.getSettings());
 
   // Representative Scanner State
   const [repScannerOpen, setRepScannerOpen] = useState(false);
@@ -50,6 +64,9 @@ export const StudentPortalView: React.FC<StudentPortalViewProps> = ({ onLogout }
   const [repManualInput, setRepManualInput] = useState('');
   const [repScanFeedback, setRepScanFeedback] = useState<{ type: 'success' | 'warning' | 'error'; message: string } | null>(null);
   const [soundEnabled, setSoundEnabled] = useState(true);
+  // Pestañas organizadas de Carné: 'view' (Visualizar) | 'customize' (Personalizar)
+  const [cardSectionTab, setCardSectionTab] = useState<'view' | 'customize'>('view');
+  const [photoUrlInput, setPhotoUrlInput] = useState('');
   // Ronda 4 (F4): horario opcional del estudiante (guard por templatesOnlyMode de Rectoría)
   const [mySchedule, setMySchedule] = useState<StudentPersonalSchedule | null>(null);
   const [showScheduleCsv, setShowScheduleCsv] = useState(false);
@@ -63,13 +80,40 @@ export const StudentPortalView: React.FC<StudentPortalViewProps> = ({ onLogout }
   const sampleStudents = allStudents.slice(0, 4);
 
   useEffect(() => {
+    if (activeStudentCode) {
+      const std = AttendanceStorageService.getStudentByCodeOrDoc(activeStudentCode);
+      if (std) {
+        setActiveStudent(std);
+      }
+    }
+  }, [activeStudentCode]);
+
+  useEffect(() => {
     if (activeStudent) {
       const stats = AttendanceStorageService.getStudentAttendanceStats(activeStudent.code);
       setStudentStats(stats);
       // Ronda 4 (F4): cargar mi horario opcional
       setMySchedule(AttendanceStorageService.getStudentPersonalSchedule(activeStudent.code));
+
+      // Generar código QR firmado criptográficamente para el carné en vivo
+      generateStudentQrPayload(activeStudent).then((payload) => {
+        QRCode.toDataURL(payload, { margin: 1, width: 256 })
+          .then((url) => setQrDataUrl(url))
+          .catch((err) => console.error('Error generando QR para carné de estudiante:', err));
+      });
     }
   }, [activeStudent]);
+
+  const handleDownloadMyCardPdf = async () => {
+    if (!activeStudent) return;
+    try {
+      const pdfBytes = await generateStudentCardPdf(activeStudent, settings);
+      downloadPdfBlob(pdfBytes, `Carne_${activeStudent.lastName}_${activeStudent.firstName}_CR80.pdf`);
+    } catch (err) {
+      console.error('Error al generar carné PDF:', err);
+      alert('No se pudo generar el carné PDF.');
+    }
+  };
 
   const fillQuickStudent = (std: Student) => {
     setStudentCodeInput(std.code);
@@ -485,6 +529,425 @@ export const StudentPortalView: React.FC<StudentPortalViewProps> = ({ onLogout }
           <div className="text-2xl font-black text-indigo-600 dark:text-indigo-400">{stats.attendancePercentage}%</div>
           <span className="text-[10px] text-indigo-600/80">Puntualidad: {stats.punctualityRate}%</span>
         </div>
+      </div>
+
+      {/* MI CARNÉ ESTUDIANTIL DIGITAL Y ESTUDIO DE PERSONALIZACIÓN */}
+      <div className="glass-panel rounded-3xl p-5 sm:p-7 space-y-6 border border-indigo-200/80 dark:border-indigo-900/50 shadow-lg">
+        {/* Header con Título, Segmented Controls (Tabs) y Acciones */}
+        <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-4 border-b border-slate-100 dark:border-slate-800 pb-5">
+          <div className="flex items-center gap-3">
+            <div className="p-2.5 rounded-2xl bg-indigo-600 text-white shadow-md shadow-indigo-600/20">
+              <CreditCard className="w-5 h-5" />
+            </div>
+            <div>
+              <div className="flex items-center gap-2">
+                <h3 className="text-base sm:text-lg font-black text-slate-900 dark:text-white">
+                  Carné Estudiantil Digital
+                </h3>
+                <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-100 dark:bg-emerald-950/70 text-emerald-700 dark:text-emerald-300 border border-emerald-300 dark:border-emerald-800">
+                  CR80 Oficial • 2026
+                </span>
+              </div>
+              <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+                Identificación oficial y gestión de fotografía para control de acceso y aula.
+              </p>
+            </div>
+          </div>
+
+          {/* Segmented Control Switcher & Actions */}
+          <div className="flex flex-wrap items-center gap-2 w-full md:w-auto justify-between md:justify-end">
+            <div className="inline-flex p-1 bg-slate-100 dark:bg-slate-900/80 rounded-2xl border border-slate-200/80 dark:border-slate-800">
+              <button
+                type="button"
+                onClick={() => setCardSectionTab('view')}
+                className={`px-3.5 py-1.5 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 ${
+                  cardSectionTab === 'view'
+                    ? 'bg-white dark:bg-slate-800 text-indigo-600 dark:text-indigo-400 shadow-xs'
+                    : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
+                }`}
+              >
+                <Eye className="w-3.5 h-3.5" />
+                <span>Visualizar Carné</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setCardSectionTab('customize')}
+                className={`px-3.5 py-1.5 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 ${
+                  cardSectionTab === 'customize'
+                    ? 'bg-white dark:bg-slate-800 text-indigo-600 dark:text-indigo-400 shadow-xs'
+                    : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
+                }`}
+              >
+                <Camera className="w-3.5 h-3.5" />
+                <span>Personalizar Foto</span>
+                {activeStudent.photoUrl && (
+                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" title="Foto activa" />
+                )}
+              </button>
+            </div>
+
+            {cardSectionTab === 'view' ? (
+              <button
+                onClick={handleDownloadMyCardPdf}
+                className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-2xl text-xs font-bold transition-all shadow-md shadow-indigo-600/25 flex items-center gap-2 shrink-0"
+              >
+                <Download className="w-3.5 h-3.5" />
+                <span>Descargar PDF</span>
+              </button>
+            ) : (
+              <button
+                onClick={() => setCardSectionTab('view')}
+                className="px-4 py-2 bg-slate-900 hover:bg-slate-800 dark:bg-slate-100 dark:hover:bg-white text-white dark:text-slate-900 rounded-2xl text-xs font-bold transition-all flex items-center gap-2 shrink-0"
+              >
+                <Eye className="w-3.5 h-3.5" />
+                <span>Ver Carné</span>
+              </button>
+            )}
+          </div>
+        </div>
+
+        {/* CONTENIDO DE LA PESTAÑA: VISUALIZAR CARNÉ */}
+        {cardSectionTab === 'view' && (
+          <div className="space-y-5 animate-fadeIn">
+            {/* Dual Card Display (Front / Back) */}
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+              {/* Anverso / Front */}
+              <div className="space-y-2">
+                <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider block">
+                  Anverso (Frontal Oficial)
+                </span>
+                <div className="w-full aspect-[85.6/53.98] rounded-2xl bg-white border-2 border-slate-300 dark:border-slate-700 shadow-xl p-3.5 flex flex-col justify-between relative overflow-hidden text-slate-900">
+                  {/* Subtle Colombia Tricolor Header */}
+                  <div className="absolute top-0 left-0 right-0 h-1.5 flex">
+                    <div className="w-1/2 h-full bg-amber-400" />
+                    <div className="w-1/4 h-full bg-blue-600" />
+                    <div className="w-1/4 h-full bg-red-600" />
+                  </div>
+
+                  {/* Header: Institución Educativa y Año */}
+                  <div className="flex items-center justify-between pt-1">
+                    <div className="min-w-0 pr-2">
+                      <span className="text-[8.5px] font-black text-slate-900 truncate block leading-tight" title={settings.schoolName}>
+                        {settings.schoolName || 'Institución Educativa'}
+                      </span>
+                      <span className="text-[7px] uppercase font-bold text-indigo-700 block">
+                        Carné Estudiantil
+                      </span>
+                    </div>
+                    <div className="px-1.5 py-0.5 rounded-md bg-slate-900 text-white text-[7px] font-black tracking-wider shrink-0">
+                      2026
+                    </div>
+                  </div>
+
+                  {/* Body with QR / Chip and Student Details */}
+                  <div className="flex items-center gap-3 my-0.5">
+                    <div className="w-16 h-16 rounded-xl bg-white p-1 border border-slate-300 shadow-xs flex items-center justify-center text-slate-900 shrink-0 relative">
+                      {qrDataUrl ? (
+                        <img src={qrDataUrl} alt="QR carné" className="w-full h-full object-contain" />
+                      ) : (
+                        <QrCode className="w-12 h-12 text-slate-700" />
+                      )}
+                      <div className="absolute -bottom-1 -right-1 px-1 bg-indigo-600 text-white text-[6px] font-black rounded">
+                        HMAC
+                      </div>
+                    </div>
+
+                    <div className="space-y-0.5 min-w-0 flex-1">
+                      <div className="text-[7px] font-bold text-slate-400 uppercase leading-none">
+                        {activeStudent.documentType && !activeStudent.documentType.includes('DOC') ? `${activeStudent.documentType}. ` : ''}DOCUMENTO DE IDENTIDAD
+                      </div>
+                      <div className="text-[11px] font-black font-mono text-indigo-950 leading-tight">
+                        {activeStudent.documentId}
+                      </div>
+
+                      <div className="text-[7px] font-bold text-slate-400 uppercase leading-none mt-0.5">
+                        Estudiante
+                      </div>
+                      <div className="text-[10px] font-black uppercase truncate text-slate-900 leading-tight">
+                        {activeStudent.lastName} {activeStudent.firstName}
+                      </div>
+
+                      <div className="text-[8.5px] font-bold text-indigo-700">
+                        GRADO: <span className="font-black">{activeStudent.grade}</span> • SECC: <span className="font-black">{activeStudent.section}</span>
+                      </div>
+                    </div>
+
+                    {/* Foto si el estudiante la tiene cargada */}
+                    {activeStudent.photoUrl ? (
+                      <img
+                        src={activeStudent.photoUrl}
+                        alt="Foto carné"
+                        className="w-12 h-14 rounded-lg object-cover border border-slate-300 shadow-xs shrink-0"
+                      />
+                    ) : (
+                      <div className="w-12 h-14 rounded-lg bg-indigo-50 border border-indigo-200 flex flex-col items-center justify-center text-indigo-700 text-[9px] font-black shrink-0">
+                        <span>{activeStudent.firstName[0]}{activeStudent.lastName[0]}</span>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Real 1D Barcode (Code 128) */}
+                  <div className="bg-white border-t border-slate-200/90 -mx-3.5 -mb-3.5 px-2 py-1 flex flex-col items-center justify-center">
+                    {generateBarcodeDataUrl(activeStudent.code, { height: 20 }) ? (
+                      <img 
+                        src={generateBarcodeDataUrl(activeStudent.code, { height: 20 })} 
+                        alt={`Código de barras ${activeStudent.code}`}
+                        className="h-7 max-w-full object-contain"
+                      />
+                    ) : (
+                      <div className="font-mono text-[7px] text-slate-600">||| ||| || ||| | {activeStudent.code}</div>
+                    )}
+                  </div>
+                </div>
+              </div>
+
+              {/* Reverso / Back */}
+              <div className="space-y-2">
+                <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider block">
+                  Reverso (Acceso y Seguridad)
+                </span>
+                <div className="w-full aspect-[85.6/53.98] rounded-2xl bg-slate-50 border-2 border-slate-300 dark:border-slate-700 shadow-xl p-3.5 flex flex-col justify-between relative overflow-hidden text-slate-900">
+                  <div className="absolute top-0 left-0 right-0 h-2 bg-slate-900" />
+
+                  <div className="pt-2 space-y-2">
+                    <div className="text-[8px] font-black text-slate-800 uppercase flex items-center justify-between">
+                      <span>Credenciales de Consulta</span>
+                      <span className="text-[7px] font-bold text-emerald-700">● Sistema Escolar</span>
+                    </div>
+
+                    <div className="p-2.5 bg-white rounded-xl border border-slate-200 text-[8.5px] font-mono space-y-1 shadow-xs">
+                      <div className="flex justify-between">
+                        <span className="text-slate-400">CÓDIGO:</span>
+                        <span className="font-bold text-slate-900">{activeStudent.code}</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-slate-400">PIN PORTAL:</span>
+                        <span className="font-bold text-indigo-700">{activeStudent.tempPassword || `SJ-${activeStudent.documentId.slice(-4)}`}</span>
+                      </div>
+                    </div>
+
+                    <div className="text-[7px] text-slate-600 leading-tight space-y-1">
+                      <p>• Este carné es personal e intransferible. Válido para ingreso y registro de asistencia.</p>
+                      <p>• Código QR con firma digital criptográfica inviolable. En caso de pérdida, informe a coordinación.</p>
+                    </div>
+                  </div>
+
+                  <div className="border-t border-slate-200 pt-1 flex items-center justify-between text-[7px] font-bold text-slate-400">
+                    <span>VIGENCIA: NOVIEMBRE 2026</span>
+                    <span className="text-indigo-600 font-black">INAS SEGURIDAD DIGITAL</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* Barra de Acceso Rápido a Personalización y Estado de Seguridad */}
+            <div className="p-4 rounded-2xl bg-slate-50 dark:bg-slate-900/60 border border-slate-200/80 dark:border-slate-800 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
+              <div className="flex items-center gap-2.5">
+                <ShieldCheck className="w-4 h-4 text-emerald-600 dark:text-emerald-400 shrink-0" />
+                <p className="text-xs text-slate-600 dark:text-slate-400">
+                  <span className="font-bold text-slate-800 dark:text-slate-200">Seguridad Activa:</span> Token QR con firma criptográfica HMAC-SHA256 y Código 128 listo para escaneo.
+                </p>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => setCardSectionTab('customize')}
+                className="text-xs font-bold text-indigo-600 hover:text-indigo-700 dark:text-indigo-400 hover:underline flex items-center gap-1.5 shrink-0"
+              >
+                <Camera className="w-3.5 h-3.5" />
+                <span>{activeStudent.photoUrl ? 'Cambiar mi foto' : 'Personalizar fotografía de mi carné'}</span>
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* CONTENIDO DE LA PESTAÑA: PERSONALIZAR FOTO */}
+        {cardSectionTab === 'customize' && (
+          <div className="space-y-5 animate-fadeIn">
+            <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+              {/* Columna Izquierda: Vista Previa de la Fotografía Actual */}
+              <div className="lg:col-span-5 p-5 rounded-2xl bg-slate-50 dark:bg-slate-900/90 border border-slate-200/80 dark:border-slate-800 flex flex-col items-center justify-center text-center space-y-4">
+                <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider">
+                  Encuadre de Fotografía
+                </span>
+
+                <div className="relative group">
+                  {activeStudent.photoUrl ? (
+                    <div className="w-32 h-40 rounded-2xl overflow-hidden border-2 border-indigo-600/40 shadow-md bg-white">
+                      <img
+                        src={activeStudent.photoUrl}
+                        alt="Foto carné"
+                        className="w-full h-full object-cover"
+                      />
+                    </div>
+                  ) : (
+                    <div className="w-32 h-40 rounded-2xl border-2 border-dashed border-slate-300 dark:border-slate-700 bg-slate-100 dark:bg-slate-800 flex flex-col items-center justify-center text-slate-400 gap-2 p-3">
+                      <ImageIcon className="w-8 h-8 text-slate-400" />
+                      <span className="text-[10px] font-bold text-center leading-tight">Sin fotografía personalizada</span>
+                      <span className="text-[9px] text-slate-400 font-mono">Usa iniciales</span>
+                    </div>
+                  )}
+
+                  {activeStudent.photoUrl && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (confirm('¿Deseas quitar tu fotografía personalizada y volver a las iniciales estándar?')) {
+                          AttendanceStorageService.updateStudent(activeStudent.code, { photoUrl: undefined });
+                          const updated = { ...activeStudent, photoUrl: undefined };
+                          setActiveStudent(updated);
+                        }
+                      }}
+                      className="absolute -top-2 -right-2 p-1.5 rounded-full bg-rose-600 text-white shadow-md hover:bg-rose-700 transition-all"
+                      title="Quitar foto"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                    </button>
+                  )}
+                </div>
+
+                <div className="space-y-1">
+                  <div className="text-xs font-black text-slate-900 dark:text-white">
+                    {activeStudent.lastName} {activeStudent.firstName}
+                  </div>
+                  <div className="text-[11px] font-mono text-slate-500">
+                    {activeStudent.documentType || 'DOC'}: {activeStudent.documentId} • Grado {activeStudent.grade}
+                  </div>
+                  <div className="pt-1">
+                    {activeStudent.photoUrl ? (
+                      <span className="text-[10px] font-bold px-2.5 py-1 rounded-full bg-emerald-100 dark:bg-emerald-950/70 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800 inline-flex items-center gap-1">
+                        <CheckCircle2 className="w-3 h-3" /> Fotografía Activa
+                      </span>
+                    ) : (
+                      <span className="text-[10px] font-bold px-2.5 py-1 rounded-full bg-slate-200 dark:bg-slate-800 text-slate-600 dark:text-slate-400 inline-flex items-center gap-1">
+                        Iniciales Predeterminadas
+                      </span>
+                    )}
+                  </div>
+                </div>
+              </div>
+
+              {/* Columna Derecha: Opciones de Carga y Consejos */}
+              <div className="lg:col-span-7 space-y-4">
+                {/* Opción 1: Subir Archivo Local */}
+                <div className="p-4 rounded-2xl bg-slate-50 dark:bg-slate-900/90 border border-slate-200/80 dark:border-slate-800 space-y-3">
+                  <div className="flex items-center gap-2">
+                    <div className="p-1.5 rounded-lg bg-indigo-100 dark:bg-indigo-900/60 text-indigo-700 dark:text-indigo-300">
+                      <Upload className="w-4 h-4" />
+                    </div>
+                    <div>
+                      <h4 className="text-xs font-black text-slate-900 dark:text-white">
+                        Opción A: Subir archivo desde tu dispositivo
+                      </h4>
+                      <p className="text-[11px] text-slate-500 dark:text-slate-400">
+                        Formatos recomendados: JPG, PNG o WEBP.
+                      </p>
+                    </div>
+                  </div>
+
+                  <label className="cursor-pointer border-2 border-dashed border-indigo-200 hover:border-indigo-500 dark:border-indigo-900/60 dark:hover:border-indigo-500/80 rounded-xl p-4 flex flex-col items-center justify-center gap-2 text-center bg-white/50 dark:bg-slate-950/50 hover:bg-indigo-50/40 dark:hover:bg-indigo-950/30 transition-all">
+                    <Camera className="w-6 h-6 text-indigo-600 dark:text-indigo-400" />
+                    <span className="text-xs font-bold text-slate-800 dark:text-slate-200">
+                      Haz clic aquí para seleccionar tu foto
+                    </span>
+                    <span className="text-[10px] text-slate-400">
+                      Se ajustará automáticamente al tamaño del carné
+                    </span>
+                    <input
+                      type="file"
+                      accept="image/*"
+                      className="hidden"
+                      onChange={(e) => {
+                        const file = e.target.files?.[0];
+                        if (file) {
+                          const reader = new FileReader();
+                          reader.onload = () => {
+                            const dataUrl = reader.result as string;
+                            AttendanceStorageService.updateStudent(activeStudent.code, { photoUrl: dataUrl });
+                            const updated = { ...activeStudent, photoUrl: dataUrl };
+                            setActiveStudent(updated);
+                          };
+                          reader.readAsDataURL(file);
+                        }
+                      }}
+                    />
+                  </label>
+                </div>
+
+                {/* Opción 2: URL / Enlace Directo */}
+                <div className="p-4 rounded-2xl bg-slate-50 dark:bg-slate-900/90 border border-slate-200/80 dark:border-slate-800 space-y-3">
+                  <div className="flex items-center gap-2">
+                    <div className="p-1.5 rounded-lg bg-indigo-100 dark:bg-indigo-900/60 text-indigo-700 dark:text-indigo-300">
+                      <ImageIcon className="w-4 h-4" />
+                    </div>
+                    <div>
+                      <h4 className="text-xs font-black text-slate-900 dark:text-white">
+                        Opción B: Pegar enlace o URL de imagen
+                      </h4>
+                      <p className="text-[11px] text-slate-500 dark:text-slate-400">
+                        Pega una URL pública directa de tu foto.
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="flex gap-2">
+                    <input
+                      type="url"
+                      placeholder="https://ejemplo.com/mi-foto.jpg"
+                      value={photoUrlInput || activeStudent.photoUrl || ''}
+                      onChange={(e) => setPhotoUrlInput(e.target.value)}
+                      onBlur={(e) => {
+                        const val = e.target.value.trim();
+                        if (val && val !== activeStudent.photoUrl) {
+                          AttendanceStorageService.updateStudent(activeStudent.code, { photoUrl: val });
+                          const updated = { ...activeStudent, photoUrl: val };
+                          setActiveStudent(updated);
+                        }
+                      }}
+                      className="flex-1 px-3.5 py-2 bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl text-xs font-mono text-slate-900 dark:text-white outline-none focus:ring-2 focus:ring-indigo-500"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const val = (photoUrlInput || '').trim();
+                        if (val) {
+                          AttendanceStorageService.updateStudent(activeStudent.code, { photoUrl: val });
+                          const updated = { ...activeStudent, photoUrl: val };
+                          setActiveStudent(updated);
+                        }
+                      }}
+                      className="px-3.5 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-xs font-bold transition-all shrink-0"
+                    >
+                      Aplicar
+                    </button>
+                  </div>
+                </div>
+
+                {/* Consejos para Fotografía */}
+                <div className="p-3.5 rounded-2xl bg-indigo-50/70 dark:bg-indigo-950/40 border border-indigo-200/60 dark:border-indigo-900/40 text-[11px] text-indigo-900 dark:text-indigo-200 space-y-1">
+                  <div className="font-bold flex items-center gap-1.5">
+                    <Info className="w-3.5 h-3.5 text-indigo-600 dark:text-indigo-400 shrink-0" />
+                    <span>Recomendaciones para tu carné escolar</span>
+                  </div>
+                  <p className="text-indigo-800/80 dark:text-indigo-300/80 pl-5">
+                    Procura usar una foto tipo documento con fondo liso, buena iluminación y rostro de frente. El carné se actualiza inmediatamente tanto en pantalla como en el PDF descargable.
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            <div className="flex justify-end pt-2">
+              <button
+                type="button"
+                onClick={() => setCardSectionTab('view')}
+                className="px-5 py-2.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-2xl text-xs font-bold transition-all shadow-md shadow-indigo-600/25 flex items-center gap-2"
+              >
+                <Check className="w-4 h-4" />
+                <span>Guardar y Ver Carné Digital</span>
+              </button>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Ronda 4 (F4): MI HORARIO OPCIONAL — oculto si Rectoría activó "Solo plantillas oficiales" */}

@@ -532,8 +532,21 @@ export const TeacherClassroomView: React.FC<TeacherClassroomViewProps> = ({
                     </span>
                   )}
                 </h1>
-                <p className="text-xs text-slate-500 dark:text-slate-400">
-                  Docente: <strong>{teacher?.fullName || teacherName}</strong> {isDirectorOfCurrentGrade && <span className="text-amber-500 font-bold ml-1">★ Director de Grupo ({selectedGrade})</span>}
+                <p className="text-xs text-slate-500 dark:text-slate-400 flex flex-wrap items-center gap-1.5 mt-0.5">
+                  <span>Docente: <strong>{teacher?.fullName || teacherName}</strong></span>
+                  <span className="text-slate-300 dark:text-slate-700">•</span>
+                  {teacher?.directorGrade ? (
+                    <span className="inline-flex items-center gap-1 font-bold text-amber-600 dark:text-amber-400 bg-amber-50 dark:bg-amber-950/50 px-2 py-0.5 rounded-lg border border-amber-200 dark:border-amber-900/60 text-[11px]">
+                      ⭐ Director de Grupo: Grado {teacher.directorGrade}
+                      {teacher.directorGrade === selectedGrade && (
+                        <span className="text-[10px] text-amber-700 dark:text-amber-300 font-semibold">(Viendo tu grupo a cargo)</span>
+                      )}
+                    </span>
+                  ) : (
+                    <span className="text-slate-400 dark:text-slate-500 text-[11px]">
+                      Dirección de Grupo: <span className="font-medium">N/A (Sin grupo asignado)</span>
+                    </span>
+                  )}
                 </p>
               </div>
             </div>

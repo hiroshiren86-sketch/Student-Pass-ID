@@ -288,6 +288,19 @@ export const DocumentUploadModal: React.FC<DocumentUploadModalProps> = ({
           </div>
         )}
 
+        {/* Explicit AI & Verification Warning Banner */}
+        <div className="p-3 rounded-2xl bg-amber-50/80 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-900/60 flex items-start gap-2.5 text-xs text-amber-900 dark:text-amber-200">
+          <AlertTriangle className="w-4 h-4 text-amber-600 dark:text-amber-400 shrink-0 mt-0.5" />
+          <div className="space-y-0.5">
+            <span className="font-black uppercase tracking-wider text-[10px] text-amber-800 dark:text-amber-300 block">
+              Aviso Importante sobre Asistencia de IA y Extracción de Documentos
+            </span>
+            <p className="text-[11px] leading-relaxed text-amber-950 dark:text-amber-100">
+              Los modelos de visión e inteligencia artificial son herramientas probabilísticas de asistencia y no son 100% infalibles. Revisa y verifica siempre en la tabla inferior los nombres, documentos y grados extraídos antes de confirmar el guardado oficial en la matrícula.
+            </p>
+          </div>
+        </div>
+
         {/* Drag & Drop Area */}
         <div
           onDragEnter={handleDrag}

@@ -45,9 +45,9 @@ import { CloudflareSyncService } from './services/cloudflareSync';
 export type ActiveTab = 'scan' | 'students' | 'teachers' | 'schedules' | 'cards' | 'attendance' | 'ai-grades' | 'teacher' | 'portal';
 
 export default function App() {
-  const [isAuthenticated, setIsAuthenticated] = useState<boolean>(true); // Logged in by default or shows login
+  const [isAuthenticated, setIsAuthenticated] = useState<boolean>(true);
   const [currentRole, setCurrentRole] = useState<UserRole>('ADMIN');
-  const [activeTab, setActiveTab] = useState<ActiveTab>('schedules');
+  const [activeTab, setActiveTab] = useState<ActiveTab>('students');
   const [loggedUser, setLoggedUser] = useState<{ teacher?: Teacher; student?: Student; username: string }>({
     username: 'Rectoría / Administrador General'
   });
@@ -72,9 +72,6 @@ export default function App() {
   }, []);
 
   // Ronda 4 (F3): Cierre Automático de Jornada — evaluación perezosa e idempotente cada 60s.
-  // Solo actúa si la hora actual superó el fin de la ventana de la plantilla del día y el
-  // día aún no está cerrado (flag inas_day_closed_v1). Reutiliza closeBlockAttendance, que
-  // respeta Regla de Oro, regla del 30% (PENDIENTE_REVISION) y bloques no computables.
   useEffect(() => {
     let running = false;
     const tick = async () => {
@@ -88,7 +85,7 @@ export default function App() {
         running = false;
       }
     };
-    tick(); // evaluación inmediata al abrir la app (cubre días cerrados mientras estuvo apagada)
+    tick();
     const intervalId = window.setInterval(tick, 60_000);
     return () => window.clearInterval(intervalId);
   }, []);
@@ -118,7 +115,7 @@ export default function App() {
     setIsAuthenticated(false);
   };
 
-  // Set default active tab when role changes from in-app switcher
+  // Set default active tab when role changes from in-app switcher (Admin only)
   const switchRole = (role: UserRole) => {
     setCurrentRole(role);
     setShowRoleModal(false);
@@ -133,7 +130,7 @@ export default function App() {
       setLoggedUser({ student: firstStudent, username: `${firstStudent?.firstName} ${firstStudent?.lastName}` });
     } else if (role === 'ADMIN') {
       setActiveTab('students');
-      setLoggedUser({ username: 'Rectoría / Admin' });
+      setLoggedUser({ username: 'Rectoría / Administrador General' });
     }
   };
 
@@ -152,14 +149,14 @@ export default function App() {
   }, []);
 
   const navItems = [
-    { id: 'scan' as ActiveTab, label: 'Escanear Asistencia', icon: ScanLine, badge: 'En vivo', primary: true, roles: ['ADMIN', 'PORTERO'] },
-    { id: 'students' as ActiveTab, label: 'Directorio Estudiantes', icon: Users, badge: 'Matrícula', primary: true, roles: ['ADMIN'] },
-    { id: 'schedules' as ActiveTab, label: 'Horarios Escolares', icon: Calendar, badge: 'Nuevo', primary: true, roles: ['ADMIN'] },
+    { id: 'scan' as ActiveTab, label: 'Escanear Asistencia', icon: ScanLine, badge: 'En vivo', primary: true, roles: ['ADMIN', 'DOCENTE'] },
+    { id: 'students' as ActiveTab, label: 'Directorio Estudiantes', icon: Users, badge: 'Matrícula', primary: true, roles: ['ADMIN', 'DOCENTE'] },
+    { id: 'schedules' as ActiveTab, label: 'Horarios Escolares', icon: Calendar, badge: 'Plantillas', primary: true, roles: ['ADMIN'] },
     { id: 'teachers' as ActiveTab, label: 'Gestión Docentes', icon: Key, badge: 'Credenciales', primary: false, roles: ['ADMIN'] },
     { id: 'teacher' as ActiveTab, label: 'Portal Docente (Aula)', icon: BookOpen, badge: 'Clases', primary: true, roles: ['ADMIN', 'DOCENTE'] },
     { id: 'cards' as ActiveTab, label: 'Generador de Carnés PDF', icon: CreditCard, badge: 'CR80 PVC', primary: false, roles: ['ADMIN'] },
     { id: 'attendance' as ActiveTab, label: 'Planilla de Asistencia', icon: FileSpreadsheet, badge: 'Reportes', primary: false, roles: ['ADMIN', 'DOCENTE'] },
-    { id: 'ai-grades' as ActiveTab, label: 'Analítica e IA por Grado', icon: BrainCircuit, badge: 'Gemini', primary: false, roles: ['ADMIN'] },
+    { id: 'ai-grades' as ActiveTab, label: 'Analítica e IA por Grado', icon: BrainCircuit, badge: 'IA Global', primary: false, roles: ['ADMIN', 'DOCENTE'] },
     { id: 'portal' as ActiveTab, label: 'Portal Estudiante / Acudiente', icon: UserCheck, badge: 'Consulta', primary: false, roles: ['ADMIN', 'ESTUDIANTE_ACUDIENTE'] },
   ];
 
@@ -168,7 +165,6 @@ export default function App() {
   const roleConfig = {
     ADMIN: { label: 'Rectoría / Admin', icon: Shield, color: 'bg-purple-50 text-purple-700 dark:bg-purple-950/70 dark:text-purple-300 border-purple-200 dark:border-purple-800' },
     DOCENTE: { label: 'Docente (Aula)', icon: BookOpen, color: 'bg-emerald-50 text-emerald-700 dark:bg-emerald-950/70 dark:text-emerald-300 border-emerald-200 dark:border-emerald-800' },
-    PORTERO: { label: 'Operador de Escaneo', icon: ScanLine, color: 'bg-indigo-50 text-indigo-700 dark:bg-indigo-950/70 dark:text-indigo-300 border-indigo-200 dark:border-indigo-800' },
     ESTUDIANTE_ACUDIENTE: { label: 'Estudiante / Acudiente', icon: GraduationCap, color: 'bg-sky-50 text-sky-700 dark:bg-sky-950/70 dark:text-sky-300 border-sky-200 dark:border-sky-800' },
   };
 
@@ -204,16 +200,26 @@ export default function App() {
 
           {/* Clean Segmented Navigation & Role Switcher */}
           <div className="flex items-center gap-2">
-            {/* Active Role Selector Badge / Switcher */}
-            <button
-              onClick={() => setShowRoleModal(true)}
-              className={`px-3 py-1.5 rounded-2xl border text-xs font-bold transition-all flex items-center gap-1.5 ${roleConfig[currentRole].color} shadow-xs hover:opacity-90`}
-              title="Cambiar Perfil de Usuario (Admin, Docente, Portería, Estudiante)"
-            >
-              {React.createElement(roleConfig[currentRole].icon, { className: 'w-3.5 h-3.5' })}
-              <span className="hidden sm:inline">{roleConfig[currentRole].label}</span>
-              <ChevronDown className="w-3 h-3 opacity-60" />
-            </button>
+            {/* Active Role Selector Badge (Admin can switch; other roles locked to authenticated account) */}
+            {currentRole === 'ADMIN' ? (
+              <button
+                onClick={() => setShowRoleModal(true)}
+                className={`px-3 py-1.5 rounded-2xl border text-xs font-bold transition-all flex items-center gap-1.5 ${roleConfig[currentRole].color} shadow-xs hover:opacity-90`}
+                title="Cambiar Perfil de Usuario (Rectoría / Docente / Portería / Estudiante)"
+              >
+                {React.createElement(roleConfig[currentRole].icon, { className: 'w-3.5 h-3.5' })}
+                <span className="hidden sm:inline">{roleConfig[currentRole].label}</span>
+                <ChevronDown className="w-3 h-3 opacity-60" />
+              </button>
+            ) : (
+              <div
+                className={`px-3 py-1.5 rounded-2xl border text-xs font-bold flex items-center gap-1.5 ${roleConfig[currentRole].color} shadow-xs cursor-default`}
+                title={`Rol activo: ${roleConfig[currentRole].label}`}
+              >
+                {React.createElement(roleConfig[currentRole].icon, { className: 'w-3.5 h-3.5' })}
+                <span className="hidden sm:inline">{roleConfig[currentRole].label}</span>
+              </div>
+            )}
 
             {/* Primary Action Buttons based on Role */}
             <div className="hidden lg:flex items-center bg-slate-100 dark:bg-slate-800/70 p-1 rounded-2xl border border-slate-200/80 dark:border-slate-700/80">
@@ -288,21 +294,6 @@ export default function App() {
                         </button>
                       );
                     })}
-
-                    {currentRole === 'ADMIN' && (
-                      <div className="pt-2 border-t border-slate-100 dark:border-slate-800">
-                        <button
-                          onClick={() => {
-                            setShowSettingsModal(true);
-                            setIsMenuOpen(false);
-                          }}
-                          className="w-full p-2.5 rounded-2xl text-left flex items-center gap-2.5 text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 transition-all text-xs font-bold"
-                        >
-                          <SettingsIcon className="w-4 h-4 text-slate-400" />
-                          <span>Ajustes Institucionales</span>
-                        </button>
-                      </div>
-                    )}
                   </div>
                 )}
               </div>
@@ -354,19 +345,21 @@ export default function App() {
 
                   {/* Settings & Preferences */}
                   <div className="space-y-1 pt-1">
-                    <button
-                      onClick={() => {
-                        setShowRoleModal(true);
-                        setIsUserMenuOpen(false);
-                      }}
-                      className="w-full p-2 rounded-xl text-left flex items-center justify-between text-xs font-bold text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
-                    >
-                      <div className="flex items-center gap-2">
-                        <UserCheck2 className="w-4 h-4 text-indigo-500" />
-                        <span>Cambiar Rol / Perfil</span>
-                      </div>
-                      <span className="text-[10px] text-slate-400">3 roles</span>
-                    </button>
+                    {currentRole === 'ADMIN' && (
+                      <button
+                        onClick={() => {
+                          setShowRoleModal(true);
+                          setIsUserMenuOpen(false);
+                        }}
+                        className="w-full p-2 rounded-xl text-left flex items-center justify-between text-xs font-bold text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
+                      >
+                        <div className="flex items-center gap-2">
+                          <UserCheck2 className="w-4 h-4 text-indigo-500" />
+                          <span>Cambiar Rol / Perfil</span>
+                        </div>
+                        <span className="text-[10px] text-slate-400">4 roles</span>
+                      </button>
+                    )}
 
                     <button
                       onClick={toggleTheme}
@@ -429,17 +422,17 @@ export default function App() {
       {/* Main View Display */}
       <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 py-6">
         {activeTab === 'scan' && <ScanHubView />}
-        {activeTab === 'students' && <StudentsManagerView onGenerateCard={() => setActiveTab('cards')} />}
+        {activeTab === 'students' && <StudentsManagerView currentRole={currentRole} onGenerateCard={() => setActiveTab('cards')} />}
         {activeTab === 'schedules' && <ScheduleBuilderView />}
         {activeTab === 'teachers' && <TeachersManagerView />}
         {activeTab === 'teacher' && <TeacherClassroomView teacher={loggedUser.teacher} teacherName={loggedUser.username} />}
         {activeTab === 'cards' && <CardsManagerView />}
         {activeTab === 'attendance' && <AttendanceReportsView />}
         {activeTab === 'ai-grades' && <GradeAiSummaryView />}
-        {activeTab === 'portal' && <StudentPortalView />}
+        {activeTab === 'portal' && <StudentPortalView activeStudentCode={loggedUser.student?.code} />}
       </main>
 
-      {/* Role Selection Modal */}
+      {/* Role Selection Modal (Accessible by Admin) */}
       {showRoleModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-md animate-fadeIn">
           <div className="p-6 sm:p-8 rounded-3xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-2xl max-w-lg w-full space-y-6">

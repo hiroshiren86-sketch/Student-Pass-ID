@@ -33,9 +33,84 @@ El sistema implementa una arquitectura híbrida de alta resiliencia y **Costo Ce
 - **Backend Edge / Nube (Cloudflare Worker Unificado):**
   - **Base de Datos Relacional (Cloudflare D1 - SQLite Edge):** Almacena tablas de estudiantes, registros de asistencia, horarios, docentes y auditoría.
   - **Caché Clave-Valor (Cloudflare KV):** Acceso y validación de carnés en <20ms para porterías de alto tráfico.
-  - **Proxy de Inteligencia Artificial:** Punto de enlace seguro para modelos de lenguaje (Groq Llama 3.3, Mistral Small, Google Gemini, OpenAI) protegiendo las credenciales institucionales.
-- **Modo Híbrido de IA (BYOK o Proxy):**
-  - Permite al usuario/docente usar su propia API Key directamente en el navegador (sin servidores intermediarios) O consumir el Worker central institucional sin exponer llaves privadas.
+- **Motor de Inteligencia Artificial (BYOK Cliente Directo + Fallback Determinista):**
+  - Procesamiento analítico y de visión ejecutado directamente desde el navegador del administrador (BYOK), evitando bloqueos de IP de datacenters y con motor heurístico local de respaldo ($0).
+
+---
+
+## 🌐 2.1 Funcionamiento de Conexiones y Explicación de Infraestructura Técnica
+
+Esta sección documenta el mapa exhaustivo de comunicaciones, protocolos, plataformas, redes y flujos de datos que operan por debajo en el sistema INAS para garantizar interoperabilidad total entre agentes y desarrolladores:
+
+```
+┌──────────────────────────────────────────────────────────────────────────────────────────────────┐
+│                                       CAPA DE CLIENTE (BROWSER)                                  │
+│                                                                                                  │
+│  [Escáner USB / Cámara jsQR] ──> [WebCrypto HMAC-SHA256] ──> [LocalStorage v1 (Offline-First)]   │
+│                                                                        │                         │
+│                    ┌───────────────────────────────────────────────────┼─────────────────────┐   │
+│                    ▼                                                   ▼                     ▼   │
+│       [Firebase Auth & Firestore]                         [Cloudflare Worker API]    [IA Directa]│
+│        (Identidad y Realtime Sync)                         (D1 SQL + KV Cache)        (BYOK IP)  │
+└────────────────────┬───────────────────────────────────────────────────┬─────────────────────┼───┘
+                     │                                                   │                     │
+                     ▼                                                   ▼                     ▼
+┌───────────────────────────────┐     ┌──────────────────────────────────────┐     ┌───────────────┐
+│     GOOGLE FIREBASE CLOUD     │     │      CLOUDFLARE EDGE NETWORK         │     │ PROVIDERS API │
+│ • Auth: Google OAuth / Email  │     │ • Worker: inas-attendance-worker     │     │ • Groq LPU    │
+│ • Firestore: /users/{uid}     │     │ • D1: c577c8b3-6f07-4a63-8671-       │     │ • Mistral AI  │
+│ • Firestore: /school_settings │     │ • KV: 3b249fb9b0014f918680646a5ae86  │     │ • Google GenAI│
+│ • Firestore: /attendance_recs │     │ • Endpoints: /api/sync/push, pull    │     │ • OpenAI      │
+└───────────────────────────────┘     └──────────────────────────────────────┘     └───────────────┘
+```
+
+### 📡 1. Capa de Identidad y Sincronización en Tiempo Real (Firebase)
+- **Plataforma:** Google Firebase (Auth + Cloud Firestore).
+- **Protocolo de Conexión:** WebSockets seguros (`wss://`) y HTTPS / gRPC Web.
+- **Flujo de Autenticación (`src/services/firebase.ts` & `LoginScreen.tsx`):**
+  1. El cliente inicia sesión mediante **Google Workspace / Gmail** (`signInWithPopup` vía Google Identity Services) o **Email/Password** (`signInWithEmailAndPassword`).
+  2. Firebase Auth valida las credenciales y genera un **`uid` único e inmutable** en la nube.
+  3. El frontend consulta inmediatamente `/users/{uid}` en Firestore:
+     - Si el documento existe: recupera el rol (`ADMIN`, `DOCENTE`, `PORTERO`, `ESTUDIANTE_ACUDIENTE`), metadatos y preferencias guardadas.
+     - Si es el primer acceso con Google: el sistema analiza el correo contra la nómina docente registrada (`inas_teachers_v1`), asigna el rol correspondiente y crea el documento de usuario en Firestore.
+- **Flujo de Configuración Institucional en Vivo:**
+  - El documento `/school_settings/main` almacena el nombre del colegio, año lectivo, URL del Worker, plantilla activa y modo `templatesOnlyMode`.
+  - `AttendanceStorageService.initCloudSettingsSync()` mantiene una suscripción `onSnapshot` activa. Cuando Rectoría cambia una plantilla o ventana de jornada, todos los dispositivos conectados (aulas y portería) actualizan sus reglas en memoria sin recargar la página.
+
+### ⚡ 2. Capa de Respaldo Central y Caché Perimetral (Cloudflare Worker Edge)
+- **Plataforma:** Cloudflare Workers (V8 Isolate Serverless) + Cloudflare D1 (SQLite distribuido) + Cloudflare KV (Caché clave-valor ultra-rápida).
+- **Host Oficial:** `https://inas-attendance-worker.hiroshiren86.workers.dev`
+- **Protocolo de Conexión:** REST API over HTTPS / JSON payload.
+- **Flujo de Datos y Sincronización (`src/services/cloudflareSync.ts` & `/cloudflare-worker/src/index.ts`):**
+  - **`POST /api/sync/push`:**
+    - Rectoría envía un snapshot estructurado con versión (`version: '1.0'`), timestamp, estudiantes, docentes, horarios, plantillas personalizadas (`customTemplates`), horarios de estudiantes y asistencias.
+    - El Worker almacena el snapshot en D1 (`inas_snapshots_v1`), inserta/actualiza registros en las tablas relacionales (`students`, `attendance_records`, `schedule_slots`) y puebla la caché KV (`ATTENDANCE_KV`) con los códigos de carné válidos para lectura sub-20ms.
+  - **`GET /api/sync/pull`:**
+    - Cualquier terminal (ej. celular de portería o PC nuevo de coordinación) solicita el último snapshot verificado y reconstruye el estado local de forma determinista y segura.
+  - **`GET /api/health`:**
+    - Monitor de conectividad (`ping`) que valida el estado del Worker, los bindings de D1 y KV en tiempo real.
+
+### 🧠 3. Capa de Inteligencia Artificial (BYOK Cliente Directo)
+- **Plataforma:** Redes neuronales de lenguaje y visión (Groq LPU, Mistral AI, Google Gemini, OpenAI, OpenRouter).
+- **Protocolo de Conexión:** HTTPS REST directo desde el navegador (`fetch` nativo).
+- **Flujo de Ejecución y Privacidad (`src/services/aiService.ts`):**
+  - La clave API del usuario reside **exclusivamente en la memoria del navegador** del cliente y se transmite únicamente en los encabezados `Authorization: Bearer` o `x-goog-api-key` directos al proveedor.
+  - **Motivo de Arquitectura Directa:** Los datacenters de Cloudflare Workers reciben bloqueo HTTP 403 por filtrado de IP en proveedores como Groq; la IP residencial del cliente pasa sin restricciones.
+  - **Redundancia Total:** Si la clave es inválida, no hay internet o se agota la cuota del proveedor, el sistema conmuta de inmediato al **Motor Analítico Heurístico Local ($0)**, etiquetando el resultado con `isSimulated: true` para transparencia total.
+
+### 💾 4. Capa Local de Dispositivo y Hardware I/O (Offline-First)
+- **Almacenamiento Local (`LocalStorage` Versionado):**
+  - Llaves maestras: `inas_settings_v1`, `inas_students_v1`, `inas_attendance_records_v1`, `inas_teachers_v1`, `inas_schedule_slots_v1`, `inas_custom_templates_v1`, `inas_student_schedules_v1`, `inas_day_closed_v1`.
+  - Rutina de auto-recuperación ante corrupción con respaldo preventivo `_corrupt_backup_...`.
+- **Criptografía WebCrypto (`src/utils/crypto.ts`):**
+  - Cálculo y verificación de firmas HMAC-SHA256 deterministas sin dependencias externas pesadas ni llamadas de red.
+- **Audio Web Audio API (`src/services/sound.ts`):**
+  - Generación de ondas senoidales puras mediante osciladores Web Audio para timbres de confirmación, tardanza, error y aviso de fin de bloque (T-{n}).
+- **Hardware de Entrada:**
+  - Lectores de código de barras / QR USB HID (buffer de ráfaga con detección de Enter y prevención de foco en teclado virtual táctil mediante `inputMode="none"`).
+  - Sensores de cámara web y trasera móvil mediante `navigator.mediaDevices.getUserMedia` y decodificación de cuadros en memoria con `jsQR`.
+
+---
 
 ---
 
@@ -238,9 +313,79 @@ El sistema implementa una arquitectura híbrida de alta resiliencia y **Costo Ce
 
 **Decisiones de la Ronda 4 cerradas (propuestas aplicadas tal como se documentaron):** fin de jornada por plantilla con fallback a settings; fines de semana sin jornada (escaneo bloqueado; override humano del docente intacto); DIA_ESPECIAL permite escanear dentro de la ventana pero el cierre no marca ausencias; pull manual al inicio.
 
+### ✅ Ronda 5 (01/09/2026): Jerarquía de Roles (RBAC), Centralización de Claves IA, Carné Digital en Portal Estudiante y Reglas Firestore
+
+**Mandato del propietario:** "que si el admin tiene contratado los servicios de IA, él pone su clave API y pues le da acceso a la plataforma a todo el rol que tenga privilegio docente y admin... ir limitando, ocultando funciones que en las cuentas de los estudiantes o docentes no van a ver... que el estudiante cuando entra a su perfil o apartado pueda ver su carnet asignado... blindar las reglas de Firestore para producción".
+
+**Corrección y Descarte Definitivo del Rol de Portero:**
+- *Incidencia detectada:* Se había intentado reintroducir un cuarto rol de "Portero" ajeno a la arquitectura de aula.
+- *Corrección técnica:* Se eliminó completamente cualquier referencia al rol `PORTERO` en `types/attendance.ts`, `LoginScreen.tsx`, `App.tsx` y `firestore.rules`.
+- *Clarificación arquitectónica:* El sistema opera en un esquema de **3 roles institucionales puros**:
+  1. `ADMIN` (Rectoría / Administrador General): Control total, configuración, horarios, nómina docente, directorio de matrícula, analítica IA y escaneo de contingencia.
+  2. `DOCENTE` (Docente de Aula): Portal de clase por bloques (6 horas de jornada), llamado a lista con escáner USB/Cámara, gestión de Representantes de salón (titular, suplente, delegado efímero), directorio en modo lectura y analítica de asistencia.
+  3. `ESTUDIANTE_ACUDIENTE` (Estudiante / Acudiente): Portal personal con estadísticas de puntualidad, consulta de carné digital CR80 con QR criptográfico HMAC-SHA256, horario personal opcional y módulo de escaneo activo únicamente si el docente le asignó subrol de Representante de Salón.
+
+**Implementado y Validado:**
+1. **Control de Acceso Basado en Roles (RBAC) en Navegación e Interfaces:**
+   - `App.tsx`: Navegación dinámica filtrada (`visibleNavItems`) según el rol autenticado:
+     - `ADMIN`: Acceso total (Directorio Estudiantes con CRUD, Plantillas y Horarios, Carnés Maestros, Planilla General, Escáner de Asistencia, Salón Docente, Portal Estudiante, Ajustes del Sistema y Selector de Rol).
+     - `DOCENTE`: Vista predeterminada "Salón de Clase & Aula", Escáner de Asistencia, Planilla de Asistencia y Directorio de Estudiantes en **modo solo lectura** (con selector de curso y búsqueda, pero con botones de Edición y Eliminación protegidos). Ocultos: Ajustes de Sistema, Generador de Carnés y Horarios Escolares.
+     - `ESTUDIANTE_ACUDIENTE`: Vista única "Portal del Estudiante" con KPIs personales, carné asignado con QR HMAC y horario opcional. Sin barra de navegación administrativa.
+2. **Centralización de Claves de IA Gestionadas por Rectoría:**
+   - La clave API y proveedor configurados en `school_settings` (`aiApiKey`, `aiProvider`, `aiModel`) por el Administrador son consumidos de forma transparente por los docentes y administradores en `aiService.ts`.
+   - Si el docente cuenta con una clave propia en su dispositivo (`localStorage`), se respeta como override personal; de lo contrario, utiliza automáticamente la clave institucional de Rectoría sin obligar al docente a adquirir o ingresar credenciales.
+   - Acceso a IA y configuración estrictamente restringido a `ADMIN` y `DOCENTE`.
+3. **Visualización y Descarga del Carné Digital en el Portal del Estudiante:**
+   - En `StudentPortalView.tsx`, se integró la sección **"Mi Carné Estudiantil Digital (CR80 Oficial)"**:
+     - Visualización frontal (Anverso) y trasera (Reverso) con proporciones exactas CR80 estándar (tarjeta PVC).
+     - Franja tricolor de seguridad institucional, nombre del colegio, grado, sección y número de documento normalizado (ej. `TI. 1000000002`).
+     - Código QR dinámico firmado criptográficamente con HMAC-SHA256 y código de barras 1D Code128.
+     - Botón "Descargar Carné PDF" que genera el archivo listo para impresión en PVC con `pdf-lib`.
+4. **Blindaje de Reglas de Seguridad en Firebase Firestore (`firestore.rules`):**
+   - Actualización de reglas permisivas a un esquema RBAC con validación de identidad y claims:
+     - Lectura y escritura de perfiles `/users/{userId}` restringida al propietario o administradores.
+     - Modificación de `/school_settings/{settingId}`, `/students/{studentId}` y `/teachers/{teacherId}` restringida a personal autorizado (`ADMIN`).
+     - Registro de asistencia `/attendance_records` restringido a personal autorizado (`ADMIN`, `DOCENTE`).
+5. **Autenticación Multi-Rol en `LoginScreen.tsx`:**
+   - Soporte directo para `ADMIN`, `DOCENTE` y `ESTUDIANTE_ACUDIENTE` con credenciales de prueba preconfiguradas y validación segura contra los registros locales y Firebase Auth.
+6. **Auditoría Quirúrgica y Correcciones (01/09/2026 - Checkpoint 3):**
+   - **Verificación y Resiliencia del Botón "Descargar (Pull)" en Ajustes:**
+     - Se auditó el flujo de descarga en `SettingsModal.tsx` con `CloudflareSyncService.pullFromCloudflare()`.
+     - Se añadió feedback visual en tiempo real (animación de carga, banner de progreso y diálogo de confirmación previa para proteger los datos locales antes de sobreescribir).
+   - **Centralización del Escáner en Módulo Docente (`TeacherClassroomView.tsx`):**
+     - El escaneo de asistencias por bloque/hora queda asignado exclusivamente a los docentes en sus aulas (y estudiantes con rol activo de representantes/delegados de salón).
+     - La interfaz de administración se enfoca en gestión institucional, nómina, analítica y configuración, evitando duplicidad innecesaria.
+   - **Personalización de Foto del Carné (Estricta en 2 Secciones):**
+     - *Portal Estudiantil:* Módulo directo dentro de la previsualización del carné digital para que cada estudiante actualice su foto (vía URL o archivo local).
+     - *Formulario Individual:* Campo exclusivo dentro de "Ingresar / Editar Estudiante".
+     - *Carga Masiva:* Queda 100% descartada la integración de fotos por URL en planillas masivas, evitando sobrecarga y ambigüedades.
+   - **Advertencia Explícita sobre IA en Carga de Archivos (`DocumentUploadModal.tsx`):**
+     - Se incorporó un banner ámbar de advertencia que recuerda que los motores de visión e IA son probabilísticos y requieren verificación humana previa antes de guardar.
+   - **Consolidación de Dirección de Grupo para Docentes:**
+     - Soporte completo para `directorGrade` en la nómina de profesores (`TeachersManagerView.tsx`) y en el aula (`TeacherClassroomView.tsx`). Si no está asignado, se visualiza claramente como "N/A (Sin grupo asignado)".
+   - **Optimización de Conexión Firestore (Long-Polling & Despliegue de Reglas):**
+     - Se configuró `initializeFirestore` con `experimentalForceLongPolling: true` para evitar el timeout de 10 segundos en entornos de iframe y sandbox que bloquean WebSockets directos.
+     - Se implementó el manejador tipado `handleFirestoreError` con contexto de operación y se desplegaron las reglas de seguridad en Firestore.
+
 ---
 
-## 🚀 4. Hoja de Ruta y Pasos a Seguir
+### ✅ Ronda 6 (01/09/2026): Reorganización Profesional del Portal Estudiantil (Carné y Estudio de Personalización)
+- **Problema de UX:** La visualización del carné (anverso/reverso) y los controles de personalización de foto (inputs de URL/archivo) compartían el mismo espacio vertical sin separación, saturando la pantalla y restando elegancia a la consulta del estudiante.
+- **Solución implementada (`StudentPortalView.tsx`):**
+  1. **Segmented Controls / Pestañas Estructuradas:**
+     - 🪪 **Pestaña "Visualizar Carné":** Muestra con máxima nitidez las caras Anverso y Reverso (proporción estándar CR80 de tarjeta PVC), chip de seguridad criptográfico HMAC-SHA256, código de barras 1D Code128, botón de descarga PDF oficial y barra inferior con estado de seguridad y enlace directo a personalizar.
+     - 📸 **Pestaña "Personalizar Foto" (Estudio de Fotografía Escolar):** Espacio dedicado con división en dos columnas:
+       - *Columna Izquierda (Encuadre en Vivo):* Tarjeta de vista previa del retrato del estudiante con marco, datos personales (nombre, documento, grado), badge de estado ("Fotografía Activa" o "Iniciales Predeterminadas") y botón de eliminación rápida si desea volver a las iniciales.
+       - *Columna Derecha (Opciones y Guías):* Opción A con zona drag & drop / selector de archivo local (JPG, PNG, WEBP), Opción B con input para URL de imagen directa y botón "Aplicar", más recuadro de recomendaciones oficiales (fondo liso, rostro centrado).
+       - *Botón de Cierre:* "Guardar y Ver Carné Digital" que regresa al carné con los cambios reflejados en tiempo real tanto en la pantalla como en el PDF descargable.
+  2. **Estabilidad Técnica:**
+     - Persistencia reactiva a través de `AttendanceStorageService.updateStudent`.
+     - Cero regresiones en la generación de firmas criptográficas HMAC ni en la generación de PDF con `pdf-lib`.
+     - Validación ejecutada con `lint_applet` (`tsc --noEmit`) y `compile_applet` (`vite build`).
+
+---
+
+## 🚀 4. Hoja de Roadmap y Pasos a Seguir
 
 ### ⏳ Fase Actual (Inmediata): Validación de campo del Worker desplegado
 1. ~~Desplegar el Worker en Cloudflare~~ **HECHO (Ronda 3, 01/09/2026 — versión `f04ead07`)**.

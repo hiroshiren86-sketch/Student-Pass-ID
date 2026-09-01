@@ -10,7 +10,222 @@ export interface AiModelInfo {
   description?: string;
 }
 
+export interface AiConnectionTestResult {
+  success: boolean;
+  message: string;
+  latencyMs?: number;
+  provider: string;
+  model?: string;
+}
+
 export class AiService {
+  /**
+   * Realiza un test de conexión directo desde el navegador hacia el proveedor de IA configurado.
+   */
+  static async testProviderConnection(provider: string, apiKey?: string, model?: string): Promise<AiConnectionTestResult> {
+    const p = (provider || 'groq').toLowerCase();
+    const settings = AttendanceStorageService.getSettings();
+    const trimmedKey = (apiKey !== undefined ? apiKey : (settings.customAiApiKey || '')).trim();
+    const startTime = performance.now();
+
+    if (p === 'local') {
+      return {
+        success: true,
+        message: 'Motor Heurístico Local ($0): Operativo y disponible inmediatamente.',
+        latencyMs: Math.round(performance.now() - startTime),
+        provider: 'local',
+        model: 'Motor Determinista Integrado'
+      };
+    }
+
+    if (!trimmedKey) {
+      return {
+        success: false,
+        message: `Por favor ingresa una API Key para probar la conexión con ${p.toUpperCase()}.`,
+        latencyMs: 0,
+        provider: p
+      };
+    }
+
+    try {
+      if (p === 'groq') {
+        const targetModel = model || 'llama-3.1-8b-instant';
+        const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${trimmedKey}`
+          },
+          body: JSON.stringify({
+            model: targetModel,
+            messages: [{ role: 'user', content: 'ping' }],
+            max_tokens: 5
+          })
+        });
+        const latencyMs = Math.round(performance.now() - startTime);
+        if (res.ok) {
+          return {
+            success: true,
+            message: `Conexión exitosa con Groq (${targetModel}). Latencia: ${latencyMs}ms.`,
+            latencyMs,
+            provider: 'groq',
+            model: targetModel
+          };
+        } else {
+          const errData = await res.json().catch(() => ({}));
+          const msg = errData?.error?.message || `HTTP ${res.status}: ${res.statusText}`;
+          return {
+            success: false,
+            message: `Error al contactar Groq: ${msg}`,
+            latencyMs,
+            provider: 'groq'
+          };
+        }
+      } else if (p === 'mistral') {
+        const targetModel = model || 'mistral-small-latest';
+        const res = await fetch('https://api.mistral.ai/v1/chat/completions', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${trimmedKey}`
+          },
+          body: JSON.stringify({
+            model: targetModel,
+            messages: [{ role: 'user', content: 'ping' }],
+            max_tokens: 5
+          })
+        });
+        const latencyMs = Math.round(performance.now() - startTime);
+        if (res.ok) {
+          return {
+            success: true,
+            message: `Conexión exitosa con Mistral AI (${targetModel}). Latencia: ${latencyMs}ms.`,
+            latencyMs,
+            provider: 'mistral',
+            model: targetModel
+          };
+        } else {
+          const errData = await res.json().catch(() => ({}));
+          const msg = errData?.error?.message || `HTTP ${res.status}: ${res.statusText}`;
+          return {
+            success: false,
+            message: `Error al contactar Mistral: ${msg}`,
+            latencyMs,
+            provider: 'mistral'
+          };
+        }
+      } else if (p === 'gemini') {
+        const targetModel = model || 'gemini-2.5-flash';
+        const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${targetModel}:generateContent?key=${trimmedKey}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            contents: [{ parts: [{ text: 'ping' }] }],
+            generationConfig: { maxOutputTokens: 5 }
+          })
+        });
+        const latencyMs = Math.round(performance.now() - startTime);
+        if (res.ok) {
+          return {
+            success: true,
+            message: `Conexión exitosa con Google Gemini (${targetModel}). Latencia: ${latencyMs}ms.`,
+            latencyMs,
+            provider: 'gemini',
+            model: targetModel
+          };
+        } else {
+          const errData = await res.json().catch(() => ({}));
+          const msg = errData?.error?.message || `HTTP ${res.status}: ${res.statusText}`;
+          return {
+            success: false,
+            message: `Error al contactar Gemini: ${msg}`,
+            latencyMs,
+            provider: 'gemini'
+          };
+        }
+      } else if (p === 'openrouter') {
+        const targetModel = model || 'meta-llama/llama-3.3-70b-instruct';
+        const res = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${trimmedKey}`
+          },
+          body: JSON.stringify({
+            model: targetModel,
+            messages: [{ role: 'user', content: 'ping' }],
+            max_tokens: 5
+          })
+        });
+        const latencyMs = Math.round(performance.now() - startTime);
+        if (res.ok) {
+          return {
+            success: true,
+            message: `Conexión exitosa con OpenRouter (${targetModel}). Latencia: ${latencyMs}ms.`,
+            latencyMs,
+            provider: 'openrouter',
+            model: targetModel
+          };
+        } else {
+          const errData = await res.json().catch(() => ({}));
+          const msg = errData?.error?.message || `HTTP ${res.status}: ${res.statusText}`;
+          return {
+            success: false,
+            message: `Error al contactar OpenRouter: ${msg}`,
+            latencyMs,
+            provider: 'openrouter'
+          };
+        }
+      } else if (p === 'openai') {
+        const targetModel = model || 'gpt-4.1-mini';
+        const res = await fetch('https://api.openai.com/v1/chat/completions', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${trimmedKey}`
+          },
+          body: JSON.stringify({
+            model: targetModel,
+            messages: [{ role: 'user', content: 'ping' }],
+            max_tokens: 5
+          })
+        });
+        const latencyMs = Math.round(performance.now() - startTime);
+        if (res.ok) {
+          return {
+            success: true,
+            message: `Conexión exitosa con OpenAI (${targetModel}). Latencia: ${latencyMs}ms.`,
+            latencyMs,
+            provider: 'openai',
+            model: targetModel
+          };
+        } else {
+          const errData = await res.json().catch(() => ({}));
+          const msg = errData?.error?.message || `HTTP ${res.status}: ${res.statusText}`;
+          return {
+            success: false,
+            message: `Error al contactar OpenAI: ${msg}`,
+            latencyMs,
+            provider: 'openai'
+          };
+        }
+      } else {
+        return {
+          success: false,
+          message: `Proveedor no soportado para test: ${provider}`,
+          latencyMs: 0,
+          provider: p
+        };
+      }
+    } catch (netErr: any) {
+      return {
+        success: false,
+        message: `Error de red o conexión al contactar ${provider.toUpperCase()}: ${netErr?.message || netErr}`,
+        latencyMs: Math.round(performance.now() - startTime),
+        provider: p
+      };
+    }
+  }
   /**
    * Obtiene la lista de modelos disponibles para el proveedor seleccionado.
    * ARQUITECTURA IA LOCAL (decisión del propietario 01/09/2026): sin intermediarios.

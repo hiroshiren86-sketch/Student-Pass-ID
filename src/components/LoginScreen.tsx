@@ -243,7 +243,7 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onLoginSuccess }) => {
     {
       id: 'ADMIN' as UserRole,
       title: 'Rectoría / Admin',
-      subtitle: 'Gestión académica y horarios',
+      subtitle: 'Gestión académica y configuración',
       icon: Shield,
       color: 'from-purple-600 to-indigo-600',
       activeBorder: 'border-purple-500 ring-2 ring-purple-500/20 bg-purple-50/50 dark:bg-purple-950/40'
