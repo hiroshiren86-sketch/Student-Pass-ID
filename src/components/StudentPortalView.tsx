@@ -23,7 +23,7 @@ import {
   Keyboard
 } from 'lucide-react';
 import jsQR from 'jsqr';
-import { Student, AttendanceRecord, StudentAttendanceStats } from '../types/attendance';
+import { Student, AttendanceRecord, StudentAttendanceStats, StudentPersonalSchedule, StudentPersonalScheduleEntry } from '../types/attendance';
 import { AttendanceStorageService, getTodayDateString, getCurrentTimeString } from '../services/attendanceStorage';
 import { generateSignedQRPayload } from '../utils/crypto';
 import { SoundService } from '../utils/sound';
@@ -50,6 +50,11 @@ export const StudentPortalView: React.FC<StudentPortalViewProps> = ({ onLogout }
   const [repManualInput, setRepManualInput] = useState('');
   const [repScanFeedback, setRepScanFeedback] = useState<{ type: 'success' | 'warning' | 'error'; message: string } | null>(null);
   const [soundEnabled, setSoundEnabled] = useState(true);
+  // Ronda 4 (F4): horario opcional del estudiante (guard por templatesOnlyMode de Rectoría)
+  const [mySchedule, setMySchedule] = useState<StudentPersonalSchedule | null>(null);
+  const [showScheduleCsv, setShowScheduleCsv] = useState(false);
+  const [scheduleCsvText, setScheduleCsvText] = useState('');
+  const [scheduleCsvPreview, setScheduleCsvPreview] = useState<{ entries: StudentPersonalScheduleEntry[]; errors: string[] } | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const animFrameId = useRef<number | null>(null);
@@ -61,6 +66,8 @@ export const StudentPortalView: React.FC<StudentPortalViewProps> = ({ onLogout }
     if (activeStudent) {
       const stats = AttendanceStorageService.getStudentAttendanceStats(activeStudent.code);
       setStudentStats(stats);
+      // Ronda 4 (F4): cargar mi horario opcional
+      setMySchedule(AttendanceStorageService.getStudentPersonalSchedule(activeStudent.code));
     }
   }, [activeStudent]);
 
@@ -479,6 +486,107 @@ export const StudentPortalView: React.FC<StudentPortalViewProps> = ({ onLogout }
           <span className="text-[10px] text-indigo-600/80">Puntualidad: {stats.punctualityRate}%</span>
         </div>
       </div>
+
+      {/* Ronda 4 (F4): MI HORARIO OPCIONAL — oculto si Rectoría activó "Solo plantillas oficiales" */}
+      {(() => {
+        const templatesOnly = AttendanceStorageService.getSettings().templatesOnlyMode === true;
+        const dayNames = ['', 'Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado'];
+        return (
+          <div className="glass-panel rounded-3xl p-5 sm:p-6 space-y-4">
+            <div className="flex items-center justify-between border-b border-slate-100 dark:border-slate-800 pb-3">
+              <div className="flex items-center gap-2">
+                <Calendar className="w-5 h-5 text-fuchsia-600 dark:text-fuchsia-400" />
+                <h3 className="text-base font-black text-slate-900 dark:text-white">Mi horario (opcional)</h3>
+                <span className="text-[10px] font-bold px-2 py-0.5 rounded-md bg-fuchsia-100 dark:bg-fuchsia-950/70 text-fuchsia-700 dark:text-fuchsia-300">Informativo · no afecta tu asistencia</span>
+              </div>
+            </div>
+
+            {templatesOnly ? (
+              <div className="p-4 rounded-2xl bg-slate-100 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 text-xs text-slate-500 dark:text-slate-400 font-bold flex items-center gap-2">
+                <Lock className="w-4 h-4 shrink-0" />
+                Rectoría ha deshabilitado los horarios personales para todas las cuentas (modo solo plantillas oficiales).
+              </div>
+            ) : mySchedule && mySchedule.entries.length > 0 ? (
+              <div className="space-y-3">
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                  {[1, 2, 3, 4, 5, 6].map(day => {
+                    const rows = mySchedule.entries.filter(e => e.dayOfWeek === day).sort((a, b) => a.startTime.localeCompare(b.startTime));
+                    if (rows.length === 0) return null;
+                    return (
+                      <div key={day} className="p-3 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 space-y-1.5">
+                        <h4 className="text-[11px] font-black text-fuchsia-700 dark:text-fuchsia-300 uppercase">{dayNames[day]}</h4>
+                        {rows.map((r, i) => (
+                          <div key={i} className="flex items-center justify-between text-[11px] font-bold text-slate-700 dark:text-slate-200">
+                            <span>{r.subject}</span>
+                            <span className="font-mono text-slate-500 dark:text-slate-400">{r.startTime}–{r.endTime}</span>
+                          </div>
+                        ))}
+                      </div>
+                    );
+                  })}
+                </div>
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => { setShowScheduleCsv(true); setScheduleCsvText(''); setScheduleCsvPreview(null); }}
+                    className="px-3 py-1.5 rounded-xl bg-slate-200 dark:bg-slate-800 hover:bg-slate-300 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 text-xs font-bold"
+                  >Reemplazar con CSV</button>
+                  <button
+                    onClick={() => { if (window.confirm('¿Eliminar tu horario personal?')) { AttendanceStorageService.deleteStudentPersonalSchedule(activeStudent!.code); setMySchedule(null); } }}
+                    className="px-3 py-1.5 rounded-xl bg-red-100 dark:bg-red-950 hover:bg-red-200 dark:hover:bg-red-900 text-red-600 dark:text-red-400 text-xs font-bold"
+                  >Eliminar horario</button>
+                </div>
+              </div>
+            ) : showScheduleCsv ? (
+              <div className="space-y-3">
+                <p className="text-xs text-slate-500 dark:text-slate-400 font-bold">
+                  Pega tu horario en CSV — una clase por línea: <span className="font-mono">día, materia, horaInicio, horaFin (opcional)</span>. Ejemplo:
+                  <span className="block mt-1 p-2 rounded-lg bg-slate-950 text-emerald-300 font-mono text-[10px] leading-relaxed">{'Lunes, Matemáticas, 07:00, 07:55'}</span>
+                  <span className="block mt-1">Días: Lunes…Sábado (o 1-6). Si omites la hora de fin se asumen 55 min.</span>
+                </p>
+                <textarea
+                  value={scheduleCsvText}
+                  onChange={(e) => setScheduleCsvText(e.target.value)}
+                  rows={6}
+                  placeholder={'Lunes, Matemáticas, 07:00, 07:55\nLunes, Español, 08:00, 08:55\nMartes, Ciencias, 07:00'}
+                  className="w-full p-3 rounded-2xl bg-white dark:bg-slate-950 border border-slate-300 dark:border-slate-700 text-xs font-mono text-slate-900 dark:text-white outline-none focus:ring-2 focus:ring-fuchsia-500"
+                />
+                {scheduleCsvPreview && (
+                  <div className="space-y-1">
+                    {scheduleCsvPreview.errors.length > 0 && (
+                      <div className="p-2 rounded-xl bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-800 text-[11px] font-bold text-amber-700 dark:text-amber-300 space-y-0.5">
+                        {scheduleCsvPreview.errors.map((e, i) => <div key={i}>⚠ {e}</div>)}
+                      </div>
+                    )}
+                    <div className="text-[11px] font-bold text-slate-600 dark:text-slate-300">{scheduleCsvPreview.entries.length} clase(s) válida(s) detectada(s).</div>
+                  </div>
+                )}
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => setScheduleCsvPreview(AttendanceStorageService.parsePersonalScheduleCSV(scheduleCsvText))}
+                    className="px-3 py-1.5 rounded-xl bg-slate-200 dark:bg-slate-800 hover:bg-slate-300 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 text-xs font-bold"
+                  >Validar</button>
+                  <button
+                    disabled={!scheduleCsvPreview || scheduleCsvPreview.entries.length === 0}
+                    onClick={() => { if (activeStudent && scheduleCsvPreview) { const saved = AttendanceStorageService.saveStudentPersonalSchedule(activeStudent.code, scheduleCsvPreview.entries); setMySchedule(saved); setShowScheduleCsv(false); setScheduleCsvText(''); setScheduleCsvPreview(null); } }}
+                    className="px-4 py-1.5 rounded-xl bg-fuchsia-600 hover:bg-fuchsia-500 disabled:opacity-40 disabled:cursor-not-allowed text-white text-xs font-bold shadow-md shadow-fuchsia-600/20"
+                  >Guardar mi horario</button>
+                  <button onClick={() => setShowScheduleCsv(false)} className="px-3 py-1.5 rounded-xl text-slate-500 dark:text-slate-400 text-xs font-bold">Cancelar</button>
+                </div>
+              </div>
+            ) : (
+              <div className="text-center py-4 space-y-2">
+                <p className="text-xs text-slate-500 dark:text-slate-400">¿Quieres ver tu horario de clases aquí? Cárgalo tú mismo con un archivo CSV simple. Es opcional.</p>
+                <button
+                  onClick={() => { setShowScheduleCsv(true); setScheduleCsvText(''); setScheduleCsvPreview(null); }}
+                  className="px-4 py-2 rounded-2xl bg-fuchsia-600 hover:bg-fuchsia-500 text-white text-xs font-bold shadow-md shadow-fuchsia-600/20 inline-flex items-center gap-1.5"
+                >
+                  <Calendar className="w-3.5 h-3.5" /> Cargar mi horario (CSV)
+                </button>
+              </div>
+            )}
+          </div>
+        );
+      })()}
 
       {/* Breakdown by Subject */}
       {stats.bySubject.length > 0 && (

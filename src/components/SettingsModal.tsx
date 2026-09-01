@@ -23,13 +23,12 @@ import {
   Server,
   Globe
 } from 'lucide-react';
-import { SchoolSettings, DayTemplateId } from '../types/attendance';
+import { SchoolSettings } from '../types/attendance';
 import { AttendanceStorageService } from '../services/attendanceStorage';
 import { FirebaseService } from '../services/firebase';
 import { CloudflareSyncService, CloudflareSyncResult } from '../services/cloudflareSync';
 import { AiService } from '../services/aiService';
 import { AiProviderMark } from './AiProviderMark';
-import { DAY_TEMPLATES_DEFINITIONS } from '../services/mockData';
 
 interface SettingsModalProps {
   onClose: () => void;
@@ -94,7 +93,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ onClose }) => {
     setSettings(prev => ({ ...prev, [field]: value }));
   };
 
-  const handleDayTemplateChange = (templateId: DayTemplateId) => {
+  const handleDayTemplateChange = (templateId: string) => {
     setSettings(prev => ({ ...prev, activeDayTemplate: templateId }));
     AttendanceStorageService.applyDayTemplate(templateId);
   };
@@ -202,7 +201,9 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ onClose }) => {
     }
   };
 
-  const activeTemplateDef = DAY_TEMPLATES_DEFINITIONS.find(t => t.id === settings.activeDayTemplate) || DAY_TEMPLATES_DEFINITIONS[0];
+  // Ronda 4 (F1): lista fusionada (oficiales + CUSTOM de Rectoría); activo resuelto por ID con compat de TYPE legado
+  const activeTemplateDef = AttendanceStorageService.getActiveDayTemplate();
+  const allTemplates = AttendanceStorageService.getDayTemplates();
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-slate-950/75 dark:bg-slate-950/85 backdrop-blur-md animate-fadeIn" id="settings-modal">
@@ -258,13 +259,13 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ onClose }) => {
             </div>
 
             <select
-              value={settings.activeDayTemplate || 'NORMAL'}
-              onChange={(e) => handleDayTemplateChange(e.target.value as DayTemplateId)}
+              value={activeTemplateDef.id}
+              onChange={(e) => handleDayTemplateChange(e.target.value)}
               className="w-full bg-white dark:bg-slate-900 border border-indigo-200 dark:border-indigo-800 text-slate-900 dark:text-white text-xs font-bold px-3 py-2 rounded-xl outline-none"
             >
-              {DAY_TEMPLATES_DEFINITIONS.map(tpl => (
+              {allTemplates.map(tpl => (
                 <option key={tpl.id} value={tpl.id}>
-                  {tpl.name} ({tpl.blockDurationMinutes}m - {tpl.totalBlocks} bloques)
+                  {tpl.name} ({tpl.blockDurationMinutes}m - {tpl.totalBlocks} bloques){tpl.type === 'CUSTOM' ? ' · Personalizada' : ''}
                 </option>
               ))}
             </select>
@@ -318,6 +319,23 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ onClose }) => {
                   return `${th}:${tm}`;
                 })()}
               </span>
+            </div>
+
+            <div>
+              <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 uppercase tracking-wider mb-1.5">
+                Fin de Jornada
+              </label>
+              <div className="relative">
+                <Clock className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+                <input
+                  type="time"
+                  value={settings.dailyEndTime}
+                  onChange={(e) => handleChange('dailyEndTime', e.target.value)}
+                  className="w-full bg-white dark:bg-slate-950 border border-slate-300 dark:border-slate-700 focus:border-indigo-500 text-slate-900 dark:text-white text-xs pl-9 pr-3 py-2.5 rounded-xl outline-none font-mono shadow-xs"
+                  required
+                />
+              </div>
+              <span className="text-[10px] text-slate-500 dark:text-slate-400 block mt-1">La jornada se cierra tras esta hora (Ronda 4)</span>
             </div>
           </div>
 

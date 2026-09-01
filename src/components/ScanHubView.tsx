@@ -220,6 +220,27 @@ export const ScanHubView: React.FC<ScanHubViewProps> = ({ onScanSuccess }) => {
         </div>
       </div>
 
+      {/* Ronda 4 (F3): banner de ventana de jornada en portería */}
+      {(() => {
+        const win = AttendanceStorageService.getSchoolDayWindow(getTodayDateString());
+        if (!win) return null;
+        const open = AttendanceStorageService.isWithinSchoolDay();
+        return (
+          <div className="max-w-md mx-auto">
+            <div className={`flex items-center gap-2 px-3 py-2 rounded-2xl border text-[11px] font-bold mb-2 ${open ? 'bg-emerald-50 dark:bg-emerald-950/40 border-emerald-200 dark:border-emerald-800 text-emerald-700 dark:text-emerald-300' : 'bg-amber-50 dark:bg-amber-950/40 border-amber-200 dark:border-amber-800 text-amber-700 dark:text-amber-300'}`}>
+              <Clock className="w-3.5 h-3.5 shrink-0" />
+              <span>
+                {open
+                  ? `Jornada abierta (${win.start} – ${win.end})`
+                  : AttendanceStorageService.getDayCloseState().closedAt
+                    ? `Jornada cerrada (${win.start} – ${win.end}) · Cierre del día ya ejecutado`
+                    : `Jornada cerrada (${win.start} – ${win.end}) · El escáner no registra fuera de la jornada`}
+              </span>
+            </div>
+          </div>
+        );
+      })()}
+
       {/* Unified Modifiers */}
       <div className="max-w-md mx-auto">
         {/* Toggle USB HID vs Cámara */}

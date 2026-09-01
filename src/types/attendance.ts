@@ -44,6 +44,10 @@ export interface DayTemplateConfig {
   isNonComputableAllDay?: boolean; // Día Especial (sin ausencias)
   firstBlockSpecial?: 'ACTO_CIVICO' | 'ASESORIA_GRUPO' | 'NORMAL';
   proportionalNoticeMinutes?: number; // T-11 en 55m, T-7 en 35m
+  // Ronda 4 (F1/F3): ventana de JORNADA definida por la plantilla. Si se omiten,
+  // se derivan de baseStartTime y del fin del último slot generado.
+  dayStartTime?: string; // e.g. "07:00" — antes de esta hora la jornada está cerrada
+  dayEndTime?: string;   // e.g. "14:00" — después de esta hora la jornada se cierra (no se escanea)
 }
 
 export interface EphemeralScanDelegation {
@@ -200,7 +204,7 @@ export interface QRPayload {
 }
 
 export interface ScanResultFeedback {
-  type: 'success_punctual' | 'success_tardy' | 'already_scanned' | 'not_found' | 'invalid_signature' | 'rate_limited' | 'error' | 'block_closed' | 'pending_review' | 'non_computable';
+  type: 'success_punctual' | 'success_tardy' | 'already_scanned' | 'not_found' | 'invalid_signature' | 'rate_limited' | 'error' | 'block_closed' | 'pending_review' | 'non_computable' | 'out_of_window';
   title: string;
   message: string;
   timestamp: string;
@@ -214,7 +218,8 @@ export interface SchoolSettings {
   dailyStartTime: string; // "06:30"
   dailyEndTime: string;   // "12:30"
   shiftType: SchoolShiftType; // 'MANANA' | 'TARDE' | 'UNICA'
-  activeDayTemplate: DayTemplateType; // 'NORMAL' | 'RECORTE_10' | 'IZADA_BANDERA' | 'ASESORIA_GRUPO' | 'DIA_ESPECIAL'
+  activeDayTemplate: string; // ID de plantilla ('tmpl-normal'…, 'tmpl-custom-…'). Compat: también acepta el TYPE legado ('NORMAL'); se normaliza al resolver (Ronda 4 F1)
+  templatesOnlyMode?: boolean; // Ronda 4 (F2): interruptor maestro de Rectoría — ON = solo plantillas oficiales; deshabilita horarios personales para TODAS las cuentas
   trimMinutes: number; // 0, 5, 10, 15, custom
   tardyGracePeriodMinutes: number; // e.g. 10 minutos
   qrSecret: string;
@@ -330,3 +335,20 @@ export interface ScheduleImportResult {
   ignoredRows: Array<{ row: number; line: string; reason: string }>;
 }
 
+
+// ==================== Ronda 4 (F4): Horario opcional del estudiante ====================
+// Informativo: NO interfiere con la asistencia (el escaneo registra fecha y hora).
+// Se deshabilita globalmente con settings.templatesOnlyMode = true (interruptor de Rectoría).
+export interface StudentPersonalScheduleEntry {
+  dayOfWeek: number; // 1 = Lunes … 6 = Sábado
+  subject: string;
+  startTime: string; // "07:00"
+  endTime: string;   // "07:55"
+  slotId?: string;   // opcional: si el estudiante alineó su entrada con un bloque oficial
+}
+
+export interface StudentPersonalSchedule {
+  studentCode: string;
+  entries: StudentPersonalScheduleEntry[];
+  updatedAt: string; // ISO
+}

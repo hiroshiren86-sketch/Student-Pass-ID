@@ -18,7 +18,9 @@ import {
   ScannedByRole,
   DayTemplateType,
   DayTemplateConfig,
-  EphemeralScanDelegation
+  EphemeralScanDelegation,
+  StudentPersonalSchedule,
+  StudentPersonalScheduleEntry
 } from '../types/attendance';
 import { 
   INITIAL_STUDENTS, 
@@ -43,6 +45,9 @@ const SCHEDULE_ASSIGNMENTS_KEY = 'inas_schedule_assignments_v5';
 const USER_SESSION_KEY = 'inas_user_session_v5';
 const DELEGATIONS_KEY = 'inas_ephemeral_delegations_v5';
 const NON_COMPUTABLE_SLOTS_KEY = 'inas_non_computable_slots_v5';
+const CUSTOM_TEMPLATES_KEY = 'inas_custom_templates_v1'; // Ronda 4 (F1): plantillas creadas por Rectoría
+const DAY_CLOSED_KEY = 'inas_day_closed_v1';             // Ronda 4 (F3): flag de cierre de jornada por fecha
+const STUDENT_SCHEDULES_KEY = 'inas_student_schedules_v1'; // Ronda 4 (F4): horario opcional por estudiante
 
 export function getTodayDateString(): string {
   const d = new Date();
@@ -527,14 +532,49 @@ export class AttendanceStorageService {
 
   // ==================== SCHEDULES & TIMETABLE ====================
   // ==================== HORARIOS & PLANTILLAS DE DÍA (DAY TEMPLATES) ====================
+  // Ronda 4 (F1): plantillas CUSTOM creadas por Rectoría + fusión con las 5 oficiales.
+  static getCustomTemplates(): DayTemplateConfig[] {
+    try {
+      const raw = localStorage.getItem(CUSTOM_TEMPLATES_KEY);
+      const list = raw ? JSON.parse(raw) : [];
+      return Array.isArray(list) ? list : [];
+    } catch {
+      return [];
+    }
+  }
+
+  static saveCustomTemplates(templates: DayTemplateConfig[]): void {
+    localStorage.setItem(CUSTOM_TEMPLATES_KEY, JSON.stringify(templates || []));
+    this.notify();
+  }
+
+  static upsertCustomTemplate(tmpl: DayTemplateConfig): void {
+    const list = this.getCustomTemplates();
+    const idx = list.findIndex(t => t.id === tmpl.id);
+    if (idx >= 0) list[idx] = tmpl; else list.push(tmpl);
+    this.saveCustomTemplates(list);
+  }
+
+  static deleteCustomTemplate(id: string): void {
+    this.saveCustomTemplates(this.getCustomTemplates().filter(t => t.id !== id));
+  }
+
+  // Ronda 4 (F1): resuelve una plantilla por ID (canónico) o por TYPE legado ('NORMAL'…)
+  // Corrige el bug latente: el selector enviaba el ID pero la búsqueda era por TYPE,
+  // por lo que elegir otra plantilla siempre aplicaba la NORMAL.
+  static resolveTemplate(idOrType: string): DayTemplateConfig | undefined {
+    if (!idOrType) return undefined;
+    const all = [...DAY_TEMPLATES_DEFINITIONS, ...this.getCustomTemplates()];
+    return all.find(t => t.id === idOrType) || all.find(t => t.type === idOrType);
+  }
+
   static getDayTemplates(): DayTemplateConfig[] {
-    return DAY_TEMPLATES_DEFINITIONS;
+    return [...DAY_TEMPLATES_DEFINITIONS, ...this.getCustomTemplates()];
   }
 
   static getActiveDayTemplate(): DayTemplateConfig {
     const settings = this.getSettings();
-    const tmpl = DAY_TEMPLATES_DEFINITIONS.find(t => t.type === settings.activeDayTemplate);
-    return tmpl || DAY_TEMPLATES_DEFINITIONS[0];
+    return this.resolveTemplate(settings.activeDayTemplate) || DAY_TEMPLATES_DEFINITIONS[0];
   }
 
   static getProportionalNoticeMinutes(durationMinutes: number): number {
@@ -544,31 +584,26 @@ export class AttendanceStorageService {
     return 5;
   }
 
-  static applyDayTemplate(templateType: DayTemplateType): { success: boolean; template: DayTemplateConfig; slots: ScheduleSlot[] } {
-    const tmpl = DAY_TEMPLATES_DEFINITIONS.find(t => t.type === templateType) || DAY_TEMPLATES_DEFINITIONS[0];
-    const settings = this.getSettings();
-    settings.activeDayTemplate = templateType;
-    settings.trimMinutes = tmpl.trimMinutesPerBlock || 0;
-    this.saveSettings(settings);
-
+  // Ronda 4 (F1): generador puro de slots — misma lógica que el applyDayTemplate original,
+  // extraída para previsualización en el editor de plantillas y para aplicar plantillas custom.
+  static generateSlotsFromTemplate(tmpl: DayTemplateConfig): ScheduleSlot[] {
     let baseHour = 6;
     let baseMin = 30;
     if (tmpl.baseStartTime) {
       const [h, m] = tmpl.baseStartTime.split(':').map(Number);
-      baseHour = h;
-      baseMin = m;
+      if (!Number.isNaN(h) && !Number.isNaN(m)) { baseHour = h; baseMin = m; }
     }
 
     let currentTotalMin = baseHour * 60 + baseMin;
     const newSlots: ScheduleSlot[] = [];
-    const totalBlocks = tmpl.totalBlocks || 6;
-    const blockDur = tmpl.blockDurationMinutes || 55;
-    const noticeMin = this.getProportionalNoticeMinutes(blockDur);
+    const totalBlocks = Math.max(1, tmpl.totalBlocks || 6);
+    const blockDur = Math.max(5, tmpl.blockDurationMinutes || 55);
+    const noticeMin = tmpl.proportionalNoticeMinutes || this.getProportionalNoticeMinutes(blockDur);
 
     for (let i = 1; i <= totalBlocks; i++) {
       // Recreo de 30 min tras el 3er bloque de clase
       if (i === 4) {
-        const recessDur = tmpl.recessDurationMinutes || 30;
+        const recessDur = Math.max(0, tmpl.recessDurationMinutes || 30);
         const recStartH = Math.floor(currentTotalMin / 60).toString().padStart(2, '0');
         const recStartM = (currentTotalMin % 60).toString().padStart(2, '0');
         currentTotalMin += recessDur;
@@ -622,8 +657,211 @@ export class AttendanceStorageService {
     }
 
     newSlots.sort((a, b) => a.order - b.order);
+    return newSlots;
+  }
+
+  static applyDayTemplate(templateIdOrType: string): { success: boolean; template: DayTemplateConfig; slots: ScheduleSlot[] } {
+    const tmpl = this.resolveTemplate(templateIdOrType) || DAY_TEMPLATES_DEFINITIONS[0];
+    const settings = this.getSettings();
+    settings.activeDayTemplate = tmpl.id; // Ronda 4 (F1): siempre se guarda el ID canónico
+    settings.trimMinutes = tmpl.trimMinutesPerBlock || 0;
+    this.saveSettings(settings);
+
+    const newSlots = this.generateSlotsFromTemplate(tmpl);
     this.saveScheduleSlots(newSlots);
     return { success: true, template: tmpl, slots: newSlots };
+  }
+
+  // ==================== Ronda 4 (F3): VENTANA DE JORNADA (día lectivo) ====================
+  // Fuente: dayStartTime/dayEndTime de la plantilla activa → fallback settings.daily* →
+  // fallback primer/último slot. null = día no lectivo (fin de semana).
+  static getSchoolDayWindow(dateStr?: string): { start: string; end: string; startMin: number; endMin: number } | null {
+    const date = dateStr || getTodayDateString();
+    const [y, mo, d] = date.split('-').map(Number);
+    const dow = y && mo && d ? new Date(y, mo - 1, d).getDay() : new Date().getDay();
+    if (dow === 0 || dow === 6) return null; // domingo/sábado: sin jornada lectiva
+
+    const settings = this.getSettings();
+    const tmpl = this.getActiveDayTemplate();
+    const slots = this.getScheduleSlots().filter(s => s.type !== 'BREAK' && s.type !== 'LUNCH');
+    const firstSlot = slots[0];
+    const lastSlot = slots[slots.length - 1];
+
+    const start = tmpl.dayStartTime || settings.dailyStartTime || firstSlot?.startTime;
+    const end = tmpl.dayEndTime || settings.dailyEndTime || lastSlot?.endTime;
+    if (!start || !end) return null;
+
+    const [sh, sm] = start.split(':').map(Number);
+    const [eh, em] = end.split(':').map(Number);
+    if ([sh, sm, eh, em].some(v => Number.isNaN(v))) return null;
+    const startMin = sh * 60 + sm;
+    const endMin = eh * 60 + em;
+    if (endMin <= startMin) return null;
+    return { start, end, startMin, endMin };
+  }
+
+  static isWithinSchoolDay(timeStr?: string, dateStr?: string): boolean {
+    const window = this.getSchoolDayWindow(dateStr);
+    if (!window) return false;
+    const t = timeStr || getCurrentTimeString();
+    const [h, m] = t.split(':').map(Number);
+    if (Number.isNaN(h) || Number.isNaN(m)) return false;
+    const nowMin = h * 60 + m;
+    return nowMin >= window.startMin && nowMin <= window.endMin;
+  }
+
+  // ==================== Ronda 4 (F3): CIERRE AUTOMÁTICO DE JORNADA ====================
+  static getDayCloseState(dateStr?: string): { closedAt?: string; summary?: { blocksClosed: number; absentMarked: number; pendingRevision: number } } {
+    const date = dateStr || getTodayDateString();
+    try {
+      const raw = localStorage.getItem(DAY_CLOSED_KEY);
+      const map = raw ? JSON.parse(raw) : {};
+      return map[date] || {};
+    } catch {
+      return {};
+    }
+  }
+
+  static async closeDayAttendance(params: { dateStr?: string; forceClose?: boolean; closedBy?: string }): Promise<{ closedAt: string; blocksClosed: number; absentMarked: number; pendingRevision: number; details: Array<{ grade: string; slotId: string; status: string; absent: number }> }> {
+    const date = params.dateStr || getTodayDateString();
+    const slots = this.getScheduleSlots().filter(s => s.type !== 'BREAK' && s.type !== 'LUNCH');
+    const grades = Array.from(new Set(this.getStudents().filter(s => s.active).map(s => s.grade)));
+    const details: Array<{ grade: string; slotId: string; status: string; absent: number }> = [];
+    let absentMarked = 0;
+    let pendingRevision = 0;
+
+    for (const grade of grades) {
+      for (const slot of slots) {
+        try {
+          const res = this.closeBlockAttendance({
+            grade,
+            slotId: slot.id,
+            subject: slot.name,
+            teacherName: params.closedBy || 'Cierre Automático de Jornada',
+            dateStr: date,
+            forceClose: params.forceClose
+          });
+          if (res.status === 'CLOSED') {
+            absentMarked += res.markedAbsentCount;
+            details.push({ grade, slotId: slot.id, status: 'CLOSED', absent: res.markedAbsentCount });
+          } else if (res.status === 'PENDIENTE_REVISION') {
+            pendingRevision += 1;
+            details.push({ grade, slotId: slot.id, status: 'PENDIENTE_REVISION', absent: 0 });
+          }
+          // NO_COMPUTABLE (Regla de Oro: 0 escaneos / hora libre / día especial) → no se cuenta
+        } catch { /* un bloque que falla no debe abortar el cierre del día */ }
+      }
+    }
+
+    const closedAt = new Date().toISOString();
+    try {
+      const raw = localStorage.getItem(DAY_CLOSED_KEY);
+      const map = raw ? JSON.parse(raw) : {};
+      map[date] = { closedAt, summary: { blocksClosed: details.filter(d => d.status === 'CLOSED').length, absentMarked, pendingRevision } };
+      localStorage.setItem(DAY_CLOSED_KEY, JSON.stringify(map));
+    } catch { /* flag informativo */ }
+    this.notify();
+
+    return { closedAt, blocksClosed: details.filter(d => d.status === 'CLOSED').length, absentMarked, pendingRevision, details };
+  }
+
+  // Evaluación perezosa e idempotente: solo actúa si la hora actual superó el fin de
+  // la jornada y el día aún no se ha cerrado. Llamado por el timer de App y por las vistas.
+  static async maybeAutoCloseDay(dateStr?: string): Promise<boolean> {
+    const date = dateStr || getTodayDateString();
+    if (this.getDayCloseState(date).closedAt) return false;
+    const window = this.getSchoolDayWindow(date);
+    if (!window) return false;
+    const t = getCurrentTimeString();
+    const [h, m] = t.split(':').map(Number);
+    if (Number.isNaN(h) || Number.isNaN(m)) return false;
+    if (h * 60 + m < window.endMin) return false;
+    await this.closeDayAttendance({ dateStr: date });
+    return true;
+  }
+
+  // ==================== Ronda 4 (F4): HORARIO OPCIONAL DEL ESTUDIANTE ====================
+  // Informativo: NO interfiere con asistencia/KPIs/cierres. Se oculta para TODAS las
+  // cuentas cuando settings.templatesOnlyMode = true (guard en la UI del portal).
+  static getAllStudentSchedules(): Record<string, StudentPersonalSchedule> {
+    try {
+      const raw = localStorage.getItem(STUDENT_SCHEDULES_KEY);
+      const obj = raw ? JSON.parse(raw) : {};
+      return obj && typeof obj === 'object' ? obj : {};
+    } catch {
+      return {};
+    }
+  }
+
+  // Ronda 4 (F5): reemplazo total desde el snapshot de sync (patrón igual que slots/assignments)
+  static saveAllStudentSchedules(map: Record<string, StudentPersonalSchedule>): void {
+    localStorage.setItem(STUDENT_SCHEDULES_KEY, JSON.stringify(map && typeof map === 'object' ? map : {}));
+    this.notify();
+  }
+
+  static getStudentPersonalSchedule(studentCode: string): StudentPersonalSchedule | null {
+    if (!studentCode) return null;
+    return this.getAllStudentSchedules()[studentCode] || null;
+  }
+
+  static saveStudentPersonalSchedule(studentCode: string, entries: StudentPersonalScheduleEntry[]): StudentPersonalSchedule {
+    const all = this.getAllStudentSchedules();
+    const schedule: StudentPersonalSchedule = { studentCode, entries: entries || [], updatedAt: new Date().toISOString() };
+    all[studentCode] = schedule;
+    localStorage.setItem(STUDENT_SCHEDULES_KEY, JSON.stringify(all));
+    this.notify();
+    return schedule;
+  }
+
+  static deleteStudentPersonalSchedule(studentCode: string): void {
+    const all = this.getAllStudentSchedules();
+    if (!all[studentCode]) return;
+    delete all[studentCode];
+    localStorage.setItem(STUDENT_SCHEDULES_KEY, JSON.stringify(all));
+    this.notify();
+  }
+
+  // Parser CSV del horario personal. Formato por fila (separador coma o punto y coma):
+  //   dia, materia, horaInicio, horaFin[opcional]
+  //   "Lunes", "Matemáticas", "07:00", "07:55"
+  // Devuelve entradas válidas + errores por línea (sin lanzar excepciones).
+  static parsePersonalScheduleCSV(text: string): { entries: StudentPersonalScheduleEntry[]; errors: string[] } {
+    const errors: string[] = [];
+    const entries: StudentPersonalScheduleEntry[] = [];
+    const dayMap: Record<string, number> = { lunes: 1, martes: 2, 'miércoles': 3, miercoles: 3, jueves: 4, 'viernes': 5, 'sábado': 6, sabado: 6 };
+    const timeRe = /^([01]?\d|2[0-3]):[0-5]\d$/;
+
+    (text || '').split(/\r?\n/).forEach((line, i) => {
+      const trimmed = line.trim();
+      if (!trimmed || trimmed.toLowerCase().startsWith('dia') || trimmed.toLowerCase().startsWith('día')) return; // header o vacío
+      const cells = trimmed.split(/[;,]/).map(c => c.trim()).filter(c => c.length > 0);
+      if (cells.length < 3) {
+        errors.push(`Línea ${i + 1}: se requieren al menos día, materia y hora de inicio.`);
+        return;
+      }
+      const dayKey = cells[0].toLowerCase();
+      const dayOfWeek = /^\d$/.test(cells[0]) ? Number(cells[0]) : dayMap[dayKey];
+      if (!dayOfWeek || dayOfWeek < 1 || dayOfWeek > 6) {
+        errors.push(`Línea ${i + 1}: día no reconocido ("${cells[0]}"). Usa Lunes…Sábado o 1-6.`);
+        return;
+      }
+      const subject = cells[1].slice(0, 60);
+      const startTime = cells[2];
+      const endTime = cells[3] || '';
+      if (!timeRe.test(startTime) || (endTime && !timeRe.test(endTime))) {
+        errors.push(`Línea ${i + 1}: hora inválida (formato HH:mm, 24h).`);
+        return;
+      }
+      let finalEnd = endTime;
+      if (!finalEnd) {
+        const [h, m] = startTime.split(':').map(Number);
+        const endMin = Math.min(23 * 60 + 59, h * 60 + m + 55);
+        finalEnd = `${String(Math.floor(endMin / 60)).padStart(2, '0')}:${String(endMin % 60).padStart(2, '0')}`;
+      }
+      entries.push({ dayOfWeek, subject, startTime, endTime: finalEnd });
+    });
+
+    return { entries, errors };
   }
 
   // ==================== HORAS LIBRES / BLOQUES NO COMPUTABLES ====================
@@ -1166,6 +1404,23 @@ export class AttendanceStorageService {
         type: 'error',
         title: 'Estudiante Inactivo',
         message: `El estudiante ${student.firstName} ${student.lastName} se encuentra inactivo en la matrícula.`,
+        timestamp: new Date().toISOString(),
+        student
+      };
+    }
+
+    // Ronda 4 (F3): VENTANA DE JORNADA — punto de control ÚNICO para todos los puntos de
+    // escaneo (aula, portería, representante). Fuera de la ventana de la plantilla del día
+    // NO se registra nada (ni re-apertura de ausentes post-cierre). El override humano del
+    // docente (marca manual en planilla) y los cierres NO pasan por aquí a propósito.
+    if (!this.isWithinSchoolDay(currentTime)) {
+      const window = this.getSchoolDayWindow();
+      return {
+        type: 'out_of_window',
+        title: 'Jornada Cerrada',
+        message: window
+          ? `La jornada de hoy inicia a las ${window.start} y termina a las ${window.end}. Fuera de ese rango no se registra asistencia por escáner.`
+          : 'Hoy no hay jornada lectiva configurada; no se registra asistencia por escáner.',
         timestamp: new Date().toISOString(),
         student
       };

@@ -24,15 +24,21 @@ import {
   AlertTriangle,
   Grid,
   Layers,
-  LayoutGrid
+  LayoutGrid,
+  LayoutTemplate,
+  Lock,
+  Copy,
+  Power
 } from 'lucide-react';
 import { 
   ScheduleSlot, 
   ScheduleSlotType, 
   ClassScheduleAssignment, 
-  Teacher 
+  Teacher,
+  DayTemplateConfig
 } from '../types/attendance';
 import { AttendanceStorageService } from '../services/attendanceStorage';
+import { ToggleSwitch } from './ToggleSwitch';
 
 const DAYS_OF_WEEK = [
   { id: 1, name: 'Lunes', short: 'LUN' },
@@ -100,8 +106,12 @@ export const ScheduleBuilderView: React.FC = () => {
   const [teachers, setTeachers] = useState<Teacher[]>(AttendanceStorageService.getTeachers());
   const grades = AttendanceStorageService.getUniqueGrades();
 
-  // Mode: 'grid' (Timetable matrix) vs 'weekly-matrix' (Full 5-day week) vs 'slots-editor' (Design structure of hours)
-  const [subView, setSubView] = useState<'grid' | 'weekly-matrix' | 'slots-editor'>('grid');
+  // Mode: 'grid' (Timetable matrix) vs 'weekly-matrix' (Full 5-day week) vs 'slots-editor' (Design structure of hours) vs 'templates' (Plantillas + política)
+  const [subView, setSubView] = useState<'grid' | 'weekly-matrix' | 'slots-editor' | 'templates'>('grid');
+
+  // Ronda 4 (F1): editor de plantillas propias de Rectoría
+  const [editingTemplate, setEditingTemplate] = useState<DayTemplateConfig | null>(null);
+  const [templatesOnlyMode, setTemplatesOnlyMode] = useState<boolean>(AttendanceStorageService.getSettings().templatesOnlyMode ?? false);
 
   // Filters for Grid view
   const [selectedGrade, setSelectedGrade] = useState<string>(grades[0] || '10°1');
@@ -377,6 +387,18 @@ export const ScheduleBuilderView: React.FC = () => {
           >
             <SlidersHorizontal className="w-3.5 h-3.5" />
             <span>Estructura ({slots.length})</span>
+          </button>
+
+          <button
+            onClick={() => setSubView('templates')}
+            className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-1.5 shrink-0 ${
+              subView === 'templates'
+                ? 'bg-white dark:bg-slate-900 text-indigo-600 dark:text-indigo-400 shadow-sm'
+                : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
+            }`}
+          >
+            <LayoutTemplate className="w-3.5 h-3.5" />
+            <span>Plantillas</span>
           </button>
         </div>
       </div>
@@ -993,6 +1015,234 @@ export const ScheduleBuilderView: React.FC = () => {
                 </button>
               </div>
             </div>
+          </div>
+        </div>
+      )}
+      {/* VIEW 4: PLANTILLAS DE JORNADA + POLÍTICA (Ronda 4 F1/F2) */}
+      {subView === 'templates' && (
+        <div className="space-y-4">
+          {/* Política de Horarios (F2): interruptor maestro de Rectoría */}
+          <div className="p-4 rounded-3xl bg-white/70 dark:bg-slate-900/70 border border-slate-200/80 dark:border-slate-800 backdrop-blur-xl shadow-xs flex items-center justify-between gap-4">
+            <div className="flex items-start gap-3">
+              <div className="p-2 rounded-xl bg-purple-100 dark:bg-purple-950/60 text-purple-600 dark:text-purple-300">
+                <Power className="w-4 h-4" />
+              </div>
+              <div>
+                <h3 className="text-sm font-black text-slate-900 dark:text-white">Solo plantillas oficiales</h3>
+                <p className="text-xs text-slate-500 dark:text-slate-400 max-w-xl">
+                  Al activarlo se deshabilita para <b>todas las cuentas</b> (docentes y estudiantes) la visualización y carga de
+                  horarios personales opcionales. Las plantillas y bloques oficiales siguen mandando el escaneo igual.
+                  Los horarios personales ya cargados no se borran: si lo apagas, reaparecen.
+                </p>
+              </div>
+            </div>
+            <ToggleSwitch
+              checked={templatesOnlyMode}
+              onChange={(v) => {
+                setTemplatesOnlyMode(v);
+                const s = AttendanceStorageService.getSettings();
+                s.templatesOnlyMode = v;
+                AttendanceStorageService.saveSettings(s);
+                showToast(v ? 'Modo SOLO PLANTILLAS activado: horarios personales ocultos para todas las cuentas.' : 'Horarios personales opcionales habilitados.');
+              }}
+              label={templatesOnlyMode ? 'Activado' : 'Desactivado'}
+              activeColor="indigo"
+            />
+          </div>
+
+          {/* Lista de plantillas + editor */}
+          <div className="p-4 rounded-3xl bg-white/70 dark:bg-slate-900/70 border border-slate-200/80 dark:border-slate-800 backdrop-blur-xl shadow-xs space-y-3">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <Layers className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />
+                <h3 className="text-sm font-black text-slate-900 dark:text-white">Plantillas de Jornada</h3>
+                <span className="text-[10px] font-bold px-2 py-0.5 rounded-md bg-indigo-100 dark:bg-indigo-900 text-indigo-700 dark:text-indigo-300">
+                  Oficiales: no se eliminan · Duplica para crear la tuya
+                </span>
+              </div>
+              <button
+                onClick={() => setEditingTemplate({
+                  id: `tmpl-custom-${Date.now()}`,
+                  type: 'CUSTOM',
+                  name: 'Nueva Plantilla Personalizada',
+                  badge: 'Personalizada',
+                  description: 'Plantilla creada por Rectoría.',
+                  shift: 'MANANA',
+                  baseStartTime: '06:30',
+                  blockDurationMinutes: 55,
+                  trimMinutesPerBlock: 0,
+                  recessDurationMinutes: 30,
+                  totalBlocks: 6
+                })}
+                className="px-3 py-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold shadow-md shadow-indigo-600/20 flex items-center gap-1.5"
+              >
+                <Plus className="w-3.5 h-3.5" /> Nueva plantilla
+              </button>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
+              {AttendanceStorageService.getDayTemplates().map(tpl => {
+                const isActive = AttendanceStorageService.getActiveDayTemplate().id === tpl.id;
+                const isCustom = tpl.type === 'CUSTOM';
+                return (
+                  <div key={tpl.id} className={`p-3 rounded-2xl border ${isActive ? 'border-indigo-400 dark:border-indigo-600 ring-1 ring-indigo-300 dark:ring-indigo-800' : 'border-slate-200 dark:border-slate-800'} bg-white dark:bg-slate-950 space-y-2`}>
+                    <div className="flex items-start justify-between gap-2">
+                      <div>
+                        <div className="flex items-center gap-1.5">
+                          {isActive && <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />}
+                          <h4 className="text-xs font-black text-slate-900 dark:text-white leading-tight">{tpl.name}</h4>
+                        </div>
+                        <span className="text-[10px] font-bold text-slate-500 dark:text-slate-400">{tpl.badge}</span>
+                      </div>
+                      {isCustom ? (
+                        <span className="text-[9px] font-black px-1.5 py-0.5 rounded bg-fuchsia-100 dark:bg-fuchsia-950 text-fuchsia-700 dark:text-fuchsia-300">CUSTOM</span>
+                      ) : (
+                        <span className="flex items-center gap-1 text-[9px] font-black px-1.5 py-0.5 rounded bg-slate-100 dark:bg-slate-800 text-slate-500 dark:text-slate-400"><Lock className="w-2.5 h-2.5" /> OFICIAL</span>
+                      )}
+                    </div>
+                    <p className="text-[10px] text-slate-500 dark:text-slate-400 leading-snug line-clamp-2">{tpl.description}</p>
+                    <div className="flex flex-wrap gap-1 text-[9px] font-bold text-slate-600 dark:text-slate-300">
+                      <span className="px-1.5 py-0.5 rounded bg-slate-100 dark:bg-slate-800">Inicio jornada: {tpl.dayStartTime || tpl.baseStartTime}</span>
+                      <span className="px-1.5 py-0.5 rounded bg-slate-100 dark:bg-slate-800">{tpl.totalBlocks} bloques × {tpl.blockDurationMinutes}m</span>
+                      {(tpl.dayEndTime || tpl.dayStartTime) && <span className="px-1.5 py-0.5 rounded bg-amber-100 dark:bg-amber-950 text-amber-700 dark:text-amber-300">Fin: {tpl.dayEndTime || 'auto'}</span>}
+                    </div>
+                    <div className="flex flex-wrap gap-1.5 pt-1">
+                      <button
+                        onClick={() => { AttendanceStorageService.applyDayTemplate(tpl.id); showToast(`Plantilla "${tpl.name}" aplicada: bloques regenerados.`); }}
+                        className="px-2 py-1 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-[10px] font-bold"
+                      >Aplicar hoy</button>
+                      {isCustom ? (
+                        <button onClick={() => setEditingTemplate({ ...tpl })} className="px-2 py-1 rounded-lg bg-slate-200 dark:bg-slate-800 hover:bg-slate-300 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 text-[10px] font-bold flex items-center gap-1"><Edit3 className="w-2.5 h-2.5" /> Editar</button>
+                      ) : (
+                        <button onClick={() => setEditingTemplate({ ...tpl, id: `tmpl-custom-${Date.now()}`, type: 'CUSTOM', name: `${tpl.name} (copia)` })} className="px-2 py-1 rounded-lg bg-slate-200 dark:bg-slate-800 hover:bg-slate-300 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 text-[10px] font-bold flex items-center gap-1"><Copy className="w-2.5 h-2.5" /> Duplicar</button>
+                      )}
+                      {isCustom && (
+                        <button
+                          onClick={() => {
+                            if (window.confirm(`¿Eliminar la plantilla "${tpl.name}"?`)) {
+                              AttendanceStorageService.deleteCustomTemplate(tpl.id);
+                              if (AttendanceStorageService.getSettings().activeDayTemplate === tpl.id) {
+                                AttendanceStorageService.applyDayTemplate('tmpl-normal');
+                                showToast('Plantilla eliminada. Se aplicó la Plantilla A (Normal).');
+                              } else { showToast('Plantilla eliminada.'); }
+                            }
+                          }}
+                          className="px-2 py-1 rounded-lg bg-red-100 dark:bg-red-950 hover:bg-red-200 dark:hover:bg-red-900 text-red-600 dark:text-red-400 text-[10px] font-bold flex items-center gap-1"
+                        ><Trash2 className="w-2.5 h-2.5" /> Eliminar</button>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+
+            {/* EDITOR PARAMÉTRICO + PREVISUALIZACIÓN */}
+            {editingTemplate && (
+              <div className="mt-4 p-4 rounded-2xl border border-indigo-300 dark:border-indigo-800 bg-indigo-50/50 dark:bg-indigo-950/30 space-y-3">
+                <div className="flex items-center justify-between">
+                  <h4 className="text-xs font-black text-indigo-900 dark:text-indigo-200">Editor de plantilla</h4>
+                  <button onClick={() => setEditingTemplate(null)} className="p-1 hover:opacity-70"><X className="w-3.5 h-3.5 text-slate-500" /></button>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                  <div>
+                    <label className="text-[10px] font-bold text-slate-600 dark:text-slate-300 uppercase">Nombre</label>
+                    <input type="text" value={editingTemplate.name} onChange={e => setEditingTemplate({ ...editingTemplate, name: e.target.value })}
+                      className="w-full mt-1 px-2.5 py-1.5 rounded-xl bg-white dark:bg-slate-950 border border-slate-300 dark:border-slate-700 text-xs font-bold text-slate-900 dark:text-white outline-none focus:ring-2 focus:ring-indigo-500" />
+                  </div>
+                  <div>
+                    <label className="text-[10px] font-bold text-slate-600 dark:text-slate-300 uppercase">Etiqueta (badge)</label>
+                    <input type="text" value={editingTemplate.badge} onChange={e => setEditingTemplate({ ...editingTemplate, badge: e.target.value })}
+                      className="w-full mt-1 px-2.5 py-1.5 rounded-xl bg-white dark:bg-slate-950 border border-slate-300 dark:border-slate-700 text-xs font-bold text-slate-900 dark:text-white outline-none focus:ring-2 focus:ring-indigo-500" />
+                  </div>
+                  <div className="md:col-span-2">
+                    <label className="text-[10px] font-bold text-slate-600 dark:text-slate-300 uppercase">Descripción</label>
+                    <input type="text" value={editingTemplate.description} onChange={e => setEditingTemplate({ ...editingTemplate, description: e.target.value })}
+                      className="w-full mt-1 px-2.5 py-1.5 rounded-xl bg-white dark:bg-slate-950 border border-slate-300 dark:border-slate-700 text-xs text-slate-900 dark:text-white outline-none focus:ring-2 focus:ring-indigo-500" />
+                  </div>
+                  <div className="grid grid-cols-2 md:grid-cols-4 gap-2 md:col-span-2">
+                    <div>
+                      <label className="text-[10px] font-bold text-slate-600 dark:text-slate-300 uppercase">Inicio jornada</label>
+                      <input type="time" value={editingTemplate.dayStartTime || ''} onChange={e => setEditingTemplate({ ...editingTemplate, dayStartTime: e.target.value || undefined })}
+                        className="w-full mt-1 px-2 py-1.5 rounded-xl bg-white dark:bg-slate-950 border border-slate-300 dark:border-slate-700 text-xs font-mono text-slate-900 dark:text-white outline-none focus:ring-2 focus:ring-indigo-500" />
+                      <span className="text-[9px] text-slate-400 block">Vacío = usa el inicio de bloques</span>
+                    </div>
+                    <div>
+                      <label className="text-[10px] font-bold text-slate-600 dark:text-slate-300 uppercase">Fin jornada</label>
+                      <input type="time" value={editingTemplate.dayEndTime || ''} onChange={e => setEditingTemplate({ ...editingTemplate, dayEndTime: e.target.value || undefined })}
+                        className="w-full mt-1 px-2 py-1.5 rounded-xl bg-white dark:bg-slate-950 border border-slate-300 dark:border-slate-700 text-xs font-mono text-slate-900 dark:text-white outline-none focus:ring-2 focus:ring-indigo-500" />
+                      <span className="text-[9px] text-slate-400 block">Tras esta hora: jornada cerrada</span>
+                    </div>
+                    <div>
+                      <label className="text-[10px] font-bold text-slate-600 dark:text-slate-300 uppercase">Inicio 1er bloque</label>
+                      <input type="time" value={editingTemplate.baseStartTime} onChange={e => setEditingTemplate({ ...editingTemplate, baseStartTime: e.target.value })}
+                        className="w-full mt-1 px-2 py-1.5 rounded-xl bg-white dark:bg-slate-950 border border-slate-300 dark:border-slate-700 text-xs font-mono text-slate-900 dark:text-white outline-none focus:ring-2 focus:ring-indigo-500" />
+                    </div>
+                    <div>
+                      <label className="text-[10px] font-bold text-slate-600 dark:text-slate-300 uppercase">Recreo (min)</label>
+                      <input type="number" min={0} max={120} value={editingTemplate.recessDurationMinutes} onChange={e => setEditingTemplate({ ...editingTemplate, recessDurationMinutes: Math.max(0, Number(e.target.value) || 0) })}
+                        className="w-full mt-1 px-2 py-1.5 rounded-xl bg-white dark:bg-slate-950 border border-slate-300 dark:border-slate-700 text-xs font-mono text-slate-900 dark:text-white outline-none focus:ring-2 focus:ring-indigo-500" />
+                    </div>
+                    <div>
+                      <label className="text-[10px] font-bold text-slate-600 dark:text-slate-300 uppercase">Duración bloque (min)</label>
+                      <input type="number" min={5} max={120} value={editingTemplate.blockDurationMinutes} onChange={e => setEditingTemplate({ ...editingTemplate, blockDurationMinutes: Math.max(5, Number(e.target.value) || 55) })}
+                        className="w-full mt-1 px-2 py-1.5 rounded-xl bg-white dark:bg-slate-950 border border-slate-300 dark:border-slate-700 text-xs font-mono text-slate-900 dark:text-white outline-none focus:ring-2 focus:ring-indigo-500" />
+                    </div>
+                    <div>
+                      <label className="text-[10px] font-bold text-slate-600 dark:text-slate-300 uppercase">Total bloques</label>
+                      <input type="number" min={1} max={12} value={editingTemplate.totalBlocks} onChange={e => setEditingTemplate({ ...editingTemplate, totalBlocks: Math.max(1, Number(e.target.value) || 6) })}
+                        className="w-full mt-1 px-2 py-1.5 rounded-xl bg-white dark:bg-slate-950 border border-slate-300 dark:border-slate-700 text-xs font-mono text-slate-900 dark:text-white outline-none focus:ring-2 focus:ring-indigo-500" />
+                    </div>
+                    <div>
+                      <label className="text-[10px] font-bold text-slate-600 dark:text-slate-300 uppercase">1er bloque especial</label>
+                      <select value={editingTemplate.firstBlockSpecial || 'NORMAL'} onChange={e => setEditingTemplate({ ...editingTemplate, firstBlockSpecial: (e.target.value as DayTemplateConfig['firstBlockSpecial']) || undefined })}
+                        className="w-full mt-1 px-2 py-1.5 rounded-xl bg-white dark:bg-slate-950 border border-slate-300 dark:border-slate-700 text-xs font-bold text-slate-900 dark:text-white outline-none focus:ring-2 focus:ring-indigo-500">
+                        <option value="NORMAL">Ninguno</option>
+                        <option value="ACTO_CIVICO">Acto Cívico (no computable)</option>
+                        <option value="ASESORIA_GRUPO">Asesoría de Grupo</option>
+                      </select>
+                    </div>
+                    <div className="flex items-end pb-1">
+                      <label className="flex items-center gap-1.5 text-[10px] font-bold text-slate-600 dark:text-slate-300 cursor-pointer">
+                        <input type="checkbox" checked={!!editingTemplate.isNonComputableAllDay} onChange={e => setEditingTemplate({ ...editingTemplate, isNonComputableAllDay: e.target.checked || undefined })}
+                          className="w-3.5 h-3.5 rounded accent-indigo-600" />
+                        Día completo sin ausencias (especial)
+                      </label>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Previsualización de bloques generados */}
+                <div>
+                  <h5 className="text-[10px] font-black text-slate-600 dark:text-slate-300 uppercase mb-1">Previsualización de bloques</h5>
+                  <div className="flex flex-wrap gap-1.5">
+                    {AttendanceStorageService.generateSlotsFromTemplate(editingTemplate).map(s => (
+                      <span key={s.id} className={`px-2 py-1 rounded-lg text-[10px] font-bold ${s.type === 'BREAK' ? 'bg-emerald-100 dark:bg-emerald-950 text-emerald-700 dark:text-emerald-300' : s.isNonComputable ? 'bg-slate-200 dark:bg-slate-800 text-slate-500' : 'bg-indigo-100 dark:bg-indigo-950 text-indigo-700 dark:text-indigo-300'}`}>
+                        {s.name} · {s.startTime}–{s.endTime}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="flex items-center justify-end gap-2 pt-1">
+                  <button onClick={() => setEditingTemplate(null)} className="px-3 py-1.5 rounded-xl bg-slate-200 dark:bg-slate-800 text-slate-700 dark:text-slate-200 text-xs font-bold">Cancelar</button>
+                  <button
+                    onClick={() => {
+                      const t = editingTemplate;
+                      if (!t.name.trim()) { showToast('La plantilla necesita un nombre.'); return; }
+                      const [bh, bm] = (t.baseStartTime || '06:30').split(':').map(Number);
+                      const startTotal = (t.dayStartTime ? (() => { const [h, m] = t.dayStartTime.split(':').map(Number); return h * 60 + m; })() : bh * 60 + bm);
+                      const endTotal = t.dayEndTime ? (() => { const [h, m] = t.dayEndTime.split(':').map(Number); return h * 60 + m; })() : 24 * 60;
+                      if (endTotal <= startTotal) { showToast('La hora de fin de jornada debe ser posterior a la de inicio.'); return; }
+                      AttendanceStorageService.upsertCustomTemplate(t);
+                      setEditingTemplate(null);
+                      showToast('Plantilla guardada. Usa "Aplicar hoy" para activarla.');
+                    }}
+                    className="px-4 py-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold shadow-md shadow-indigo-600/20 flex items-center gap-1.5"
+                  ><Save className="w-3.5 h-3.5" /> Guardar plantilla</button>
+                </div>
+              </div>
+            )}
           </div>
         </div>
       )}

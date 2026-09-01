@@ -71,6 +71,28 @@ export default function App() {
     return unsubscribe;
   }, []);
 
+  // Ronda 4 (F3): Cierre Automático de Jornada — evaluación perezosa e idempotente cada 60s.
+  // Solo actúa si la hora actual superó el fin de la ventana de la plantilla del día y el
+  // día aún no está cerrado (flag inas_day_closed_v1). Reutiliza closeBlockAttendance, que
+  // respeta Regla de Oro, regla del 30% (PENDIENTE_REVISION) y bloques no computables.
+  useEffect(() => {
+    let running = false;
+    const tick = async () => {
+      if (running) return;
+      running = true;
+      try {
+        await AttendanceStorageService.maybeAutoCloseDay();
+      } catch (err) {
+        console.error('Auto-cierre de jornada falló (reintentará):', err);
+      } finally {
+        running = false;
+      }
+    };
+    tick(); // evaluación inmediata al abrir la app (cubre días cerrados mientras estuvo apagada)
+    const intervalId = window.setInterval(tick, 60_000);
+    return () => window.clearInterval(intervalId);
+  }, []);
+
   // Handle successful login
   const handleLoginSuccess = (role: UserRole, userPayload?: { teacher?: Teacher; student?: Student; username: string }) => {
     setCurrentRole(role);

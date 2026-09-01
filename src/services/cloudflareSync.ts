@@ -96,7 +96,12 @@ export class CloudflareSyncService {
         teachers,
         records: records.slice(0, 500), // Últimos 500 registros
         assignments,
-        slots
+        slots,
+        // Ronda 4 (F1/F5): plantillas CUSTOM de Rectoría + horarios personales opcionales.
+        // El worker guarda data verbatim y el pull destructura de forma tolerante →
+        // clientes viejos ignoran estos campos sin romperse.
+        customTemplates: AttendanceStorageService.getCustomTemplates(),
+        studentSchedules: AttendanceStorageService.getAllStudentSchedules()
       }
     };
 
@@ -240,7 +245,7 @@ export class CloudflareSyncService {
         throw new Error(result.error || 'No se recibieron datos del Worker');
       }
 
-      const { students, records, teachers, assignments, slots } = result.data;
+      const { students, records, teachers, assignments, slots, customTemplates, studentSchedules } = result.data;
 
       let importedStudents = 0;
       let importedRecords = 0;
@@ -270,6 +275,17 @@ export class CloudflareSyncService {
 
       if (Array.isArray(slots) && slots.length > 0) {
         AttendanceStorageService.saveScheduleSlots(slots);
+      }
+
+      // Ronda 4 (F5): plantillas CUSTOM y horarios personales viajan en el snapshot.
+      // NOTA de adopción: los dispositivos deben actualizarse todos primero; un push de
+      // un cliente viejo NO incluye estos campos (los borrará del snapshot hasta el
+      // próximo push de un cliente nuevo) — ver AGENTS.md Ronda 4.
+      if (Array.isArray(customTemplates)) {
+        AttendanceStorageService.saveCustomTemplates(customTemplates);
+      }
+      if (studentSchedules && typeof studentSchedules === 'object' && !Array.isArray(studentSchedules)) {
+        AttendanceStorageService.saveAllStudentSchedules(studentSchedules);
       }
 
       return {

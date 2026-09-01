@@ -539,6 +539,25 @@ export const TeacherClassroomView: React.FC<TeacherClassroomViewProps> = ({
             </div>
           </div>
 
+          {/* Ronda 4 (F3): banner de ventana de jornada — avisos de apertura/cierre según la plantilla del día */}
+          {(() => {
+            const win = AttendanceStorageService.getSchoolDayWindow(today);
+            if (!win) return null;
+            const open = AttendanceStorageService.isWithinSchoolDay(undefined, today);
+            return (
+              <div className={`mx-1 flex items-center gap-2 px-3 py-2 rounded-xl border text-[11px] font-bold ${open ? 'bg-emerald-50 dark:bg-emerald-950/40 border-emerald-200 dark:border-emerald-800 text-emerald-700 dark:text-emerald-300' : 'bg-amber-50 dark:bg-amber-950/40 border-amber-200 dark:border-amber-800 text-amber-700 dark:text-amber-300'}`}>
+                <Clock className="w-3.5 h-3.5 shrink-0" />
+                <span>
+                  {open
+                    ? `Jornada abierta (${win.start} – ${win.end}) · Plantilla: ${AttendanceStorageService.getActiveDayTemplate().name}`
+                    : AttendanceStorageService.getDayCloseState(today).closedAt
+                      ? `Jornada cerrada (${win.start} – ${win.end}) · El cierre del día ya se ejecutó: los no escaneados quedaron AUSENTE y el escáner no registra más hasta mañana.`
+                      : `Jornada cerrada (${win.start} – ${win.end}) · Fuera de este rango el escáner no registra asistencia (la plantilla define la jornada).`}
+                </span>
+              </div>
+            );
+          })()}
+
           {/* Quick Filters */}
           <div className="flex flex-wrap items-center gap-3">
             {/* Grade Selector */}
