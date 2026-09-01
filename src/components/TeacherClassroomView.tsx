@@ -26,7 +26,8 @@ import {
   HelpCircle,
   Key,
   ShieldAlert,
-  Flame
+  Flame,
+  Bell
 } from 'lucide-react';
 import jsQR from 'jsqr';
 import { Student, AttendanceRecord, SchoolSettings, Teacher, ScheduleSlot, AttendanceStatus, EphemeralScanDelegation } from '../types/attendance';
@@ -86,6 +87,17 @@ export const TeacherClassroomView: React.FC<TeacherClassroomViewProps> = ({
   const [delegatedStudentCode, setDelegatedStudentCode] = useState<string>('');
   const [latestDelegation, setLatestDelegation] = useState<EphemeralScanDelegation | null>(null);
 
+  // Reloj vivo + ventana de aviso de fin de bloque (T-{n}) — notificación única por bloque/día
+  const [nowMinuteOfDay, setNowMinuteOfDay] = useState<number>(() => {
+    const [h, m] = getCurrentTimeString().split(':').map(Number);
+    return h * 60 + m;
+  });
+  const [notifiedSlotKey, setNotifiedSlotKey] = useState<string>('');
+  const [noticeDismissed, setNoticeDismissed] = useState<boolean>(false);
+  const [notifPermission, setNotifPermission] = useState<NotificationPermission | 'unsupported'>(
+    () => (typeof Notification !== 'undefined' ? Notification.permission : 'unsupported')
+  );
+
   const today = getTodayDateString();
   const currentTime = getCurrentTimeString();
 
@@ -108,6 +120,15 @@ export const TeacherClassroomView: React.FC<TeacherClassroomViewProps> = ({
       setRecords(AttendanceStorageService.getAllAttendance());
     });
     return unsubscribe;
+  }, []);
+
+  // Reloj vivo: refresca cada 15 s para detectar la entrada a la ventana T-{n}
+  useEffect(() => {
+    const intervalId = window.setInterval(() => {
+      const [h, m] = getCurrentTimeString().split(':').map(Number);
+      setNowMinuteOfDay(h * 60 + m);
+    }, 15000);
+    return () => window.clearInterval(intervalId);
   }, []);
 
   // Auto-detect current active slot on mount
@@ -154,6 +175,19 @@ export const TeacherClassroomView: React.FC<TeacherClassroomViewProps> = ({
     return AttendanceStorageService.isSlotNonComputable(selectedSlotId, selectedGrade, today);
   }, [selectedSlotId, selectedGrade, today]);
 
+  // Ventana de aviso: minutos restantes del bloque vs noticeMinutesBeforeEnd (proporcional)
+  const noticeMin = activeSlot.noticeMinutesBeforeEnd || AttendanceStorageService.getProportionalNoticeMinutes(activeSlot.durationMinutes);
+
+  const minutesToBlockEnd = useMemo(() => {
+    if (!activeSlot?.endTime) return null;
+    const [h, m] = activeSlot.endTime.split(':').map(Number);
+    return h * 60 + m - nowMinuteOfDay;
+  }, [activeSlot, nowMinuteOfDay]);
+
+  const inNoticeWindow = useMemo(() => {
+    return minutesToBlockEnd !== null && minutesToBlockEnd > 0 && minutesToBlockEnd <= noticeMin;
+  }, [minutesToBlockEnd, noticeMin]);
+
   // Today records for selected grade and slot
   const currentSlotRecords = useMemo(() => {
     return records.filter(r => r.studentGrade === selectedGrade && r.slotId === selectedSlotId && r.date === today);
@@ -197,6 +231,32 @@ export const TeacherClassroomView: React.FC<TeacherClassroomViewProps> = ({
 
     return { total, punctual, tardy, absent, unscanned, attended, rate };
   }, [gradeStudents, recordMapByStudentCode]);
+
+  // Disparo único de la notificación de fin de bloque por slot/día (banner + sonido + push del navegador)
+  useEffect(() => {
+    if (!inNoticeWindow || noticeDismissed || isNonComputableSlot.isNonComputable) return;
+    const key = `${today}_${activeSlot.id}`;
+    if (notifiedSlotKey === key) return;
+    setNotifiedSlotKey(key);
+    if (soundEnabled) {
+      SoundService.playNoticeBell();
+    }
+    if (typeof Notification !== 'undefined' && Notification.permission === 'granted') {
+      try {
+        new Notification(`El bloque termina en ${minutesToBlockEnd} min`, {
+          body: `${selectedGrade} · ${selectedSubject || 'Sin materia programada'}: faltan ${stats.unscanned} de ${stats.total} estudiantes por escanear.`,
+          tag: key
+        });
+      } catch (e) {
+        console.warn('Browser notification notice:', e);
+      }
+    }
+  }, [inNoticeWindow, noticeDismissed, isNonComputableSlot, notifiedSlotKey, today, activeSlot, minutesToBlockEnd, selectedGrade, selectedSubject, stats, soundEnabled]);
+
+  // Al cambiar de bloque se re-habilita el aviso para el siguiente slot
+  useEffect(() => {
+    setNoticeDismissed(false);
+  }, [selectedSlotId]);
 
   // Handle Scan Logic
   const handleRegisterScan = async (rawCode: string, method: 'CAMERA' | 'USB' | 'MANUAL') => {
@@ -448,8 +508,6 @@ export const TeacherClassroomView: React.FC<TeacherClassroomViewProps> = ({
     animFrameId.current = requestAnimationFrame(tickScan);
   };
 
-  const noticeMin = activeSlot.noticeMinutesBeforeEnd || AttendanceStorageService.getProportionalNoticeMinutes(activeSlot.durationMinutes);
-
   return (
     <div className="space-y-6">
       {/* Header & Course Selector Banner */}
@@ -466,6 +524,11 @@ export const TeacherClassroomView: React.FC<TeacherClassroomViewProps> = ({
                   {currentAssignment?.isDoubleBlock && (
                     <span className="px-2 py-0.5 rounded-full bg-indigo-100 dark:bg-indigo-950/70 text-indigo-700 dark:text-indigo-300 text-[10px] font-black border border-indigo-200 dark:border-indigo-800 flex items-center gap-1">
                       <Flame className="w-3 h-3 text-amber-500" /> Bloque Doble (2h)
+                    </span>
+                  )}
+                  {!currentAssignment && (
+                    <span className="px-2 py-0.5 rounded-full bg-slate-100 dark:bg-slate-800 text-slate-500 dark:text-slate-400 text-[10px] font-bold border border-slate-200 dark:border-slate-700">
+                      Horario opcional · Escaneo libre
                     </span>
                   )}
                 </h1>
@@ -663,6 +726,34 @@ export const TeacherClassroomView: React.FC<TeacherClassroomViewProps> = ({
             </p>
           </div>
         </div>
+      ) : inNoticeWindow && !noticeDismissed ? (
+        <div className="p-4 rounded-2xl bg-rose-500/10 border-2 border-rose-500/50 animate-pulse flex flex-col sm:flex-row sm:items-center gap-3">
+          <Bell className="w-6 h-6 text-rose-600 dark:text-rose-400 shrink-0" />
+          <div className="text-xs flex-1">
+            <p className="font-black text-rose-800 dark:text-rose-200">
+              ¡Atención! El bloque termina en {minutesToBlockEnd} min ({activeSlot.endTime}).
+            </p>
+            <p className="text-rose-700 dark:text-rose-300 mt-0.5">
+              Faltan <strong>{stats.unscanned}</strong> de {stats.total} estudiantes por escanear en {selectedGrade} · {selectedSubject || 'Sin materia programada'}.
+            </p>
+          </div>
+          <div className="flex items-center gap-2 shrink-0">
+            <button
+              type="button"
+              onClick={() => handleCloseBlock(false)}
+              className="px-3 py-1.5 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-[11px] font-black shadow-sm"
+            >
+              Cerrar bloque ahora
+            </button>
+            <button
+              type="button"
+              onClick={() => setNoticeDismissed(true)}
+              className="px-3 py-1.5 rounded-xl bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-600 text-slate-600 dark:text-slate-300 text-[11px] font-bold hover:bg-slate-50 dark:hover:bg-slate-700"
+            >
+              Entendido
+            </button>
+          </div>
+        </div>
       ) : (
         <div className="p-3.5 rounded-2xl bg-slate-100 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700/60 flex items-center justify-between text-xs text-slate-600 dark:text-slate-300">
           <div className="flex items-center gap-2">
@@ -671,9 +762,23 @@ export const TeacherClassroomView: React.FC<TeacherClassroomViewProps> = ({
               Ventana de Auto-Cierre Proporcional: <strong>T-{noticeMin} minutos</strong> antes del fin del bloque ({activeSlot.endTime}).
             </span>
           </div>
-          <span className="text-[11px] font-bold text-indigo-600 dark:text-indigo-400">
-            Regla de Oro: Si hay 0 escaneos = 0 ausencias
-          </span>
+          {notifPermission === 'default' ? (
+            <button
+              type="button"
+              onClick={() => {
+                if (typeof Notification !== 'undefined') {
+                  Notification.requestPermission().then((p) => setNotifPermission(p)).catch(() => {});
+                }
+              }}
+              className="text-[11px] font-bold text-indigo-600 dark:text-indigo-400 hover:underline flex items-center gap-1"
+            >
+              <Bell className="w-3 h-3" /> Activar notificaciones de fin de bloque
+            </button>
+          ) : (
+            <span className="text-[11px] font-bold text-indigo-600 dark:text-indigo-400">
+              Regla de Oro: Si hay 0 escaneos = 0 ausencias
+            </span>
+          )}
         </div>
       )}
 

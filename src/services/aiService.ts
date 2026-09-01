@@ -467,6 +467,119 @@ Responde SIEMPRE en formato JSON con la siguiente estructura exacta:
   }
 
   /**
+   * Visión IA 100% LOCAL (BYOK, decisión del propietario 01/09/2026): extracción de
+   * estudiantes desde fotos de matrículas/carnés llamando DIRECTO al proveedor desde
+   * el navegador. Reemplaza /api/ai/vision-extract del server Express (E16 de AGENTS.md).
+   * Modelos de visión vigentes por proveedor (docs oficiales):
+   * - Groq: meta-llama/llama-4-scout-17b-16e-instruct (multimodal, hasta 5 imágenes)
+   * - Gemini: gemini-2.5-flash (inlineData) · OpenAI: gpt-4.1-mini
+   * - OpenRouter: meta-llama/llama-4-scout · Mistral: mistral-small-latest (Small 3.x multimodal)
+   * Respuesta: { success: true, students: [...] } — mismo contrato que el server local.
+   */
+  static async extractStudentsFromImage(params: {
+    imageBase64: string;
+    mimeType?: string;
+    fileName?: string;
+  }): Promise<{ success: boolean; students: Array<{ documentType?: string; documentId: string; firstName: string; lastName: string; grade: string; confidence?: number }> }> {
+    const settings = AttendanceStorageService.getSettings();
+    const provider = (settings.aiProvider || 'groq').toLowerCase();
+    const apiKey = (settings.customAiApiKey || '').trim();
+    if (!apiKey) {
+      throw new Error('Sin API Key de IA configurada (BYOK). Configúrala en Ajustes -> Motor de IA para usar la extracción por visión.');
+    }
+
+    const mimeType = params.mimeType || 'image/jpeg';
+    const dataUrl = `data:${mimeType};base64,${params.imageBase64}`;
+
+    const visionSystemPrompt = `Eres un sistema OCR especializado en extraer datos de matrículas y carnés escolares colombianos (SIMAT). Analiza la imagen y devuelve EXCLUSIVAMENTE un JSON válido con esta estructura:
+{"students": [{"documentType": "TI|CC|RC|CE|PPT|PEP|NES", "documentId": "solo dígitos, sin puntos", "firstName": "NOMBRES EN MAYÚSCULAS", "lastName": "APELLIDOS EN MAYÚSCULAS", "grade": "grado como 6°1 o 10°2", "confidence": 0.0-1.0}]}
+Si la imagen no contiene datos de estudiantes, devuelve {"students": []}. No incluyas ningún texto fuera del JSON.`;
+
+    const parseVisionContent = (raw: string): Array<any> => {
+      const clean = raw.replace(/^```json\s*/i, '').replace(/\s*```$/i, '').trim();
+      const parsed = JSON.parse(clean);
+      if (Array.isArray(parsed?.students)) return parsed.students;
+      if (Array.isArray(parsed)) return parsed;
+      if (parsed && typeof parsed === 'object' && (parsed.documentId || parsed.firstName)) return [parsed];
+      return [];
+    };
+
+    // Proveedores OpenAI-compatible con visión (image_url base64): Groq / OpenAI / OpenRouter / Mistral
+    if (provider === 'groq' || provider === 'openai' || provider === 'openrouter' || provider === 'mistral') {
+      const endpoint = provider === 'groq' ? 'https://api.groq.com/openai/v1/chat/completions'
+        : provider === 'openai' ? 'https://api.openai.com/v1/chat/completions'
+        : provider === 'openrouter' ? 'https://openrouter.ai/api/v1/chat/completions'
+        : 'https://api.mistral.ai/v1/chat/completions';
+      const visionModel = (settings.aiVisionModel || '').trim() || (
+        provider === 'groq' ? 'meta-llama/llama-4-scout-17b-16e-instruct'
+        : provider === 'openai' ? 'gpt-4.1-mini'
+        : provider === 'openrouter' ? 'meta-llama/llama-4-scout'
+        : 'mistral-small-latest'
+      );
+
+      const resp = await fetch(endpoint, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${apiKey}`
+        },
+        body: JSON.stringify({
+          model: visionModel,
+          messages: [
+            {
+              role: 'user',
+              content: [
+                { type: 'text', text: visionSystemPrompt },
+                { type: 'image_url', image_url: { url: dataUrl } }
+              ]
+            }
+          ],
+          temperature: 0.1,
+          max_tokens: 1200
+        })
+      });
+      if (!resp.ok) {
+        const errText = await resp.text().catch(() => '');
+        throw new Error(`Visión ${provider} HTTP ${resp.status}: ${errText.slice(0, 180)}`);
+      }
+      const data = await resp.json();
+      const content = data.choices?.[0]?.message?.content;
+      if (!content) throw new Error('El proveedor de visión no devolvió contenido.');
+      return { success: true, students: parseVisionContent(content) };
+    }
+
+    // Gemini REST con inlineData (multimodal)
+    if (provider === 'gemini') {
+      const visionModel = (settings.aiVisionModel || '').trim() || 'gemini-2.5-flash';
+      const url = `https://generativelanguage.googleapis.com/v1beta/models/${visionModel}:generateContent?key=${apiKey}`;
+      const resp = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          contents: [{
+            role: 'user',
+            parts: [
+              { text: visionSystemPrompt },
+              { inlineData: { mimeType, data: params.imageBase64 } }
+            ]
+          }],
+          generationConfig: { temperature: 0.1, responseMimeType: 'application/json' }
+        })
+      });
+      if (!resp.ok) {
+        const errText = await resp.text().catch(() => '');
+        throw new Error(`Visión Gemini HTTP ${resp.status}: ${errText.slice(0, 180)}`);
+      }
+      const data = await resp.json();
+      const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
+      if (!text) throw new Error('Gemini no devolvió contenido de visión.');
+      return { success: true, students: parseVisionContent(text) };
+    }
+
+    throw new Error(`El proveedor "${provider}" no soporta extracción por visión.`);
+  }
+
+  /**
    * Normalización defensiva ultra-segura para garantizar que el UI nunca colapse
    */
   static normalizeSummaryResult(raw: any, fallbackMetrics: any, grade: string): GradeAiSummaryResult {

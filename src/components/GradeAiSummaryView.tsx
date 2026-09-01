@@ -20,6 +20,7 @@ import { ResponsiveContainer, BarChart, Bar, XAxis, YAxis, Tooltip, CartesianGri
 import { Student, AttendanceRecord, GradeAiSummaryResult } from '../types/attendance';
 import { AttendanceStorageService, getTodayDateString } from '../services/attendanceStorage';
 import { AiService } from '../services/aiService';
+import { AiProviderMark } from './AiProviderMark';
 
 export const GradeAiSummaryView: React.FC = () => {
   const uniqueGrades = AttendanceStorageService.getUniqueGrades();
@@ -40,7 +41,7 @@ export const GradeAiSummaryView: React.FC = () => {
     const settings = AttendanceStorageService.getSettings();
     setAiStatus({
       activeProvider: settings.aiProvider || 'groq',
-      activeModel: settings.aiModel || 'llama-3.3-70b-versatile',
+      activeModel: settings.aiModel || 'openai/gpt-oss-120b',
       availableProviders: ['Groq Cloud', 'Mistral AI', 'Google Gemini', 'OpenAI', 'OpenRouter'],
       hasAnyKey: Boolean(settings.customAiApiKey || settings.cloudflareWorkerUrl)
     });
@@ -110,7 +111,7 @@ export const GradeAiSummaryView: React.FC = () => {
         <div>
           <div className="flex items-center gap-2">
             <span className={`px-2.5 py-0.5 rounded-full border font-bold text-[11px] uppercase tracking-wider flex items-center gap-1.5 ${currentProvider.color}`}>
-              <Sparkles className="w-3 h-3" />
+              <AiProviderMark provider={activeProviderKey === 'none' ? null : activeProviderKey} active={aiStatus.hasAnyKey && activeProviderKey !== 'none'} className="w-3.5 h-3.5" />
               IA Escolar • {currentProvider.badge}
             </span>
           </div>

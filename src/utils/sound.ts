@@ -154,6 +154,42 @@ export const SoundService = {
     } catch (e) {
       console.warn('SoundService error tone:', e);
     }
+  },
+
+  // Distinctive end-of-block notice bell: two warm descending chimes (A5 -> E5)
+  // Disparada UNA sola vez por bloque cuando entra en la ventana T-{noticeMinutesBeforeEnd}.
+  playNoticeBell: () => {
+    try {
+      const ctx = initAudio();
+      if (!ctx) return;
+
+      const play = () => {
+        const ring = (startAt: number, freq: number, dur: number) => {
+          const osc = ctx.createOscillator();
+          const gain = ctx.createGain();
+          osc.type = 'triangle';
+          osc.frequency.setValueAtTime(freq, startAt);
+          gain.gain.setValueAtTime(0.0001, startAt);
+          gain.gain.exponentialRampToValueAtTime(0.25, startAt + 0.02);
+          gain.gain.exponentialRampToValueAtTime(0.001, startAt + dur);
+          osc.connect(gain);
+          gain.connect(ctx.destination);
+          osc.start(startAt);
+          osc.stop(startAt + dur);
+        };
+        const now = ctx.currentTime;
+        ring(now, 880, 0.45);          // A5
+        ring(now + 0.28, 659.25, 0.7); // E5
+      };
+
+      if (ctx.state === 'suspended') {
+        ctx.resume().then(play).catch(() => {});
+      } else {
+        play();
+      }
+    } catch (e) {
+      console.warn('SoundService notice bell error:', e);
+    }
   }
 };
 

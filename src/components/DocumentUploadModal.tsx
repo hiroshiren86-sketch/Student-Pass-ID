@@ -17,6 +17,7 @@ import {
 } from 'lucide-react';
 import { Student, DocumentType } from '../types/attendance';
 import { AttendanceStorageService } from '../services/attendanceStorage';
+import { AiService } from '../services/aiService';
 import { parseDocumentFile, ExtractedStudentDraft, normalizeGradeName, isValidGrade } from '../utils/documentParser';
 
 interface DocumentUploadModalProps {
@@ -55,38 +56,32 @@ export const DocumentUploadModal: React.FC<DocumentUploadModalProps> = ({
         if (['jpg', 'jpeg', 'png', 'webp'].includes(fileExt) && settings.aiProvider && settings.aiProvider !== 'local') {
           try {
             const base64Data = await readFileAsBase64Raw(file);
-            const visionRes = await fetch('/api/ai/vision-extract', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                imageBase64: base64Data,
-                mimeType: file.type || 'image/jpeg',
-                fileName: file.name,
-                aiProvider: settings.aiProvider,
-                apiKey: settings.customAiApiKey
-              })
+            // Visión IA 100% LOCAL (BYOK): llamada directa al proveedor desde el navegador (E16 migrado)
+            const visionData = await AiService.extractStudentsFromImage({
+              imageBase64: base64Data,
+              mimeType: file.type || 'image/jpeg',
+              fileName: file.name
             });
 
-            if (visionRes.ok) {
-              const visionData = await visionRes.json();
-              if (visionData.success && Array.isArray(visionData.students) && visionData.students.length > 0) {
-                const photoDataUrl = await readFileAsDataUrl(file);
-                for (const st of visionData.students) {
-                  newDrafts.push({
-                    id: `draft_ai_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
-                    fileName: file.name,
-                    documentType: st.documentType || 'TI',
-                    documentId: String(st.documentId || '').replace(/\D/g, '') || `10${Math.floor(10000000 + Math.random() * 90000000)}`,
-                    firstName: String(st.firstName || 'ESTUDIANTE').toUpperCase().trim(),
-                    lastName: String(st.lastName || '').toUpperCase().trim(),
-                    grade: normalizeGradeName(st.grade || '6°1'),
-                    photoUrl: photoDataUrl,
-                    confidence: st.confidence || 0.95,
-                    status: 'valid'
-                  });
-                }
-                continue; // Procesado exitosamente por IA de Visión
+            if (visionData.success && visionData.students.length > 0) {
+              const photoDataUrl = await readFileAsDataUrl(file);
+              const allowedDocTypes: DocumentType[] = ['TI', 'CC', 'RC', 'CE', 'PPT', 'PEP', 'NES'];
+              for (const st of visionData.students) {
+                const docTypeRaw = String(st.documentType || 'TI').toUpperCase().trim() as DocumentType;
+                newDrafts.push({
+                  id: `draft_ai_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+                  fileName: file.name,
+                  documentType: allowedDocTypes.includes(docTypeRaw) ? docTypeRaw : 'TI',
+                  documentId: String(st.documentId || '').replace(/\D/g, '') || `10${Math.floor(10000000 + Math.random() * 90000000)}`,
+                  firstName: String(st.firstName || 'ESTUDIANTE').toUpperCase().trim(),
+                  lastName: String(st.lastName || '').toUpperCase().trim(),
+                  grade: normalizeGradeName(st.grade || '6°1'),
+                  photoUrl: photoDataUrl,
+                  confidence: st.confidence || 0.95,
+                  status: 'valid'
+                });
               }
+              continue; // Procesado exitosamente por IA de Visión
             }
           } catch (aiErr) {
             console.warn('Fallback a parser local tras error en visión IA:', aiErr);

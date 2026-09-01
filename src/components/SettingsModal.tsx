@@ -14,7 +14,6 @@ import {
   Sparkles,
   Cloud,
   RefreshCw,
-  Cpu,
   Calendar,
   Layers,
   Zap,
@@ -29,6 +28,7 @@ import { AttendanceStorageService } from '../services/attendanceStorage';
 import { FirebaseService } from '../services/firebase';
 import { CloudflareSyncService, CloudflareSyncResult } from '../services/cloudflareSync';
 import { AiService } from '../services/aiService';
+import { AiProviderMark } from './AiProviderMark';
 import { DAY_TEMPLATES_DEFINITIONS } from '../services/mockData';
 
 interface SettingsModalProps {
@@ -325,11 +325,12 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ onClose }) => {
           <div className="p-4 rounded-2xl bg-slate-100 dark:bg-slate-900/90 border border-slate-200 dark:border-slate-800 space-y-3">
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-2 text-xs font-black text-slate-900 dark:text-white">
-                <Cpu className="w-4 h-4 text-emerald-500" />
+                <AiProviderMark provider={settings.aiProvider} active={Boolean(settings.customAiApiKey?.trim())} className="w-4 h-4" />
                 <span>Motor de Inteligencia Artificial (Mistral, Groq, OpenRouter, Gemini, OpenAI)</span>
               </div>
-              <span className="text-[10px] font-bold px-2 py-0.5 rounded-md bg-emerald-100 dark:bg-emerald-950/70 text-emerald-700 dark:text-emerald-300 uppercase">
-                {settings.aiProvider || 'groq'}
+              <span className="text-[10px] font-bold px-2 py-0.5 rounded-md bg-emerald-100 dark:bg-emerald-950/70 text-emerald-700 dark:text-emerald-300 uppercase flex items-center gap-1">
+                <AiProviderMark provider={settings.aiProvider} active={Boolean(settings.customAiApiKey?.trim())} className="w-3 h-3" />
+                {settings.customAiApiKey?.trim() ? 'Activa' : 'Sin clave'}
               </span>
             </div>
             <p className="text-[10px] text-slate-500 dark:text-slate-400 leading-snug">
