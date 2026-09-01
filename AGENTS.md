@@ -385,6 +385,37 @@ Esta sección documenta el mapa exhaustivo de comunicaciones, protocolos, plataf
 
 ---
 
+### 🧪 Ronda 7 (madrugada del 02/09/2026): QA Integral de Producción (Tester) — Hallazgos PENDIENTES de luz verde
+
+**Mandato del propietario:** "Hice unos cambios hoy con el otro agente y hay que testearlo, entonces me puedes servir de tester… ves a la página web con sesión limpia, navegador totalmente limpio… y haz este checklist de principio a fin. Y luego al pull… ingresa en agent.md, anotas los errores que encontraste con todo el checklist, más agregas que está pendiente la revisión para de una vez yo vea todo lo que encontraste tú, te doy la luz verde y comienzas a arreglar."
+
+**Protocolo ejecutado:** Chromium headless 100% limpio (cero localStorage/cookies) contra `https://student-pass-id.pages.dev/` (build con Ronda 5+6 desplegada por el push), rol por rol (ADMIN → DOCENTE → ESTUDIANTE_ACUDIENTE), incluyendo prueba en vivo del cierre de jornada real a las 12:30 p.m. hora Bogotá. Tras el pull: `tsc --noEmit` (27 errores = **los mismos 27 preexistentes**, mismos archivos → cero regresiones) y `vite build` limpio (7.98 s). Ningún dato de prueba fue enviado a la nube (sin push de snapshot).
+
+#### ✅ VERIFICADO FUNCIONANDO (sin regresiones)
+1. **F1 Plantillas CUSTOM (Ronda 4):** crear ("Nueva plantilla" → editor con previsualización en vivo que recalcula bloques al cambiar duración/recreo), guardar, "Aplicar hoy" (toast "bloques regenerados", slots 40 min regenerados en "Por Día"), Duplicar, Eliminar (confirm nativo con nombre). Selector de Configuración "Plantilla de Jornada Activa" lista fijas + custom (sufijo "· Personalizada").
+2. **F2 Interruptor "Solo plantillas oficiales" (Ronda 4):** ON → tras recarga, sección "Mi horario (opcional)" oculta en portal estudiante. OFF → reaparece. Toggle persiste y la descripción de la UI es fiel al comportamiento.
+3. **F3 Cierre de jornada (Ronda 4) — probado EN VIVO:** 12:28 escaneo manual dentro de ventana NO se bloqueó (idempotencia anti-duplicado correcta); 12:30:17 badge del ScanHub → **"Jornada cerrada (06:30 – 12:30) · Cierre del día ya ejecutado"** (cierre perezoso + flag `inas_day_closed_v1` verificados en localStorage); escaneo post-cierre de estudiante nuevo **NO se registró** (bloqueo de ventana operativo); banner del aula docente completo ("…los no escaneados quedaron AUSENTE y el escáner no registra más hasta mañana"); Regla de Oro respetada (estudiante con 0 escaneos en el día NO quedó como AUSENTE — no computable).
+4. **F4 Mi horario CSV (Ronda 4):** formato documentado en UI, validador detecta válidas/inválidas, guardar renderiza tabla (LUNES Física 07:00–07:55, MARTES Química 08:00–08:55), "Eliminar horario" OK. Informativo: no toca KPIs.
+5. **Portal estudiante (Rondas 5-6):** tabs "Visualizar Carné"/"Personalizar Foto" cambian la vista inline (anverso/reverso CR80 + QR HMAC + Code128); subida por archivo (Opción A vía clic→picker) aplica en vivo; URL (Opción B "Aplicar") funciona; papelera de "Quitar foto" en modal admin OK; foto y rol persisten tras recarga dura.
+6. **ADMIN:** matrícula individual (toast de éxito, aparece en directorio con foto), carné con foto en directorio y previsualización, "Descargar Carné PDF (CR80)" sin errores JS, Gestión Docentes (6 docentes, credenciales, director de grupo), Gerarquía de escaneo y ventana T-{n} visibles en aula.
+7. **Worker:** `/api/health` → online, D1+KV conectados, `ai.mode=client-side-byok` (limpieza Ronda 3 intacta). Datos del wrangler.toml se sincronizan GitHub→Worker automáticamente (documentado por el propietario; no hace falta tocar el dashboard de Cloudflare).
+
+#### 🐞 HALLAZGOS (para arreglar tras luz verde)
+- **B1 (medio) · Escape no cierra modales:** en "Previsualización de Carné" y "Editar Ficha del Estudiante" (Directorio ADMIN) la tecla Escape no hace nada; solo botones Cerrar/×. Extiende el bug U1 conocido de Ajustes. Repro: Directorio → Ver Carné → Escape.
+- **B2 (medio, UX) · "+ Nueva plantilla" y "Duplicar" parecen muertos:** abren el "Editor de plantilla" como panel inline AL FINAL de la lista larga, sin auto-scroll → el usuario no percibe ningún cambio (probado a 1920×1080). Repro: Horarios → Plantillas → + Nueva plantilla. Fix propuesto: auto-scroll al editor (o modal).
+- **B3 (menor) · F2 no aplica en caliente al cambiar de rol:** con el toggle ON recién activado, cambiar ADMIN→Estudiante sin recargar muestra "Mi horario (opcional)" igualmente; tras recarga SÍ se oculta. El remount no está leyendo el settings actualizado (estado stale entre vistas).
+- **B4 (medio) · Inconsistencia plantilla eliminada vs slots:** al Eliminar una plantilla CUSTOM que estaba aplicada, el badge del aula vuelve a "Plantilla A: Día Normal (06:30 – 12:30)" pero los slots del día siguen regenerados por la custom (40 min, fin ~11:00). La ventana de jornada mostrada y los bloques reales difieren (90 min de ventana fantasma). Repro: aplicar custom → eliminarla → mirar badge vs bloques.
+- **B5 (menor, UX) · CSV inválido se descarta en silencio:** "Mi horario" solo informa "N clase(s) válida(s) detectada(s)"; no dice qué línea falló ni por qué (existe `scheduleCsvPreview.errors` en código pero no se renderiza en el build actual). Repro: portal → Mi horario → CSV con línea "DiaInvalido, Química, 08:00" → Validar.
+- **B6 (documentación) · "drag & drop" prometido no implementado:** AGENTS.md Ronda 6 describe "Opción A con zona drag & drop / selector" en el estudio de fotos, pero no existe ningún handler `onDrop/dragover/dragenter` en `StudentPortalView.tsx` (solo label→file picker por clic, que funciona). O se implementa el drag&drop o se corrige la documentación.
+- **O1 (texto) · Banner de cierre vs Regla de Oro:** dice "los no escaneados quedaron AUSENTE", pero quien tiene 0 escaneos en el día queda no-computable (correcto por diseño). Sugerencia: "los no escaneados con jornada iniciada quedaron AUSENTE".
+- **O2 (consistencia) · confirm() nativo:** eliminación de plantilla custom y de "Mi horario" usa `window.confirm` del navegador, inconsistente con el resto de modales propios.
+- **⚠ Datos de prueba left-overs:** en el localStorage del navegador headless quedó el estudiante "QA TESTER JORNADA" (1000000999, 10°1) creado para el test de F3 — NO está en el repo ni en la nube (sin push); irrelevante para dispositivos reales.
+
+#### ⏸️ ESTADO: PENDIENTE DE REVISIÓN DEL PROPIETARIO
+Este QA es **solo lectura/diagnóstico**: no se tocó código de la app. Los arreglos B1–B6/O1/O2 esperan **luz verde explícita** del propietario (su mensaje: "te doy la luz verde y comienzas a arreglar"). Nota operativa del propietario documentada: el Worker está sincronizado con GitHub — editar `wrangler.toml`/código del worker y pushear despliega solo; NO entrar a Cloudflare a modificar el worker a mano.
+
+---
+
 ## 🚀 4. Hoja de Roadmap y Pasos a Seguir
 
 ### ⏳ Fase Actual (Inmediata): Validación de campo del Worker desplegado
