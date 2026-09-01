@@ -159,6 +159,66 @@ El sistema implementa una arquitectura híbrida de alta resiliencia y **Costo Ce
 - Para operar el Worker hace falta `CLOUDFLARE_API_TOKEN` en el entorno del comando (el propietario lo entrega por chat; puede rotarlo/revocarlo en el dashboard). Wrangler 3.x: `kv key delete` es remoto por defecto (no acepta `--remote`); `d1 execute` SÍ exige `--remote` para producción.
 - `sync/pull` es **GET** con `?schoolCode=`; `sync/push` es **POST** con el snapshot completo (estudiantes + asistencias) desde el navegador. `POST /api/sync/push` con `{}` se acepta y guarda 0 registros (sobrescribe el snapshot): no usar como "ping" en producción.
 
+### 🧭 Ronda 4 (noche del 01/09/2026): INVESTIGACIÓN + PLAN — Horarios a medida, interruptor "Solo plantillas" y Cierre de Jornada configurable
+
+**Mandato del propietario (cita):** "que no te dejen modificar solamente las plantillas que están ahí hechas… que tú mismo crees tus propias plantillas… eso es solo para rectoría, ¿no?… darle la oportunidad a los estudiantes, el que quiera poner su horario lo pone en su perfil… desde rectoría, en la gestión de horarios, un interruptor de solo usar plantillas y pum, se deshabilite para todas las cuentas, ya sea maestros o estudiantes, la visualización de horarios… si ya se pasa de la una de la tarde ya se cierra la jornada y no deja escanear más nada y el contador se detiene y vuelve a iniciar otra vez el día siguiente conforme se haya puesto la plantilla (si dice inicio 7:00, cuenta desde 7:00; si dice fin 13:30 o 14:00, se detiene ahí). Todo debe ser sincronizado y revisado antes de cualquier push. Planifica bien, te reviso mañana." — **Orden explícito: NO tocar código hoy** ("basta de hacer cambios hoy, para no hacer algo que podría dañar el código"). Hoy solo: investigar + planificar + documentar.
+
+**Confirmación al propietario:** la gestión de horarios YA es exclusiva de Rectoría (tab "Horarios Escolares" → `ScheduleBuilderView` y `SettingsModal`, ambos con guard `currentRole === 'ADMIN'` en `App.tsx` L135/L270/L362). Nada cambia en eso.
+
+**Hallazgos de la investigación (verificados sobre 72e5cef):**
+1. **Plantillas**: 5 definiciones FIJAS hardcodeadas `DAY_TEMPLATES_DEFINITIONS` (`mockData.ts` L27-100) de tipo paramétrico `DayTemplateConfig` (`types/attendance.ts` L32-47: `baseStartTime`, `blockDurationMinutes`, `trimMinutesPerBlock`, `recessDurationMinutes`, `totalBlocks`, `firstBlockSpecial`, `isNonComputableAllDay`, `proportionalNoticeMinutes`). El union `DayTemplateType` YA incluye `'CUSTOM'` (L26) sin uso. `getDayTemplates()` (`attendanceStorage.ts` L530) devuelve la constante: **no hay CRUD de plantillas**.
+2. **Aplicar plantilla**: `applyDayTemplate(type)` (L547+) regenera slots paramétricamente y guarda `settings.activeDayTemplate` + `inas_schedule_slots_v5`. Solo se invoca desde `SettingsModal` (selector L265). La edición FINA ya existe: `ScheduleBuilderView` (1002 l) con sub-vistas `grid | weekly-matrix | slots-editor` (crear/editar/borrar slots, asignar materia/docente/aula por día).
+3. **Horario personal del estudiante**: NO existe (grep 0 matches) — greenfield. El CSV existente es de estudiantes/reportes, no de horarios.
+4. **Ventana de jornada**: `settings.dailyStartTime/dailyEndTime` EXISTEN (`types/attendance.ts` L214-215; `dailyStartTime` editable en SettingsModal L281-295, `dailyEndTime` sin UI) pero **NINGUNA línea de código los usa para validar escaneos**. `registerClassScan` NO valida horario: un escaneo a las 3 p.m. sale TARDANZA. `getCurrentActiveSlot()` ya retorna `isWithin: boolean` (L746-767) — ignorado por todos los llamadores. Feedback types `block_closed`/`pending_review` declarados sin uso (`types/attendance.ts` L203).
+5. **Punto único de registro**: TODOS los escaneos convergen en `AttendanceStorageService.registerClassScan` (L1127) — aula (`TeacherClassroomView` L207), portería vía wrapper `registerScan` (L1554-1583), representante (`StudentPortalView` L183). Excepciones que escriben directo: `handleToggleStatus` (override humano del docente, L240-277), `closeBlockAttendance` (cierre), merge del pull (SYNC). Riesgo asociado hoy: la rama AUSENTE→TARDANZA (L1196-1212) permitiría a un escaneo a las 2 p.m. convertir ausentes del cierre en tardanzas.
+6. **Cierre**: 100% MANUAL por bloque: `handleCloseBlock` → `closeBlockAttendance` (L1281-1397) con Regla de Oro (0 escaneos = no computable), regla 30% (→ `PENDIENTE_REVISION` → confirm force) e inserción `AUSENTE method:'AUTO_CIERRE'` idempotente. **NO existe scheduler ni cierre de jornada/día completo**. `DayScheduleState.pendingReviewSlots` sin uso.
+7. **Notificación T-{n} (Ronda 2, ya implementada)**: reloj vivo `setInterval` (TeacherClassroomView L127), ventana proporcional (L181-189), disparo único `notifiedSlotKey`, `SoundService.playNoticeBell()`, Notification API opt-in. Está construida por BLOQUE — el cierre de jornada será otra capa superior (por DÍA).
+8. **Contadores**: `stats.unscanned` por curso+bloque (L175-199); `getSummary(date)` por día (attendanceStorage L1455-1479). Ambos SON derivados de records filtrados por fecha → al cerrar la jornada quedan "congelados" naturalmente y al día siguiente parten de cero (todo se deriva de `r.date === getTodayDateString()`, hora Bogotá: `getTodayDateString/getCurrentTimeString`, L47-65). No hay módulo `bogota.ts` (supuesto corregido: helpers viven en attendanceStorage).
+9. **Sync**: snapshot push/pull guarda `data` verbatim (settings+students+teachers+records[últimos 500]+assignments+slots; `cloudflareSync.ts` L87-101) sin `schemaVersion`; push = full-replace (riesgo: cliente VIEJO pisa campos nuevos del snapshot); pull SOLO manual (SettingsModal L141-160); push automático cada 5 min (`initAutoSync` L20-34). Settings viajan TAMBIÉN por Firestore realtime (`initCloudSettingsSync`, doc `school_settings/main`) — canal ideal para un interruptor de política. `getSettings()` hace spread sobre defaults → forward-compatible.
+10. **Deuda de seguridad detectada (NO tocar hoy)**: el push sube `settings` completas al snapshot CF — incluidos `qrSecret`, `sessionSecret`, `cloudflareApiToken` y API keys IA — y quedan en D1/KV. Futura limpieza: excluir secretos del snapshot. Documentado como deuda.
+11. **Incidente operativo resuelto en esta ronda**: el workspace local amaneció con un checkout viejo (mezcla de épocas; reflog terminaba en 6f3425c). Verificado con `git diff origin/main --numstat` que solo faltaba contenido (Rondas 2-3) y no había nada local superior → recuperación con `git config core.fileMode false` + `git reset --hard origin/main` (72e5cef). Lección: ante un workspace sospechoso, comparar SIEMPRE contra origin/main antes de tocar nada; GitHub es la verdad canónica.
+
+---
+
+**PLAN APROBADO PARA IMPLEMENTACIÓN (esperando luz verde del propietario mañana 02/09/2026):**
+
+**F1 — CRUD de plantillas propias (solo Rectoría)**
+- Nueva persistencia `inas_custom_templates_v1: DayTemplateConfig[]` (type `'CUSTOM'`). `getDayTemplates()` pasa a devolver FIJAS + CUSTOM (las fijas quedan como semilla; se pueden duplicar→editar; las fijas no se eliminan).
+- Extraer el generador de slots de `applyDayTemplate` a función pura `generateSlotsFromTemplate(tmpl)` reutilizable SIN cambiar comportamiento actual.
+- UI: nueva sub-vista "Plantillas" en `ScheduleBuilderView` (ya es solo ADMIN): lista fijas(candado)+custom(editar/eliminar), editor paramétrico con validaciones (bloques ≥1, horas coherentes, recreo ≥0) y **previsualización de slots**.
+- NUEVOS campos opcionales en `DayTemplateConfig`: `dayStartTime?` / `dayEndTime?` (ej. "07:00"/"14:00") que gobiernan F3; fallback: `baseStartTime` y fin del último slot.
+- El selector de plantillas de `SettingsModal` lista fijas+custom.
+
+**F2 — Interruptor maestro "Solo plantillas oficiales" (Rectoría)**
+- Nuevo `SchoolSettings.templatesOnlyMode?: boolean` (default `false`). Toggle en la sección Política de Horarios de `ScheduleBuilderView` (reusa `ToggleSwitch`).
+- Cuando está ON: se oculta/bloquea con mensaje claro la carga de horarios personales (F4) para estudiantes Y docentes; las plantillas/slots oficiales siguen mandando el escaneo igual; los datos personales ya cargados NO se borran (OFF → reaparecen).
+- Propagación automática: `SchoolSettings` ya se sincroniza por Firestore realtime + va dentro del snapshot CF → todos los dispositivos reciben el interruptor sin lógica nueva. Fuente única de lectura: `getSettings().templatesOnlyMode`.
+
+**F3 — Cierre de Jornada configurable (la regla del reloj del propietario)**
+- Ventana por día lectivo: `dayStartTime/dayEndTime` de la plantilla activa → fallback `settings.dailyStartTime/dailyEndTime` → fallback primer/último slot. Funciones puras nuevas en `attendanceStorage`: `getSchoolDayWindow(dateStr)` → `{startMin, endMin} | null` (null = día no lectivo), `isWithinSchoolDay(timeStr?)`, `getDayEndMinutes()`.
+- **Validación central ÚNICA en `registerClassScan`** (la puerta común de los 3 puntos de escaneo): fuera de ventana → feedback NUEVO `'out_of_window'` (extender el union `ScanResultFeedback`; mensaje "Jornada cerrada: inicia X / termina Y"; `playBeepError`) sin registrar nada. La rama AUSENTE→TARDANZA también queda gobernada por la ventana (fuera de jornada NO reabre). Excepciones deliberadas que NO se bloquean: `handleToggleStatus` (override humano), cierres, merge de pull.
+- **Cierre automático de jornada**: nuevo `closeDayAttendance({dateStr})` que itera grados × slots CLASS computables sin cerrar reutilizando `closeBlockAttendance` (respeta Regla de Oro, 30% y no-computables). Ejecución perezosa idempotente ("lazy close" al primer acceso tras `dayEndTime`) + timer de respaldo en `App.tsx` (patrón `initAutoSync`). Flag por fecha `inas_day_closed_v1` para no re-procesar.
+- **Contador**: no requiere lógica nueva — los KPIs son derivados de records; tras el cierre quedan congelados y el día siguiente inicia en cero con la ventana de LA plantilla de ese día (NORMAL 06:30-12:30, RECORTE_10 ~11:30, o custom hasta 14:00). Este es exactamente el comportamiento pedido.
+- UX: banner "Jornada cerrada" distinto del banner T-{n}; la notificación T-{n} por bloque queda intacta.
+
+**F4 — Horario opcional del estudiante (perfil)**
+- Modelo `StudentPersonalSchedule { studentCode, entries: [{dayOfWeek, slotId, subject}], updatedAt }` en `inas_student_schedules_v1`. Visible SOLO si `!templatesOnlyMode`.
+- UI en `StudentPortalView`: sección "Mi horario (opcional)" con importación CSV simple (día, hora/slot, asignatura) validada + tabla legible + eliminar. Informativo: NO interfiere con asistencia/KPIs/cierres (decisión del propietario de la Ronda 2: el escaneo registra fecha y hora; la materia no es necesaria). Cada cuenta solo ve/edita SU horario.
+
+**F5 — Sincronización de plantillas custom**
+- Añadir `customTemplates: DayTemplateConfig[]` al `data` del snapshot (`cloudflareSync.ts` L87-101 push; pull con reemplazo total igual que slots/assignments L267-273; lectura con spread-sobre-vacío → clientes tolerantes).
+- Orden de adopción documentado: actualizar TODOS los dispositivos primero → rectoría edita plantillas → push → resto hace pull (botón manual existente). Mitigación del riesgo cliente-viejo: no editar plantillas hasta tener todos los dispositivos actualizados. (Opcional futuro con aprobación: merge defensivo en el worker; auto-pull ligero.)
+
+**Orden de implementación**: F1 → F3 → F2 → F4 → F5 (primero la base paramétrica, luego la regla crítica del reloj, después el interruptor, lo informativo y al final la propagación). Cada fase: `tsc --noEmit` (cero errores NUEVOS) + `vite build` + prueba manual del flujo + commit/push incremental + bitácora.
+
+**Decisiones abiertas para el propietario (mínimas, con propuesta):**
+1. ¿Fin de jornada por plantilla con fallback a settings? → PROPUESTO: sí (F1/F3).
+2. ¿Fines de semana: escaneo bloqueado? → PROPUESTO: sí (hoy se puede; la ventana null lo bloquea; el docente conserva el override manual).
+3. ¿DIA_ESPECIAL: escaneo permitido en ventana y cero ausencias? → PROPUESTO: sí (no-computable ya lo garantiza en el cierre).
+4. ¿Pull manual o auto-pull para plantillas? → PROPUESTO: manual al inicio (menos riesgo).
+
+**Pasos NO realizados hoy (por orden explícita de no tocar código):** todo el código de F1-F5 queda pendiente; hoy solo investigación, este plan y documentación. El worker NO requiere re-deploy para F1-F5 (es frontend + datos del snapshot).
+
 ---
 
 ## 🚀 4. Hoja de Ruta y Pasos a Seguir
@@ -169,6 +229,7 @@ El sistema implementa una arquitectura híbrida de alta resiliencia y **Costo Ce
 3. Ejecutar pruebas de escaneo continuo y verificar la réplica en D1 y KV (usar la guía de prueba de sincronización entregada al propietario; el primer "Sincronizar ahora" desde la app creará el snapshot real).
 4. Validar sincronización bidireccional entre 2 dispositivos simultáneos (PC + Móvil docente).
 5. Decidir si se configura `AUTH_TOKEN` (hoy: acceso abierto).
+6. **Siguiente frente (plan completo arriba, Ronda 4): implementar F1→F3→F2→F4→F5 cuando el propietario dé luz verde (revisión 02/09/2026).**
 
 ### ⏳ Fase Futura Planificada: Módulo de Excusas Médicas / Permisos Anticipados y Buzón Escolar
 - **Propósito:** Permitir a los estudiantes/acudientes reportar inasistencias programadas (citas médicas, incapacidades, calamidades) fuera del horario lectivo (después de la 1:00 p.m. o fines de semana) para proteger su registro de asistencia.
