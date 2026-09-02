@@ -498,6 +498,41 @@ await section('O. Autogestión docente — integración UI (fuente)', () => {
 });
 
 // =====================================================================
+await section('P. BUG-5 — secreto QR aleatorio en primer arranque + UX (fuente)', () => {
+  const hardcoded = 'INAS-HMAC-QR-SECRET-COL-2026';
+
+  const s1 = svc.generateRandomSecret();
+  const s2 = svc.generateRandomSecret();
+  check('secreto aleatorio: 64 hex', /^[0-9a-f]{64}$/.test(s1), s1.slice(0, 12));
+  check('dos generaciones difieren', s1 !== s2);
+
+  // Primer arranque: sin ajustes persistidos → qrSecret aleatorio (NO el hardcodeado) y persistido
+  (globalThis as any).localStorage.clear();
+  const fresh = svc.getSettings();
+  check('primer arranque: qrSecret aleatorio ≠ hardcodeado', fresh.qrSecret && fresh.qrSecret !== hardcoded, fresh.qrSecret.slice(0, 12));
+  const again = svc.getSettings();
+  check('persistido: segunda lectura devuelve el MISMO secreto', again.qrSecret === fresh.qrSecret);
+
+  // La firma HMAC funciona igual con el secreto generado (roundtrip carné)
+  svc.resetToDemo(); // restaura ajustes demo (hardcoded) — estado limpio para lo que siga
+  const settingsNow = svc.getSettings();
+  check('resetToDemo restaura ajustes demo', settingsNow.qrSecret === hardcoded);
+});
+
+// =====================================================================
+await section('Q. Etapa 5 — integración UI (fuente)', () => {
+  const sm = readFileSync('src/components/SettingsModal.tsx', 'utf8');
+  check('Ajustes: qrSecret enmascarado con ojo (BUG-5)', sm.includes('showQrSecret') && sm.includes("type={showQrSecret ? 'text' : 'password'}"));
+  check('Ajustes: ojo con aria-label accesible', sm.includes('aria-label={showQrSecret'));
+
+  const main = readFileSync('src/main.tsx', 'utf8');
+  check('validación nativa en español (handler global invalid/input/change)', main.includes("addEventListener('invalid'") && main.includes('Este campo es obligatorio.') && main.includes("addEventListener('input'"));
+
+  const storage = readFileSync('src/services/attendanceStorage.ts', 'utf8');
+  check('servicio: primer arranque con secreto aleatorio persistido', storage.includes('generateRandomSecret') && storage.includes('Primer arranque real'));
+});
+
+// =====================================================================
 console.log('\n════════════════════════════════════════');
 console.log(`RESULTADO: ${passed} OK · ${failed} FALLOS · ${skipped} SKIP`);
 if (failures.length) {

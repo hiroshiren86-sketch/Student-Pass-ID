@@ -51,6 +51,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ onClose }) => {
   const [isPullingCloudflare, setIsPullingCloudflare] = useState(false);
   const [showApiKey, setShowApiKey] = useState(false);
   const [showCloudflareToken, setShowCloudflareToken] = useState(false);
+  const [showQrSecret, setShowQrSecret] = useState(false); // Ronda 19 (BUG-5): el dueño puede necesitar copiarlo a otro dispositivo
   const [availableModels, setAvailableModels] = useState<Array<{ id: string; name: string; isRecommended?: boolean; isVision?: boolean; description?: string }>>([]);
   const [isLoadingModels, setIsLoadingModels] = useState(false);
   const [modelsFetchStatus, setModelsFetchStatus] = useState<string | null>(null);
@@ -706,15 +707,25 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ onClose }) => {
             </label>
             <div className="relative">
               <ShieldCheck className="w-4 h-4 text-emerald-500 absolute left-3 top-1/2 -translate-y-1/2" />
+              {/* Ronda 19 (BUG-5): enmascarado por defecto (password) + ojo para copiarlo al
+                  siguiente dispositivo — los secrets no viajan en el sync, por diseño */}
               <input
-                type="password"
+                type={showQrSecret ? 'text' : 'password'}
                 value={settings.qrSecret}
                 onChange={(e) => handleChange('qrSecret', e.target.value)}
-                className="w-full bg-white dark:bg-black border border-slate-300 dark:border-zinc-800 focus:border-indigo-500 text-slate-900 dark:text-white text-xs pl-9 pr-3 py-2 rounded-xl outline-none font-mono shadow-xs"
+                className="w-full bg-white dark:bg-black border border-slate-300 dark:border-zinc-800 focus:border-indigo-500 text-slate-900 dark:text-white text-xs pl-9 pr-9 py-2 rounded-xl outline-none font-mono shadow-xs"
               />
+              <button
+                type="button"
+                onClick={() => setShowQrSecret(!showQrSecret)}
+                className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200"
+                aria-label={showQrSecret ? 'Ocultar secreto QR' : 'Mostrar secreto QR para copiarlo'}
+              >
+                {showQrSecret ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+              </button>
             </div>
             <span className="text-[10px] text-slate-500 dark:text-slate-400 block mt-1">
-              Firma criptográfica determinista de carnés escolares
+              Firma criptográfica de carnés y QR de Clase. Se genera aleatorio en el primer arranque; cópialo manualmente al siguiente dispositivo (no viaja en el sync).
             </span>
           </div>
 

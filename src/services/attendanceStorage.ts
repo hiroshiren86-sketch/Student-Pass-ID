@@ -128,6 +128,23 @@ export class AttendanceStorageService {
   // ==================== SETTINGS ====================
   private static isCloudSyncInitialized = false;
 
+  /**
+   * Ronda 19 (BUG-5 del informe): secreto aleatorio por colegio generado en el PRIMER
+   * arranque y persistido de inmediato. El secreto por defecto del repo es conocido por
+   * cualquiera con acceso al código — un carné firmado con él es falsificable. Multidispositivo:
+   * el dueño copia el secreto una sola vez desde Ajustes (los secrets NO viajan en el sync,
+   * por diseño de safeSettingsCopy). resetToDemo NO rota: no rompe carnés ya impresos.
+   */
+  static generateRandomSecret(bytes: number = 32): string {
+    try {
+      const arr = new Uint8Array(bytes);
+      crypto.getRandomValues(arr);
+      return Array.from(arr).map(b => b.toString(16).padStart(2, '0')).join('');
+    } catch {
+      return `INAS-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 14)}`.toUpperCase();
+    }
+  }
+
   static getSettings(): SchoolSettings {
     try {
       const stored = localStorage.getItem(SETTINGS_KEY);
@@ -143,7 +160,10 @@ export class AttendanceStorageService {
         }
       }
     } catch {}
-    return DEFAULT_SCHOOL_SETTINGS;
+    // Primer arranque real (sin ajustes persistidos): qrSecret aleatorio, no el del repo
+    const fresh: SchoolSettings = { ...DEFAULT_SCHOOL_SETTINGS, qrSecret: this.generateRandomSecret() };
+    try { localStorage.setItem(SETTINGS_KEY, JSON.stringify(fresh)); } catch {}
+    return fresh;
   }
 
   static saveSettings(settings: SchoolSettings, syncToCloud = true): void {
