@@ -36,6 +36,16 @@ import { Student, AttendanceRecord, SchoolSettings, Teacher, ScheduleSlot, Atten
 import { AttendanceStorageService, getTodayDateString, getCurrentTimeString } from '../services/attendanceStorage';
 import { SoundService } from '../utils/sound';
 
+// Ronda 19 — autogestión docente: días para "Mis Cátedras"
+const DAYS_OF_WEEK = [
+  { id: 1, name: 'Lunes' },
+  { id: 2, name: 'Martes' },
+  { id: 3, name: 'Miércoles' },
+  { id: 4, name: 'Jueves' },
+  { id: 5, name: 'Viernes' },
+  { id: 6, name: 'Sábado' }
+];
+
 interface TeacherClassroomViewProps {
   teacher?: Teacher;
   teacherName?: string;
@@ -89,22 +99,35 @@ export const TeacherClassroomView: React.FC<TeacherClassroomViewProps> = ({
   const [delegatedStudentCode, setDelegatedStudentCode] = useState<string>('');
   const [latestDelegation, setLatestDelegation] = useState<EphemeralScanDelegation | null>(null);
 
+  // Ronda 19 — Autogestión docente (roadmap #3.2 del informe): "Mis Cátedras"
+  const [showMyAssignments, setShowMyAssignments] = useState<boolean>(false);
+  const [myAsgForm, setMyAsgForm] = useState<{ dayOfWeek: number; slotId: string; grade: string; subject: string; classroom: string }>(() => ({
+    dayOfWeek: new Date().getDay() || 1,
+    slotId: '',
+    grade: '',
+    subject: '',
+    classroom: ''
+  }));
+  const [myAsgError, setMyAsgError] = useState<string>('');
+  const [myAsgVersion, setMyAsgVersion] = useState<number>(0); // fuerza re-render de la lista al crear/borrar
+
   // Ronda 19 (hallazgo 10 del informe): Escape cierra los modales de este módulo — el de
   // Delegación era el único que ignoraba la tecla (había que pulsar "Cancelar"). Patrón
   // Regla E10 / ConfirmDialog: listener global mientras el modal está abierto.
   useEffect(() => {
-    if (!showRepModal && !showSubRepModal && !showDelegationModal) return;
+    if (!showRepModal && !showSubRepModal && !showDelegationModal && !showMyAssignments) return;
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
         e.stopPropagation();
         setShowRepModal(false);
         setShowSubRepModal(false);
         setShowDelegationModal(false);
+        setShowMyAssignments(false);
       }
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [showRepModal, showSubRepModal, showDelegationModal]);
+  }, [showRepModal, showSubRepModal, showDelegationModal, showMyAssignments]);
 
   // Reloj vivo + ventana de aviso de fin de bloque (T-{n}) — notificación única por bloque/día
   const [nowMinuteOfDay, setNowMinuteOfDay] = useState<number>(() => {
@@ -921,7 +944,18 @@ export const TeacherClassroomView: React.FC<TeacherClassroomViewProps> = ({
             Activar en este dispositivo
           </button>
 
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 flex-wrap">
+            <button
+              type="button"
+              onClick={() => setShowMyAssignments(true)}
+              className="py-2.5 px-3 bg-emerald-50 dark:bg-emerald-950/60 border border-emerald-300 dark:border-emerald-800 text-emerald-700 dark:text-emerald-300 hover:bg-emerald-100 dark:hover:bg-emerald-900/60 rounded-xl text-xs font-bold flex items-center gap-2 transition-all"
+              title="Carga tú mismo tus cátedras: solo las tuyas, sin esperar a Rectoría"
+              aria-label="Abrir Mis Cátedras (autogestión de horario)"
+            >
+              <BookOpen className="w-4 h-4" />
+              <span>Mis Cátedras</span>
+            </button>
+
             <button
               type="button"
               onClick={() => {
@@ -929,8 +963,8 @@ export const TeacherClassroomView: React.FC<TeacherClassroomViewProps> = ({
                 else startCamera();
               }}
               className={`py-2.5 px-4 rounded-xl text-xs font-bold flex items-center gap-2 transition-all ${
-                cameraActive 
-                  ? 'bg-rose-600 text-white hover:bg-rose-700 shadow-md shadow-rose-600/30' 
+                cameraActive
+                  ? 'bg-rose-600 text-white hover:bg-rose-700 shadow-md shadow-rose-600/30'
                   : 'bg-indigo-600 text-white hover:bg-indigo-500 shadow-md shadow-indigo-600/30'
               }`}
             >
@@ -1326,6 +1360,149 @@ export const TeacherClassroomView: React.FC<TeacherClassroomViewProps> = ({
                   {s.isSubstituteRepresentative && <span className="text-indigo-600 dark:text-indigo-400 font-black">★ Actual</span>}
                 </button>
               ))}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Ronda 19 — Modal: Mis Cátedras (autogestión docente — roadmap #3.2 del informe) */}
+      {showMyAssignments && teacher && (
+        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4" role="dialog" aria-modal="true" aria-label="Mis Cátedras">
+          <div className="bg-white dark:bg-zinc-950 rounded-3xl p-6 w-full max-w-xl border border-slate-200 dark:border-zinc-800/50 shadow-2xl space-y-4 max-h-[90vh] overflow-y-auto">
+            <div className="flex items-center justify-between">
+              <h3 className="text-base font-black text-slate-900 dark:text-white flex items-center gap-2">
+                <BookOpen className="w-5 h-5 text-emerald-500" />
+                <span>Mis Cátedras ({teacher.fullName.split(' ').slice(0, 2).join(' ')})</span>
+              </h3>
+              <button
+                type="button"
+                onClick={() => setShowMyAssignments(false)}
+                className="p-1.5 text-slate-400 hover:text-slate-600 dark:hover:text-white rounded-xl hover:bg-slate-100 dark:hover:bg-slate-800"
+                aria-label="Cerrar Mis Cátedras"
+              >
+                ✕
+              </button>
+            </div>
+
+            <p className="text-xs text-slate-500 dark:text-slate-400 leading-relaxed">
+              Carga tú mismo las cátedras de TU horario: el trabajo se distribuye y Rectoría no tiene que llenar {AttendanceStorageService.getUniqueGrades().length * 5 * 6} celdas a mano.
+              Solo ves y editas las tuyas; una celda asignada a otro docente no se puede pisar y el sistema avisa si tienes cruce de horario.
+            </p>
+
+            {/* Lista de cátedras propias */}
+            <div key={myAsgVersion} className="space-y-1.5 max-h-48 overflow-y-auto">
+              {AttendanceStorageService.getTeacherOwnAssignments(teacher.id).length === 0 ? (
+                <p className="text-xs text-slate-400 font-bold py-3 text-center">Aún no has registrado cátedras. Añade la primera abajo.</p>
+              ) : (
+                AttendanceStorageService.getTeacherOwnAssignments(teacher.id).map(a => (
+                  <div key={a.id} className="flex items-center justify-between gap-2 p-2.5 rounded-xl bg-slate-50 dark:bg-slate-900/60 border border-slate-200 dark:border-zinc-800">
+                    <div className="text-xs min-w-0">
+                      <span className="font-black text-slate-900 dark:text-white">{a.subject}</span>
+                      <span className="text-slate-500 dark:text-slate-400"> · {a.grade} · {DAYS_OF_WEEK.find(d => d.id === a.dayOfWeek)?.name || `Día ${a.dayOfWeek}`} · {scheduleSlots.find(s => s.id === a.slotId)?.name || a.slotId}{a.classroom ? ` · ${a.classroom}` : ''}</span>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setConfirmState({
+                          title: 'Eliminar cátedra',
+                          message: `¿Quitar "${a.subject}" (${a.grade}, ${scheduleSlots.find(s => s.id === a.slotId)?.name || a.slotId})? Los escaneos ya registrados no se tocan.`,
+                          action: () => {
+                            AttendanceStorageService.removeTeacherOwnAssignment(teacher.id, a.grade, a.slotId, a.dayOfWeek);
+                            setMyAsgVersion(v => v + 1);
+                          }
+                        });
+                      }}
+                      className="text-rose-500 hover:text-rose-700 text-[11px] font-black shrink-0"
+                      aria-label={`Eliminar cátedra ${a.subject} de ${a.grade}`}
+                    >
+                      Quitar
+                    </button>
+                  </div>
+                ))
+              )}
+            </div>
+
+            {/* Formulario de nueva cátedra */}
+            <div className="p-3 rounded-2xl bg-slate-50 dark:bg-slate-900/60 border border-slate-200 dark:border-zinc-800 space-y-2.5">
+              <p className="text-[11px] font-black text-slate-500 dark:text-slate-400 uppercase">Añadir / actualizar cátedra</p>
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                <select
+                  value={myAsgForm.dayOfWeek}
+                  onChange={(e) => setMyAsgForm({ ...myAsgForm, dayOfWeek: Number(e.target.value) })}
+                  className="p-2 bg-white dark:bg-black border border-slate-200 dark:border-zinc-800 rounded-xl text-xs font-bold"
+                  aria-label="Día de la semana"
+                >
+                  {DAYS_OF_WEEK.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
+                </select>
+                <select
+                  value={myAsgForm.slotId}
+                  onChange={(e) => setMyAsgForm({ ...myAsgForm, slotId: e.target.value })}
+                  className="p-2 bg-white dark:bg-black border border-slate-200 dark:border-zinc-800 rounded-xl text-xs font-bold"
+                  aria-label="Bloque de clase"
+                >
+                  <option value="">Bloque…</option>
+                  {scheduleSlots.filter(s => s.type === 'CLASS').map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+                </select>
+                <select
+                  value={myAsgForm.grade}
+                  onChange={(e) => setMyAsgForm({ ...myAsgForm, grade: e.target.value })}
+                  className="p-2 bg-white dark:bg-black border border-slate-200 dark:border-zinc-800 rounded-xl text-xs font-bold"
+                  aria-label="Curso"
+                >
+                  <option value="">Curso…</option>
+                  {AttendanceStorageService.getUniqueGrades().map(g => <option key={g} value={g}>{g}</option>)}
+                </select>
+                <input
+                  type="text"
+                  value={myAsgForm.classroom}
+                  onChange={(e) => setMyAsgForm({ ...myAsgForm, classroom: e.target.value })}
+                  placeholder="Aula (opcional)"
+                  className="p-2 bg-white dark:bg-black border border-slate-200 dark:border-zinc-800 rounded-xl text-xs font-bold"
+                  aria-label="Aula opcional"
+                />
+              </div>
+              <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2">
+                <input
+                  type="text"
+                  value={myAsgForm.subject}
+                  onChange={(e) => setMyAsgForm({ ...myAsgForm, subject: e.target.value })}
+                  placeholder="Materia (ej: Matemáticas)"
+                  className="flex-1 p-2 bg-white dark:bg-black border border-slate-200 dark:border-zinc-800 rounded-xl text-xs font-bold"
+                  aria-label="Materia"
+                />
+                <button
+                  type="button"
+                  onClick={() => {
+                    setMyAsgError('');
+                    const res = AttendanceStorageService.upsertTeacherOwnAssignment(
+                      { id: teacher.id, fullName: teacher.fullName },
+                      { dayOfWeek: myAsgForm.dayOfWeek, slotId: myAsgForm.slotId, grade: myAsgForm.grade, subject: myAsgForm.subject, classroom: myAsgForm.classroom || undefined }
+                    );
+                    if (!res.ok) {
+                      setMyAsgError(res.error || 'No se pudo guardar la cátedra.');
+                      return;
+                    }
+                    setMyAsgVersion(v => v + 1);
+                    setMyAsgForm({ ...myAsgForm, subject: '' });
+                  }}
+                  className="py-2 px-4 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-bold transition-all shadow-md shadow-emerald-600/30 shrink-0"
+                >
+                  Guardar cátedra
+                </button>
+              </div>
+              {myAsgError && (
+                <p className="text-[11px] font-bold text-rose-600 dark:text-rose-400">{myAsgError}</p>
+              )}
+            </div>
+
+            <div className="flex items-center justify-end">
+              <button
+                type="button"
+                onClick={() => setShowMyAssignments(false)}
+                className="py-2 px-4 bg-slate-900 dark:bg-white text-white dark:text-slate-900 rounded-xl text-xs font-bold"
+              >
+                Listo
+              </button>
             </div>
           </div>
         </div>

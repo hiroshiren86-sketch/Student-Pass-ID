@@ -438,6 +438,66 @@ await section('M. Importación — integración UI (fuente, como suite R18)', ()
 });
 
 // =====================================================================
+await section('N. Autogestión docente — guardas de negocio', () => {
+  svc.resetToDemo();
+  const teachers = svc.getTeachers();
+  const prof1 = teachers.find((t: any) => t.id === 'prof-1'); // Juan Pablo Pérez Gómez
+  const prof2 = teachers.find((t: any) => t.id === 'prof-2');
+  check('docentes demo presentes', !!prof1 && !!prof2);
+
+  const own = svc.getTeacherOwnAssignments('prof-1');
+  check('prof-1 ve solo SUS cátedras (sinitras por teacherId)', own.length > 0 && own.every((a: any) => a.teacherId === 'prof-1'), `n=${own.length}`);
+
+  // Guarda 1: celda de OTRO docente no se pisa (as-1: lunes slot-1 10°1 = prof-1)
+  const cellTaken = svc.upsertTeacherOwnAssignment({ id: 'prof-2', fullName: 'María Camila Restrepo Henao' }, { dayOfWeek: 1, slotId: 'slot-1', grade: '10°1', subject: 'Hackeo' });
+  check('celda ajena → rechazada con mensaje claro', cellTaken.ok === false && cellTaken.error?.includes('ya está asignada'), cellTaken.error);
+
+  // Actualizar celda PROPIA → OK y conserva el mismo id (upsert real)
+  const own1 = own[0];
+  const upd = svc.upsertTeacherOwnAssignment({ id: 'prof-1', fullName: prof1.fullName }, { dayOfWeek: own1.dayOfWeek, slotId: own1.slotId, grade: own1.grade, subject: 'Matemáticas Avanzada', classroom: 'Aula 204' });
+  const afterUpd = svc.getScheduleAssignments().find((a: any) => a.id === own1.id);
+  check('actualizar celda propia → OK', upd.ok === true, upd.error);
+  check('upsert conserva el id de la asignación', !!afterUpd && afterUpd.subject === 'Matemáticas Avanzada');
+
+  // Crear cátedra nueva en celda libre → OK
+  const free = svc.upsertTeacherOwnAssignment({ id: 'prof-1', fullName: prof1.fullName }, { dayOfWeek: 5, slotId: 'slot-6', grade: '11°1', subject: 'Física', classroom: 'Aula 301' });
+  check('celda libre → creación OK', free.ok === true, free.error);
+
+  // Guarda 2: cruce de horario (prof-1 viernes slot-6 11°1 recién creado → mismo bloque otro curso)
+  const cross = svc.upsertTeacherOwnAssignment({ id: 'prof-1', fullName: prof1.fullName }, { dayOfWeek: 5, slotId: 'slot-6', grade: '10°2', subject: 'Química' });
+  check('cruce docente → rechazado', cross.ok === false && cross.error?.includes('Cruce de horario'), cross.error);
+
+  // removeTeacherOwnAssignment: solo las propias
+  const stolen = svc.removeTeacherOwnAssignment('prof-2', '11°1', 'slot-6', 5);
+  check('no puede borrar cátedra ajena', stolen === false);
+  const ownDel = svc.removeTeacherOwnAssignment('prof-1', '11°1', 'slot-6', 5);
+  check('borra su propia cátedra', ownDel === true);
+
+  // Materia vacía / bloque no-CLASE
+  const bad1 = svc.upsertTeacherOwnAssignment({ id: 'prof-1', fullName: prof1.fullName }, { dayOfWeek: 1, slotId: 'slot-1', grade: '10°1', subject: '   ' });
+  check('materia vacía → rechazada', bad1.ok === false && bad1.error?.includes('materia'));
+  const recessSlot = svc.getScheduleSlots().find((s: any) => s.type !== 'CLASS');
+  if (recessSlot) {
+    const bad2 = svc.upsertTeacherOwnAssignment({ id: 'prof-1', fullName: prof1.fullName }, { dayOfWeek: 1, slotId: recessSlot.id, grade: '10°1', subject: 'X' });
+    check('bloque no-CLASE → rechazado', bad2.ok === false && bad2.error?.includes('bloque'));
+  }
+
+  svc.resetToDemo();
+});
+
+// =====================================================================
+await section('O. Autogestión docente — integración UI (fuente)', () => {
+  const tcv = readFileSync('src/components/TeacherClassroomView.tsx', 'utf8');
+  check('botón Mis Cátedras en el aula', tcv.includes('Mis Cátedras') && tcv.includes('upsertTeacherOwnAssignment'));
+  check('modal usa ConfirmDialog para borrar cátedra', tcv.includes('removeTeacherOwnAssignment') && tcv.includes('setConfirmState'));
+  check('modal Mis Cátedras cierra con Escape', tcv.includes('setShowMyAssignments(false)') && tcv.includes("e.key === 'Escape'"));
+
+  const storage = readFileSync('src/services/attendanceStorage.ts', 'utf8');
+  check('servicio: guardas celda ajena + cruce docente', storage.includes('ya está asignada a') && storage.includes('Cruce de horario'));
+  check('servicio: borrado solo-propias', storage.includes('target.teacherId !== teacherId'));
+});
+
+// =====================================================================
 console.log('\n════════════════════════════════════════');
 console.log(`RESULTADO: ${passed} OK · ${failed} FALLOS · ${skipped} SKIP`);
 if (failures.length) {

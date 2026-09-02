@@ -1389,6 +1389,75 @@ export class AttendanceStorageService {
     return { applied, removed };
   }
 
+  // ==================== AUTOGESTIÓN DOCENTE (Ronda 19 — informe, roadmap #3.2) ====================
+  // El trabajo de cargar horarios se distribuye: cada docente ve y administra SOLO sus
+  // cátedras. Guardas de negocio: (1) no puede pisar una celda asignada a OTRO docente;
+  // (2) no puede estar en dos cursos al mismo tiempo (checkTeacherConflict).
+
+  static getTeacherOwnAssignments(teacherId: string): ClassScheduleAssignment[] {
+    return this.getScheduleAssignments()
+      .filter(a => a.teacherId === teacherId)
+      .sort((a, b) => (a.dayOfWeek - b.dayOfWeek) || a.slotId.localeCompare(b.slotId));
+  }
+
+  /**
+   * Crea o actualiza una cátedra del propio docente. Devuelve { ok } o { ok:false, error }
+   * con mensaje en español listo para mostrar. Jamás toca celdas de otros docentes.
+   */
+  static upsertTeacherOwnAssignment(teacher: { id?: string; fullName: string }, params: {
+    dayOfWeek: number;
+    slotId: string;
+    grade: string;
+    subject: string;
+    classroom?: string;
+  }): { ok: boolean; error?: string } {
+    const teacherId = teacher.id;
+    if (!teacherId) return { ok: false, error: 'Sesión de docente sin identificador; recarga e intenta de nuevo.' };
+
+    const slot = this.getScheduleSlots().find(s => s.id === params.slotId && s.type === 'CLASS');
+    if (!slot) return { ok: false, error: 'El bloque seleccionado no es un bloque de clase.' };
+    if (params.dayOfWeek < 1 || params.dayOfWeek > 6) return { ok: false, error: 'El día debe ser Lunes (1) a Sábado (6).' };
+    if (!params.subject.trim()) return { ok: false, error: 'La materia no puede estar vacía.' };
+
+    // Guarda 1: la celda (grado, día, bloque) ya tiene cátedra de OTRO docente → no se pisa
+    const existing = this.getScheduleAssignments().find(a =>
+      a.grade === params.grade && a.slotId === params.slotId && a.dayOfWeek === params.dayOfWeek
+    );
+    if (existing && existing.teacherId && existing.teacherId !== teacherId) {
+      return { ok: false, error: `"${slot.name}" del ${params.grade} ya está asignada a ${existing.teacherName}. Pide a Rectoría que la reasigne.` };
+    }
+
+    // Guarda 2: cruce de horario SOLO al OCUPAR una celda nueva. Si la celda ya era suya,
+    // actualizar materia/aula no cambia la ocupación espacio-temporal: bloquearlo impediría
+    // editar horarios con conflictos heredados del propio dato (p. ej. semillas del demo).
+    const isOwnUpdate = !!existing && existing.teacherId === teacherId;
+    if (!isOwnUpdate) {
+      const conflict = this.checkTeacherConflict({ teacherId, dayOfWeek: params.dayOfWeek, slotId: params.slotId, excludeGrade: params.grade });
+      if (conflict?.conflict) {
+        return { ok: false, error: `Cruce de horario: ya tienes ${conflict.conflictingSubject} con ${conflict.conflictingGrade} en ${conflict.slotName || 'ese bloque'}.` };
+      }
+    }
+
+    this.setAssignment({
+      dayOfWeek: params.dayOfWeek,
+      slotId: params.slotId,
+      grade: params.grade,
+      subject: params.subject.trim(),
+      teacherId,
+      teacherName: teacher.fullName,
+      classroom: params.classroom,
+      id: existing?.id // conserva el id si era suya (actualización)
+    });
+    return { ok: true };
+  }
+
+  static removeTeacherOwnAssignment(teacherId: string, grade: string, slotId: string, dayOfWeek: number): boolean {
+    const target = this.getScheduleAssignments().find(a => a.grade === grade && a.slotId === slotId && a.dayOfWeek === dayOfWeek);
+    if (!target || target.teacherId !== teacherId) return false; // solo las propias
+    this.removeAssignment(grade, slotId, dayOfWeek);
+    return true;
+  }
+
   // ==================== ATTENDANCE RECORDS (CLASS BASED) ====================
   static getAllAttendance(): AttendanceRecord[] {
     try {
