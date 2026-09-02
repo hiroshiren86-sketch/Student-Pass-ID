@@ -26,6 +26,7 @@ import { generateStudentCardPdf, downloadPdfBlob } from '../utils/pdfGenerator';
 import { matchStudentFuzzy, normalizeDocumentOrCode } from '../utils/searchHelper';
 import { generateBarcodeDataUrl } from '../utils/barcode';
 import { DocumentUploadModal } from './DocumentUploadModal';
+import { ConfirmDialog } from './ConfirmDialog';
 import { normalizeGradeName, isValidGrade } from '../utils/documentParser';
 import { compressImageFile } from '../utils/imageCompressor';
 
@@ -45,6 +46,8 @@ export const StudentsManagerView: React.FC<StudentsManagerViewProps> = ({ onGene
   const [justSavedStudent, setJustSavedStudent] = useState<Student | null>(null);
   const [inspectStudent, setInspectStudent] = useState<Student | null>(null);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
+  // Ronda 18 (H4): confirmación propia para eliminar estudiante (antes confirm() nativo)
+  const [deleteConfirm, setDeleteConfirm] = useState<{ title: string; message: string; action: () => void } | null>(null);
   const singlePhotoInputRef = useRef<HTMLInputElement>(null);
 
   const uniqueGrades = AttendanceStorageService.getUniqueGrades();
@@ -214,10 +217,15 @@ export const StudentsManagerView: React.FC<StudentsManagerViewProps> = ({ onGene
   };
 
   const handleDelete = (code: string, name: string) => {
-    if (confirm(`¿Eliminar al estudiante ${name} (${code})?`)) {
-      AttendanceStorageService.deleteStudent(code);
-      refreshList();
-    }
+    // Ronda 18 (H4): ConfirmDialog propio del sistema en lugar de confirm() nativo
+    setDeleteConfirm({
+      title: 'Eliminar estudiante',
+      message: `¿Eliminar al estudiante ${name} (${code})? Esta acción no se puede deshacer.`,
+      action: () => {
+        AttendanceStorageService.deleteStudent(code);
+        refreshList();
+      }
+    });
   };
 
   return (
@@ -879,6 +887,15 @@ export const StudentsManagerView: React.FC<StudentsManagerViewProps> = ({ onGene
           }
           setTimeout(() => setToastMessage(null), 4000);
         }}
+      />
+    
+      {/* Ronda 18 (H4): modal de confirmación propio (reemplaza confirm() nativo) */}
+      <ConfirmDialog
+        open={!!deleteConfirm}
+        title={deleteConfirm?.title || ''}
+        message={deleteConfirm?.message || ''}
+        onConfirm={() => { const a = deleteConfirm?.action; setDeleteConfirm(null); a?.(); }}
+        onCancel={() => setDeleteConfirm(null)}
       />
     </div>
   );

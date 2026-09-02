@@ -1,27 +1,27 @@
 rules_version = '2';
 
 /**
- * Ronda 16 (auditoría integral, 02/09/2026) — Reglas de Firestore RE-endurecidas.
+ * Ronda 18 (02/09/2026) — Reglas de Firestore ENDURECIDAS con sesión obligatoria.
  *
- * La Ronda 9 del agente anterior abrió TODA la base de datos con
- * `allow read, write: if true` (incluida la catch-all `/{document=**}` y una
- * colección /test pública), dejando estudiantes, docentes y asistencias del INAS
- * legibles/escritibles por CUALQUIER persona de internet. Esto se revierte aquí.
+ * Historia:
+ *  - Ronda 9 (agente anterior): `allow read, write: if true` GLOBAL — toda la base
+ *    pública en internet. REVERTIDO en Ronda 16.
+ *  - Ronda 16: catch-all DENY + 5 colecciones operativas aún abiertas (`if true`)
+ *    porque Anonymous NO estaba habilitado y las terminales operaban sin sesión.
+ *  - Ronda 18 (HOY): el propietario HABILITÓ Firebase Anonymous (verificado por REST:
+ *    accounts:signUp → 200 con idToken anónimo) y el frontend ya espera la sesión
+ *    (ensureAnonymousAuth con espera controlada) antes de tocar Firestore.
+ *    ⇒ Las 5 colecciones operativas pasan a `isAuthenticated()`.
  *
- * ESTADO ACTUAL (sin regresión funcional):
- *  - La app sincroniza sin sesión Firebase (terminales offline-first) y el proyecto
- *    aún NO tiene Firebase Authentication → Anonymous habilitado (verificado por REST:
- *    accounts:signUp responde ADMIN_ONLY_OPERATION).
- *  - Por eso las 5 colecciones operativas siguen accesibles, pero LIMITADAS a
- *    exactamente las colecciones que usa la app (auditado en src/services/firebase.ts).
- *  - `users` vuelve a ser owner-only (solo se escribe en flujos autenticados).
- *  - Todo lo demás queda DENEGADO por defecto (catch-all explícito en deny).
+ * ⚠ ORDEN DE DESPLIEGUE OBLIGATORIO:
+ *  1. Desplegar PRIMERO el código de la app (este push ya lo hace vía Cloudflare Pages).
+ *  2. DESPUÉS desplegar estas reglas (deploy_firebase del agente de infraestructura).
+ *  Si se hacen en orden inverso, las terminales con la app vieja (sin espera de
+ *  sesión) verían "Missing or insufficient permissions" hasta recargar.
  *
- * ENDURECIMIENTO DEFINITIVO (cuando el propietario habilite "Anonymous" en
- * Firebase Console → Authentication → Sign-in method):
- *  1. El frontend ya llama FirebaseService.ensureAnonymousAuth() al arrancar (Ronda 16).
- *  2. Reemplazar el `if true` de las 5 colecciones operativas por
- *     `if isAuthenticated()` y borrar la nota. Sin consola, NO aplicar (rompería sync).
+ * Endurecimiento definitivo (App Check con reCAPTCHA v3): ver AGENTS.md. Con App
+ * Check en enforcement, las reglas pueden además exigir `request.auth != null &&
+ * request.app`... vía verifyAppCheck() — se documenta pero NO se aplica hoy.
  */
 service cloud.firestore {
   match /databases/{database}/documents {
@@ -37,37 +37,37 @@ service cloud.firestore {
     }
 
     // ===== Colecciones operativas del colegio (las únicas que usa la app) =====
-    // Abiertas POR NECESIDAD OPERATIVA actual (sync sin sesión); cerradas a
-    // colecciones inexistentes. Ver encabezado para el endurecimiento definitivo.
+    // Ronda 18: exigir sesión (anónima o de correo) — Anonymous ya está habilitado
+    // y el frontend espera la sesión antes de leer/escribir (ensureAnonymousAuth).
 
     // Configuración institucional (doc 'main'; los secretos YA NO se suben — Ronda 16)
     match /school_settings/{settingId} {
-      allow read: if true;
-      allow write: if true;
+      allow read: if isAuthenticated();
+      allow write: if isAuthenticated();
     }
 
     // Estudiantes (carnés, fotos ya comprimidas client-side)
     match /students/{studentId} {
-      allow read: if true;
-      allow write: if true;
+      allow read: if isAuthenticated();
+      allow write: if isAuthenticated();
     }
 
     // Docentes
     match /teachers/{teacherId} {
-      allow read: if true;
-      allow write: if true;
+      allow read: if isAuthenticated();
+      allow write: if isAuthenticated();
     }
 
     // Registros de asistencia
     match /attendance_records/{recordId} {
-      allow read: if true;
-      allow write: if true;
+      allow read: if isAuthenticated();
+      allow write: if isAuthenticated();
     }
 
     // Asignaciones docente-materia-bloque
     match /schedule_assignments/{assignmentId} {
-      allow read: if true;
-      allow write: if true;
+      allow read: if isAuthenticated();
+      allow write: if isAuthenticated();
     }
 
     // ===== TODO LO DEMÁS: DENEGADO =====

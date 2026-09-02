@@ -319,7 +319,7 @@ export const ScanHubView: React.FC<ScanHubViewProps> = ({ onScanSuccess }) => {
           <div className="py-2">
             <CameraScanner 
               onScan={(code) => handleExecuteScan(code, 'CAMERA')} 
-              isProcessing={isProcessing}
+              isPaused={isProcessing}
             />
           </div>
         )}
@@ -401,7 +401,7 @@ export const ScanHubView: React.FC<ScanHubViewProps> = ({ onScanSuccess }) => {
                     {record.studentName}
                   </p>
                   <p className="text-[10px] text-slate-400 font-mono mt-0.5">
-                    {record.grade} • DOC: {record.studentDocument} • {record.time}
+                    {record.studentGrade} • DOC: {record.studentDocument} • {record.time}
                   </p>
                 </div>
                 <div className="flex items-center gap-1.5 shrink-0">

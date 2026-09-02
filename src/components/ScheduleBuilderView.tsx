@@ -702,7 +702,7 @@ export const ScheduleBuilderView: React.FC = () => {
                                 <div className="font-black flex items-center justify-between">
                                   <span>{asgn.subject}</span>
                                   {asgn.isDoubleBlock && (
-                                    <Zap className="w-2.5 h-2.5 text-amber-600 shrink-0" title="Bloque Doble 2h" />
+                                    <span title="Bloque Doble 2h" className="shrink-0 inline-flex"><Zap className="w-2.5 h-2.5 text-amber-600" /></span>
                                   )}
                                 </div>
                                 <div className="text-[10px] text-slate-500 dark:text-slate-400 truncate">
@@ -917,7 +917,7 @@ export const ScheduleBuilderView: React.FC = () => {
                 <div>
                   <span className="font-bold block">¡Cruce de horario detectado!</span>
                   <span>
-                    El docente ya está asignado a <strong>{teacherConflict.grade}</strong> ({teacherConflict.subject}) a esta misma hora ({editingSlot.startTime}).
+                    El docente ya está asignado a <strong>{teacherConflict.conflictingGrade}</strong> ({teacherConflict.conflictingSubject}) a esta misma hora ({editingSlot.startTime}).
                   </span>
                 </div>
               </div>

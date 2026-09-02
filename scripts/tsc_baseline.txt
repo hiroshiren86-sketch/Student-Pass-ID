@@ -1,0 +1,6 @@
+src/components/CameraScanner.tsx(303,15): error TS2322: Type '(deviceIdToUse?: string) => Promise<void>' is not assignable to type 'MouseEventHandler<HTMLButtonElement>'.
+src/components/ScanHubView.tsx(322,15): error TS2322: Type '{ onScan: (code: string) => Promise<void>; isProcessing: boolean; }' is not assignable to type 'IntrinsicAttributes & CameraScannerProps'.
+src/components/ScanHubView.tsx(404,29): error TS2339: Property 'grade' does not exist on type 'AttendanceRecord'.
+src/components/ScheduleBuilderView.tsx(705,90): error TS2322: Type '{ className: string; title: string; }' is not assignable to type 'IntrinsicAttributes & Omit<LucideProps, "ref"> & RefAttributes<SVGSVGElement>'.
+src/components/ScheduleBuilderView.tsx(920,110): error TS2339: Property 'subject' does not exist on type '{ conflict: boolean; conflictingGrade?: string; slotName?: string; }'.
+src/components/ScheduleBuilderView.tsx(920,76): error TS2339: Property 'grade' does not exist on type '{ conflict: boolean; conflictingGrade?: string; slotName?: string; }'.

@@ -300,7 +300,7 @@ export const CameraScanner: React.FC<CameraScannerProps> = ({ onScan, isPaused }
             <h4 className="text-base font-bold text-white mb-1">Acceso a Cámara Requerido</h4>
             <p className="text-xs text-slate-300 max-w-sm mb-4">{errorMessage}</p>
             <button
-              onClick={startCamera}
+              onClick={() => startCamera()}
               className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold rounded-xl shadow-lg transition-colors flex items-center gap-2"
             >
               <RefreshCw className="w-3.5 h-3.5" /> Reintentar Permiso de Cámara

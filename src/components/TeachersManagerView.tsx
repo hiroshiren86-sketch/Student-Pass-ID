@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { ConfirmDialog } from './ConfirmDialog';
 import { 
   Users, 
   UserPlus, 
@@ -29,6 +30,8 @@ export const TeachersManagerView: React.FC = () => {
   const [teachers, setTeachers] = useState<Teacher[]>(AttendanceStorageService.getTeachers());
   const uniqueGrades = AttendanceStorageService.getUniqueGrades();
 
+  // Ronda 18 (H4): estado de confirmación para acciones destructivas
+  const [deleteConfirm, setDeleteConfirm] = useState<{ title: string; message: string; action: () => void } | null>(null);
   const [searchTerm, setSearchTerm] = useState('');
   const [toastMsg, setToastMsg] = useState<string | null>(null);
 
@@ -155,10 +158,16 @@ export const TeachersManagerView: React.FC = () => {
   };
 
   const handleDelete = (t: Teacher) => {
-    if (window.confirm(`¿Seguro que deseas eliminar al docente ${t.fullName}? Esta acción revocará sus accesos.`)) {
-      AttendanceStorageService.deleteTeacher(t.id);
-      showToast(`Docente ${t.fullName} eliminado.`);
-    }
+    // Ronda 18 (H4): ConfirmDialog propio del sistema en lugar de window.confirm nativo
+    setDeleteConfirm({
+      title: 'Eliminar docente',
+      message: `¿Seguro que deseas eliminar al docente ${t.fullName}? Esta acción revocará sus accesos.`,
+      action: () => {
+        AttendanceStorageService.deleteTeacher(t.id);
+        setTeachers(AttendanceStorageService.getTeachers());
+        showToast(`Docente ${t.fullName} eliminado.`);
+      }
+    });
   };
 
   const handleResetPassword = (t: Teacher) => {
@@ -633,6 +642,15 @@ export const TeachersManagerView: React.FC = () => {
           </div>
         </div>
       )}
+
+      {/* Ronda 18 (H4): modal de confirmación propio (reemplaza window.confirm nativo) */}
+      <ConfirmDialog
+        open={!!deleteConfirm}
+        title={deleteConfirm?.title || ''}
+        message={deleteConfirm?.message || ''}
+        onConfirm={() => { const a = deleteConfirm?.action; setDeleteConfirm(null); a?.(); }}
+        onCancel={() => setDeleteConfirm(null)}
+      />
     </div>
   );
 };

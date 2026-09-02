@@ -497,6 +497,78 @@ Los hallazgos B1–B6/O1/O2 recibieron **luz verde explícita del propietario** 
 
 ---
 
+### 🛡️ Ronda 18 (02/09/2026): AUDITORÍA VERIFICADA de la Ronda 16 + cierre de la escalada multi-admin + sesión anónima + código muerto eliminado (tsc 27→0) + suite exhaustiva E2E
+
+**Mandato del propietario:** Anonymous Auth ya habilitado en la consola y reglas desplegadas; pruebas exhaustivas de TODOS los módulos; responder "¿qué pasa si otro usuario se registra como admin?"; procedimiento para vaciar las bases (Cloudflare + Firebase) al entregar el proyecto; verificación de la bitácora; ejecución continua con análisis profundo (sin apuros).
+
+#### ✅ Verificación independiente de la Ronda 16 (10/10 afirmaciones confirmadas contra el código)
+Se verificó cada afirmación de la auto-auditoría del agente anterior sin confiar en la bitácora: (1) éxito falso de push eliminado, (2) cero llamadas a `api.cloudflare.com` desde el cliente, (3) reglas re-endurecidas con catch-all DENY, (4) `DevFloatingMenu` y wipes destructivos eliminados, (5) secretos expurgados de payloads (D1/KV/Firestore), (6) fotos heredadas se comprimen on-the-fly con aviso explícito, (7) `imageCompressor` moderno (EXIF/OffscreenCanvas), (8) scripts residuales fuera del repo, (9) clases Tailwind dobles corregidas, (10) campos muertos del modelo eliminados. **Dictamen: la Ronda 16 fue correctamente ejecutada.**
+
+#### 🔴 H1 — CRÍTICO: escalada de privilegios multi-admin (el riesgo que intuyó el propietario era REAL, por doble vía)
+1. `loginWithGoogle` auto-asignaba ADMIN a cualquier cuenta de Google cuyo email **contuviera** "admin" o "rectoria" (ej. `superadmin123@gmail.com` → ADMIN) o fuera de una lista corta.
+2. El registro Email/Password dejaba que el cliente eligiera su rol, con estado inicial `ADMIN`.
+**Corrección (`src/services/firebase.ts`):** allowlist EXACTA exportada `ADMIN_EMAILS` (hoy solo `hiroshiren86@gmail.com`) + `resolveInitialRole()` testeable; el registro público SIEMPRE nace DOCENTE (el rol solicitado se ignora); el rol persistido en `users/{uid}` prevalece. **Procedimiento para promover un ADMIN legítimo:** editar su documento `users/{uid}` en Firebase Console → campo `role: "ADMIN"` (el rol persistido gana al iniciar sesión) — o añadir el correo a `ADMIN_EMAILS` y desplegar.
+- La prueba E2E creó un estudiante de prueba (`9999999`) y lo eliminó con el flujo real de la UI; el storage quedó con los 50 demo.
+
+#### 🔴 H2 — ALTO: Anonymous habilitado por el propietario → reglas endurecidas a `isAuthenticated()` + espera de sesión controlada
+- **Verificado por REST** (02/09/2026): `accounts:signUp` responde 200 con idToken anónimo → el proveedor Anonymous YA está activo (la acción del propietario funcionó).
+- `firestore.rules`: las 5 colecciones operativas pasan de `if true` a `if isAuthenticated()`. `users` owner-only y catch-all DENY se mantienen.
+- **Espera de sesión controlada (`ensureAnonymousAuth`):** promesa singleton que (a) restaura la sesión persistida de IndexedDB, (b) si no existe, crea la anónima UNA vez, (c) tope de 6 s, jamás rechaza (offline-first intacto). `initCloudSettingsSync` espera la sesión antes del primer fetch/listener; `saveSchoolSettings`, `backupAllToFirestore` y `syncAttendanceRecord` esperan la sesión antes de escribir.
+- **E2E real en navegador headless:** la app establece sesión anónima (`isAnonymous:true`, uid persistido en IndexedDB) y los 7 módulos navegan sin un solo error de consola.
+- ⚠ **ORDEN DE DESPLIEGUE OBLIGATORIO (agente de infraestructura):** (1) desplegar PRIMERO esta versión de la app (push → Cloudflare Pages auto), (2) DESPUÉS desplegar `firestore.rules` con `deploy_firebase`. En orden inverso, terminales con la app vieja verían `Missing or insufficient permissions` hasta recargar.
+
+#### 🟠 H3 — MEDIO: truncado silencioso de fotos residía TAMBIÉN en `backupAllToFirestore`
+La Ronda 16 lo corrigió solo en `cloudflareSync`; el respaldo a Firestore seguía descartando fotos >700 KB sin avisar. Ahora comprime on-the-fly (`compressDataUrl`) y si una foto es irrecuperable se omite con aviso textual en el mensaje del respaldo.
+
+#### 🟠 H4 — MEDIO: `window.confirm`/`confirm()` nativos residuales (inconsistentes con el estándar ConfirmDialog de Ronda 8)
+Dos usos con `confirm(` bare (sin prefijo `window.`) escaparon a los barridos anteriores y a la propia Ronda 16: eliminar estudiante (`StudentsManagerView`) y limpiar registros extraídos (`DocumentUploadModal`); más los ya conocidos en `TeacherClassroomView` (cierre de bloque + forzar ausencias, con separación correcta de `executeCloseBlock`/`handleCloseBlock` para no alterar la semántica de `forceClose`), `TeachersManagerView` (eliminar docente) y `SettingsModal` (reiniciar demo). **Todos migrados a `ConfirmDialog`** (validado en vivo: el botón "Eliminar" ahora abre el modal propio con Escape y autofocus).
+
+#### 🟢 H5 — LIMPIEZA: 893 líneas de código muerto eliminadas → **tsc pasa de 27 errores pre-existentes a 0**
+- `ScannerHub.tsx` (497 líneas, 20 errores TS del baseline — sustituido por `ScanHubView`), `ScanFeedbackBanner.tsx` (155, 5 errores — sustituido por el feedback interno) y `PublicVerifierView.tsx` (241, sin ruta conectada jamás). Cero referencias en todo el proyecto (verificado por rg, incluidos imports dinámicos).
+- Deuda técnica restante corregida: `CameraScanner` onClick pasaba el EVENTO como `deviceId` (bug latente real); `ScanHubView` pasaba prop inexistente `isProcessing` en vez de `isPaused`; `record.grade` → `record.studentGrade`; icono Lucide con prop `title` inválida → `<span title>`; `checkTeacherConflict` no exponía la asignatura del conflicto → API enriquecida con `conflictingSubject` (la alerta "¡Cruce de horario!" ahora dice a qué GRADO y MATERIA está asignado el docente).
+- **`tsc --noEmit`: 0 errores** (primera vez en la historia del proyecto; baseline re-guardado en `scripts/tsc_baseline.txt`).
+
+#### 🔧 Worker: comparación de AUTH_TOKEN en tiempo constante
+`verifyAuth` ahora usa `timingSafeEqual` (XOR de charCodes) según OWASP; el resto del Worker intacto. La doc oficial de Cloudflare NO exige token para este caso (decisión del propietario, ya tomada: activarlo antes del Día Cero con `wrangler secret put AUTH_TOKEN`).
+
+#### 📦 Preparado (no activo) — App Check reCAPTCHA v3 (estándar 2026)
+`getFirebaseApp` inicializa App Check SOLO si `firebase-applet-config.json → recaptchaSiteKey` tiene valor (hoy vacío ⇒ NO-OP, cero riesgo). Pasos para activarlo: Firebase Console → App Check → registrar la app web con reCAPTCHA v3 → pegar la site key en `recaptchaSiteKey` → desplegar → activar enforcement gradualmente en Firestore. Con App Check en enforcement, un atacante que se autentique anónimamente desde fuera de la app real queda bloqueado (el endurecimiento definitivo de escrituras anónimas).
+
+#### 🧪 Pruebas exhaustivas (todas verdes)
+- **Suite local `scripts/verify_ronda18.ts`: 48 OK / 0 fallos / 1 SKIP** (compresión de canvas requiere DOM; se cubre en el E2E). Cubre: roles/allowlist (incluidos vectores de ataque `superadmin123@gmail.com`, `rectoria-falso@gmail.com`, `admin2026@hotmail.com`), espera de sesión, reglas por colección, expurgo de secretos, guards sin URL, timing-safe del worker, plantillas B4, CSV B5, Regla de Oro del cierre, conflictos de horario, ConfirmDialog en 5 vistas.
+- **Suite de integración `scripts/verify_ronda18_integration.ts`: 9 OK / 0 fallos** — roundtrip REAL contra el Worker de producción bajo el schoolCode de prueba `INAS_TEST_R18` (push de 50 estudiantes → pull con verificación de IDs propios → registro presente → sin secretos → snapshot de prueba neutralizado). Lección aplicada: KV es eventualmente consistente — el pull se reintenta verificando IDs propios del push, no solo conteos (un snapshot stale del 1/9 también tenía 50 estudiantes demo, lo que antes daba un falso verde).
+- **E2E en navegador headless (vite preview):** login → 7 módulos sin errores de consola; sesión anónima establecida y persistida; subida de foto 2 MB generada en memoria → almacenada en 26 KB JPEG (estándar 20–60 KB) vía el compresor real del bundle; ConfirmDialog de eliminar estudiante probado de punta a punta (apertura, confirmación, borrado verificado en localStorage); portal del estudiante con personalización de carné y carga de horario CSV.
+
+#### ⚠️ INCIDENTE DOCUMENTADO (transparencia): snapshot de producción sobrescrito durante el roundtrip de prueba y RESTAURADO
+El primer roundtrip se ejecutó sin fijar `schoolCode` de prueba (el default es `INAS-ANTONIA-SANTOS-2026`, el de producción), por lo que el snapshot del 1/9 (datos demo) fue reemplazado por datos de prueba y luego neutralizado. **Impacto: nulo para datos reales** — el snapshot era del 1/9 con ecosistema demo; los registros del día viven en el localStorage de cada terminal (offline-first) y jamás estuvieron en ese snapshot. **Restauración ejecutada y verificada** (`scripts/restore_production_snapshot.ts`): `resetToDemo` + push → 50 estudiantes, 6 docentes, 51 registros bajo el schoolCode de producción; pull de verificación OK. Las suites ahora fijan `schoolCode: INAS_TEST_R18` ANTES de cualquier push.
+
+#### 🧹 Guía oficial para VACIAR TODAS las bases al entregar el proyecto (Día Cero / entrega limpia)
+> Objetivo: entregar el sistema en blanco (0 estudiantes, 0 registros, 0 respaldos), listo para que el colegio cargue su matrícula real (manual o por SIMAT/Excel). Ejecutar en este orden y verificar con la "prueba de fuego" del final.
+
+**1) Cloudflare D1 (relacional) — consola o CLI:**
+- CLI oficial: `npx wrangler d1 execute <NOMBRE_DB> --remote --command "DELETE FROM students; DELETE FROM attendance_records; DELETE FROM sync_snapshots;"` (la tabla `student_excuses` queda vacía de fábrica; si se pobló, agregar `DELETE FROM student_excuses;`).
+- Alternativa Dashboard: Cloudflare → Workers & Pages → D1 → base de datos → Console → ejecutar los mismos `DELETE`.
+- Verificación: `SELECT COUNT(*) FROM students;` → 0 (igual para las otras).
+
+**2) Cloudflare KV (caché perimetral) — borrar las 2 llaves del colegio:**
+- Dashboard: Workers & Pages → KV → namespace `ATTENDANCE_KV` → eliminar `latest_snapshot_<SCHOOLCODE>` y `students_index_<SCHOOLCODE>` (hoy: `INAS-ANTONIA-SANTOS-2026`).
+- CLI: `npx wrangler kv key delete "latest_snapshot_INAS-ANTONIA-SANTOS-2026" --namespace-id <ID>` y lo mismo para `students_index_...`. (Si el código del colegio cambiara en Ajustes, usar ese valor.)
+
+**3) Firebase Firestore (respaldo):** Consola → Firestore Database → eliminar documentos/coleciones usadas por la app: `students`, `teachers`, `attendance_records`, `schedule_assignments` y `school_settings/main` (borrar el doc `main`). `users` se conserva o se vacía a criterio del colegio (perfiles de login). Con la app ya endurecida (Ronda 18), para borrar desde la app se necesita sesión anónima activa — el borrado manual desde la Consola es lo recomendable para la entrega.
+- CLI (opcional): `npx firebase-tools firestore:delete --recursive --project gen-lang-client-0224520207 students teachers attendance_records schedule_assignments` (pedirá login interactivo).
+
+**4) Firebase Authentication (terminales anónimas de prueba):** Consola → Authentication → Users → eliminar los usuarios anónimos acumulados durante las pruebas (cada dispositivo creó uno al arrancar; 2 fantasma adicionales provienen de las verificaciones REST de las Rondas 16 y 18). Opcional: activar la auto-limpieza de cuentas anónimas inactivas (requiere Identity Platform).
+
+**5) LocalStorage de cada terminal (la app):** en cada dispositivo: Ajustes → "Reiniciar datos de prueba" (restaura demo; NO deja en blanco) — para dejar en blanco de verdad: DevTools → Application → Local Storage → `Clear` en el origen de la app (o menú de usuario → Cerrar sesión y limpiar). El borrado del navegador es lo único que no es automatizable desde el repo por diseño (el borrado remoto de terminales fue eliminado en Ronda 16 por riesgo destructivo; decisión vigente).
+
+**6) Prueba de fuego del propietario (ya definida por él):** desde un navegador limpio/incógnito, abrir la app → debe iniciar sin estudiantes (tras el paso 5) → crear cuenta/cargar 50 estudiantes de prueba desde Gestión de Estudiantes → push → abrir en un segundo dispositivo → pull → verificar los 50. Al terminar, repetir los pasos 1–5 para dejarlo en blanco antes de la entrega real.
+
+#### 📌 Estado de credenciales (recordatorio del propietario)
+- `AUTH_TOKEN` del Worker: el propietario lo activará en 1–2 días (mientras tanto el Worker queda abierto — riesgo aceptado y temporal); al activarlo: `wrangler secret put AUTH_TOKEN` + el mismo valor en Ajustes → Token de Acceso del Worker en cada terminal (el cliente ya envía `Authorization: Bearer` de forma uniforme).
+- La Web API Key de Firebase es pública por diseño; la protección real ahora es `isAuthenticated()` + (futuro) App Check.
+
+---
+
 ### 🔒 Ronda 9 (02/09/2026): Corrección de Permisos en Firestore y Despliegue de Reglas de Seguridad — ⚠️ REGISTRO HISTÓRICO del otro agente: sus reglas abiertas fueron REVERTIDAS en Ronda 16
 - **Diagnóstico del Error:** Se presentó el error de sincronización `Error syncing to Firestore: Missing or insufficient permissions` al intentar respaldar o sincronizar colecciones en Firebase Firestore (`school_settings`, `students`, `teachers`, `attendance_records`, `schedule_assignments`).
 - **Causa Raíz:**
@@ -519,9 +591,9 @@ Los hallazgos B1–B6/O1/O2 recibieron **luz verde explícita del propietario** 
 2. Conectar la URL del Worker en la Configuración del Sistema (`https://inas-attendance-worker.hiroshiren86.workers.dev` — ya es la URL por defecto).
 3. Ejecutar pruebas de escaneo continuo y verificar la réplica en D1 y KV (usar la guía de prueba de sincronización entregada al propietario; el primer "Sincronizar ahora" desde la app creará el snapshot real).
 4. Validar sincronización bidireccional entre 2 dispositivos simultáneos (PC + Móvil docente).
-5. Decidir si se configura `AUTH_TOKEN` (hoy: acceso abierto).
+5. ~~Decidir si se configura `AUTH_TOKEN`~~ **DECIDIDO (Ronda 18): el propietario lo activará en 1–2 días** — `wrangler secret put AUTH_TOKEN` + mismo valor en Ajustes de cada terminal. Mientras tanto: acceso abierto (riesgo temporal aceptado). Las reglas Firestore endurecidas de Ronda 18 quedaron en el repo **pendientes de deploy** (ver orden de despliegue en Ronda 18 → H2).
 6. ~~Implementar F1→F3→F2→F4→F5~~ **HECHO (Ronda 4)** y verificado en producción (Ronda 7); hallazgos de QA arreglados (Ronda 8).
-7. **Siguiente frente sugerido (decisión del propietario):** (a) prueba de sincronización bidireccional con 2 dispositivos físicos (PC + móvil docente) — único ítem de esta fase que no es automatizable desde el QA; (b) decidir `AUTH_TOKEN` del worker; (c) módulo de Excusas Médicas / Buzón (Fase Futura, tabla `student_excuses` ya prevista en D1).
+7. **Siguiente frente sugerido (decisión del propietario):** (a) prueba de sincronización bidireccional con 2 dispositivos físicos (PC + móvil docente) — único ítem de esta fase que no es automatizable desde el QA; (b) activar `AUTH_TOKEN` del worker (1–2 días, decisión tomada); (c) desplegar reglas Ronda 18 (`deploy_firebase`); (d) activar App Check reCAPTCHA v3 (pasos en Ronda 18) cuando el despliegue esté estable; (e) módulo de Excusas Médicas / Buzón (Fase Futura, tabla `student_excuses` ya prevista en D1); (f) usar la **guía de vaciado de bases de Ronda 18** para la entrega limpia del proyecto.
 
 ### ⏳ Fase Futura Planificada: Módulo de Excusas Médicas / Permisos Anticipados y Buzón Escolar
 - **Propósito:** Permitir a los estudiantes/acudientes reportar inasistencias programadas (citas médicas, incapacidades, calamidades) fuera del horario lectivo (después de la 1:00 p.m. o fines de semana) para proteger su registro de asistencia.

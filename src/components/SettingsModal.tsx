@@ -30,6 +30,7 @@ import { FirebaseService } from '../services/firebase';
 import { CloudflareSyncService, CloudflareSyncResult } from '../services/cloudflareSync';
 import { AiService } from '../services/aiService';
 import { AiProviderMark } from './AiProviderMark';
+import { ConfirmDialog } from './ConfirmDialog';
 
 import { SyncOverlay } from './SyncOverlay';
 
@@ -41,6 +42,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ onClose }) => {
   const [settings, setSettings] = useState<SchoolSettings>(AttendanceStorageService.getSettings());
   const [showSavedToast, setShowSavedToast] = useState(false);
   const [isSyncingCloud, setIsSyncingCloud] = useState(false);
+  // Ronda 18 (H4): confirmación propia para reiniciar datos demo
+  const [resetConfirmOpen, setResetConfirmOpen] = useState(false);
   const [cloudSyncMsg, setCloudSyncMsg] = useState<string | null>(null);
   const [isSyncingCloudflare, setIsSyncingCloudflare] = useState(false);
   const [cloudflareSyncResult, setCloudflareSyncResult] = useState<CloudflareSyncResult | null>(null);
@@ -263,10 +266,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ onClose }) => {
   };
 
   const handleResetData = () => {
-    if (window.confirm('¿Deseas reiniciar todos los registros de prueba y restaurar los 50 estudiantes y datos de ejemplo iniciales?')) {
-      AttendanceStorageService.resetToDemo();
-      onClose();
-    }
+    // Ronda 18 (H4): ConfirmDialog propio del sistema en lugar de window.confirm nativo
+    setResetConfirmOpen(true);
   };
 
 
@@ -767,6 +768,16 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ onClose }) => {
           </div>
         </form>
       </div>
+
+      {/* Ronda 18 (H4): modal de confirmación propio (reemplaza window.confirm nativo) */}
+      <ConfirmDialog
+        open={resetConfirmOpen}
+        title="Reiniciar datos de prueba"
+        message="¿Deseas reiniciar todos los registros de prueba y restaurar los 50 estudiantes y datos de ejemplo iniciales?"
+        confirmLabel="Sí, reiniciar"
+        onConfirm={() => { setResetConfirmOpen(false); AttendanceStorageService.resetToDemo(); onClose(); }}
+        onCancel={() => setResetConfirmOpen(false)}
+      />
     </div>
     </>
   );

@@ -66,13 +66,24 @@ function errorResponse(message: string, status = 400, details?: any) {
   return jsonResponse({ success: false, error: message, details }, status);
 }
 
+// Ronda 18: comparación en tiempo constante (OWASP) — evita ataques de timing
+// sobre el token; un string === corto-circuita en el primer carácter distinto.
+function timingSafeEqual(a: string, b: string): boolean {
+  const len = Math.max(a.length, b.length);
+  let mismatch = a.length === b.length ? 0 : 1;
+  for (let i = 0; i < len; i++) {
+    mismatch |= (a.charCodeAt(i) || 0) ^ (b.charCodeAt(i) || 0);
+  }
+  return mismatch === 0;
+}
+
 // Verificación de token Bearer opcional o institucional
 function verifyAuth(request: Request, env: Env): boolean {
   if (!env.AUTH_TOKEN) return true; // Si no hay token configurado, acceso abierto en modo desarrollo
   const authHeader = request.headers.get('Authorization');
   if (!authHeader) return false;
   const token = authHeader.replace(/^Bearer\s+/i, '').trim();
-  return token === env.AUTH_TOKEN.trim();
+  return timingSafeEqual(token, env.AUTH_TOKEN.trim());
 }
 
 export default {

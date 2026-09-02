@@ -10,6 +10,7 @@ import {
   onAuthStateChanged,
   User as FirebaseUser
 } from 'firebase/auth';
+import { initializeAppCheck, ReCaptchaV3Provider, getToken as getAppCheckToken } from 'firebase/app-check';
 import { 
   getFirestore, 
   initializeFirestore,
@@ -28,6 +29,7 @@ import {
 } from 'firebase/firestore';
 import firebaseConfigData from '../../firebase-applet-config.json';
 import { Student, Teacher, AttendanceRecord, ClassScheduleAssignment, SchoolSettings, UserRole } from '../types/attendance';
+import { compressDataUrl, PHOTO_DATAURL_SOFT_LIMIT } from '../utils/imageCompressor';
 
 export enum OperationType {
   CREATE = 'create',
@@ -99,6 +101,23 @@ export function getFirebaseApp(): FirebaseApp {
         messagingSenderId: firebaseConfigData.messagingSenderId,
         appId: firebaseConfigData.appId
       });
+
+      // ===== Ronda 18: Firebase App Check (estándar 2026 contra clientes no autorizados) =====
+      // Se activa SOLO si el propietario registra la app en Firebase Console → App Check
+      // (reCAPTCHA v3) y pega la site key en firebase-applet-config.json → recaptchaSiteKey.
+      // Hoy la clave está vacía ⇒ este bloque es un NO-OP (cero riesgo de regresión).
+      // Pasos de activación documentados en AGENTS.md → "Endurecimiento definitivo".
+      const recaptchaSiteKey = (firebaseConfigData as any).recaptchaSiteKey as string | undefined;
+      if (recaptchaSiteKey) {
+        try {
+          initializeAppCheck(firebaseApp, {
+            provider: new ReCaptchaV3Provider(recaptchaSiteKey),
+            isTokenAutoRefreshEnabled: true
+          });
+        } catch (e) {
+          console.warn('[Firebase] App Check no pudo inicializarse (se continúa sin él):', e);
+        }
+      }
     }
   }
   return firebaseApp;
@@ -129,6 +148,25 @@ export function getFirebaseFirestore(): Firestore {
   return firestoreDb;
 }
 
+// ===== Ronda 18: Gobernanza de roles (cierra la escalada de privilegios) =====
+/**
+ * Lista EXACTA de correos que nacen ADMIN al crear su primer perfil.
+ * NUNCA usar heurísticas tipo email.includes('admin'): cualquier persona con un
+ * Gmail "superadmin123@gmail.com" se convertiría en administrador. Un nuevo ADMIN
+ * legítimo se agrega AQUÍ (despliegue) o promoviendo manualmente su documento
+ * users/{uid} desde la Consola de Firebase (el rol persistido prevalece al iniciar
+ * sesión). Registro público vía Email/Password siempre nace DOCENTE.
+ */
+export const ADMIN_EMAILS: readonly string[] = [
+  'hiroshiren86@gmail.com'
+];
+
+export function resolveInitialRole(email: string | null | undefined, existingRole?: UserRole): UserRole {
+  if (existingRole) return existingRole; // rol persistido en users/{uid} prevalece
+  const normalized = (email || '').trim().toLowerCase();
+  return ADMIN_EMAILS.includes(normalized) ? 'ADMIN' : 'DOCENTE';
+}
+
 export interface FirebaseUserProfile {
   uid: string;
   email: string | null;
@@ -142,23 +180,51 @@ export interface FirebaseUserProfile {
 
 export class FirebaseService {
   /**
-   * Ronda 16 (auditoría): intenta autenticar el terminal de forma ANÓNIMA ante
-   * Firebase. Hoy el proyecto NO tiene el proveedor Anonymous habilitado (verificado
-   * por REST: accounts:signUp → ADMIN_ONLY_OPERATION), así que esto falla en silencio
-   * y la app sigue funcionando sin sesión (las reglas operativas lo permiten). Cuando
-   * el propietario habilite Anonymous en Firebase Console, este método empezará a
-   * funcionar sin cambios de código y permitirá endurecer firestore.rules a
-   * `request.auth != null`. Fire-and-forget: JAMÁS bloquea el arranque ni el sync.
+   * Ronda 18: autenticación anónima del terminal CON ESPERA CONTROLADA.
+   *
+   * Anonymous ya está habilitado en la consola (verificado por REST el 02/09/2026:
+   * accounts:signUp → 200 con idToken anónimo), y las reglas endurecidas de
+   * Firestore exigen `isAuthenticated()` — por eso TODAS las rutas que tocan
+   * Firestore (sync de settings al arranque, respaldo, escrituras) esperan esta
+   * promesa antes de leer/escribir.
+   *
+   * Garantías:
+   *  - Singleton: una sola promesa por carga de página (sin carreras de signIn).
+   *  - Restaura la sesión persistida (IndexedDB) si ya existía de una visita previa
+   *    (el primer evento de onAuthStateChanged llega tras el restore del SDK).
+   *  - Si no hay sesión, crea la anónima UNA vez.
+   *  - JAMÁS rechaza ni bloquea más de ANON_AUTH_TIMEOUT_MS (fire-and-forget seguro:
+   *    sin red o con el proveedor deshabilitado, resuelve y la app sigue offline-first).
    */
-  static async ensureAnonymousAuth(): Promise<void> {
-    try {
-      const auth = getFirebaseAuth();
-      if (auth?.currentUser) return; // ya hay sesión (Google/email/anónima)
-      await signInAnonymously(auth);
-      console.info('[Firebase] Sesión anónima del terminal establecida.');
-    } catch {
-      // Proveedor Anonymous no habilitado aún — comportamiento esperado hoy.
+  private static anonymousAuthPromise: Promise<void> | null = null;
+  private static readonly ANON_AUTH_TIMEOUT_MS = 6000;
+
+  static ensureAnonymousAuth(): Promise<void> {
+    if (!this.anonymousAuthPromise) {
+      this.anonymousAuthPromise = (async () => {
+        const auth = getFirebaseAuth();
+        if (!auth) return;
+        if (auth.currentUser) return; // sesión existente (Google/email/anónima)
+
+        await new Promise<void>((resolve) => {
+          let settled = false;
+          const finish = () => { if (!settled) { settled = true; resolve(); } };
+          // El primer evento del listener llega tras restaurar la sesión persistida
+          const unsubscribe = onAuthStateChanged(auth, (user) => {
+            if (user) { unsubscribe(); finish(); }
+          });
+          // No había sesión persistida (o aún llega null): crear la anónima una vez
+          signInAnonymously(auth)
+            .then(() => console.info('[Firebase] Sesión anónima del terminal establecida.'))
+            .catch((e) => {
+              console.warn('[Firebase] No se pudo crear sesión anónima (la app continúa offline-first):', typeof e === 'object' ? (e?.code || e?.message) : e);
+            })
+            .finally(() => { unsubscribe(); finish(); });
+          setTimeout(finish, this.ANON_AUTH_TIMEOUT_MS); // cinturón de seguridad
+        });
+      })().catch(() => {}); // jamás rechaza
     }
+    return this.anonymousAuthPromise;
   }
 
   /**
@@ -171,18 +237,16 @@ export class FirebaseService {
       const user = result.user;
 
       // Check or create user profile in Firestore
+      // Ronda 18: NUNCA auto-promover por heurística de texto del email (escala de
+      // privilegios). Rol = perfil persistido; si no existe, SOLO la allowlist exacta.
       let profile = await this.getUserProfile(user.uid);
       if (!profile) {
-        // Assign default role based on email or default to DOCENTE / ADMIN
-        const isDefaultAdmin = user.email?.toLowerCase().includes('admin') || user.email?.toLowerCase().includes('rectoria') || user.email === 'hiroshiren86@gmail.com';
-        const role: UserRole = isDefaultAdmin ? 'ADMIN' : 'DOCENTE';
-
         profile = {
           uid: user.uid,
           email: user.email,
           displayName: user.displayName || user.email?.split('@')[0] || 'Usuario Google',
           photoURL: user.photoURL,
-          role: role
+          role: resolveInitialRole(user.email)
         };
 
         await this.saveUserProfile(profile);
@@ -212,8 +276,12 @@ export class FirebaseService {
 
   /**
    * Register with Email and Password
+   * Ronda 18 (multi-admin): el rol YA NO lo elige el cliente — cualquier registro
+   * público nace DOCENTE, salvo que el correo esté en la allowlist institucional
+   * (ADMIN_EMAILS). El rol de administradores adicionales se otorga promoviendo su
+   * documento users/{uid} desde la Consola de Firebase (procedimiento en AGENTS.md).
    */
-  static async registerWithEmail(email: string, pass: string, role: UserRole, displayName: string): Promise<{ user: FirebaseUser; profile: FirebaseUserProfile }> {
+  static async registerWithEmail(email: string, pass: string, _requestedRole: UserRole, displayName: string): Promise<{ user: FirebaseUser; profile: FirebaseUserProfile }> {
     try {
       const auth = getFirebaseAuth();
       const result = await createUserWithEmailAndPassword(auth, email, pass);
@@ -222,7 +290,7 @@ export class FirebaseService {
         email: result.user.email,
         displayName: displayName,
         photoURL: null,
-        role: role
+        role: resolveInitialRole(result.user.email) // ignora _requestedRole (cerrado por seguridad)
       };
       await this.saveUserProfile(profile);
       return { user: result.user, profile };
@@ -283,6 +351,7 @@ export class FirebaseService {
    */
   static async syncAttendanceRecord(record: AttendanceRecord): Promise<void> {
     try {
+      await this.ensureAnonymousAuth(); // Ronda 18: las reglas exigen isAuthenticated()
       const db = getFirebaseFirestore();
       const docRef = doc(db, 'attendance_records', record.id);
       await setDoc(docRef, {
@@ -305,6 +374,7 @@ export class FirebaseService {
     assignments: ClassScheduleAssignment[];
   }): Promise<{ success: boolean; count: number; message: string }> {
     try {
+      await this.ensureAnonymousAuth(); // Ronda 18: las reglas exigen isAuthenticated()
       const db = getFirebaseFirestore();
       let count = 0;
 
@@ -322,13 +392,22 @@ export class FirebaseService {
       }, { merge: true });
       count++;
 
-      // 2. Students
+      // 2. Students — Ronda 18: fotos heredadas grandes se COMPRIMEN on-the-fly
+      // (nunca se descartan en silencio; consistencia con cloudflareSync).
+      // Nota: aquí NO se persiste la versión comprimida (backupAllToFirestore recibe
+      // una copia de datos y firebase.ts no importa attendanceStorage para evitar
+      // dependencia circular); la auto-sanación local la realiza el push a Cloudflare.
+      let photosOmitted = 0;
       for (const st of data.students) {
-        // Strip large photoUrl to prevent Firestore 1MB document limit error
         const stData = { ...st };
-        if (stData.photoUrl && stData.photoUrl.length > 700000) {
-          console.warn(`Student ${st.code} photoUrl exceeds size limit, stripping before sync.`);
-          delete stData.photoUrl;
+        if (stData.photoUrl && stData.photoUrl.length > PHOTO_DATAURL_SOFT_LIMIT) {
+          const compressed = await compressDataUrl(stData.photoUrl);
+          if (compressed) {
+            stData.photoUrl = compressed;
+          } else {
+            delete stData.photoUrl;
+            photosOmitted++;
+          }
         }
         await setDoc(doc(db, 'students', st.code), stData, { merge: true });
         count++;
@@ -356,6 +435,7 @@ export class FirebaseService {
         success: true,
         count,
         message: `Sincronización exitosa con Firebase Firestore (${count} documentos respaldados en la nube).`
+          + (photosOmitted > 0 ? ` ⚠ ${photosOmitted} foto(s) omitidas por ser irrecuperables; vuelve a subirlas desde el carné.` : '')
       };
     } catch (error: any) {
       console.error('Error syncing to Firestore:', error);
@@ -373,6 +453,7 @@ export class FirebaseService {
 
   static async saveSchoolSettings(settings: SchoolSettings): Promise<void> {
     try {
+      await this.ensureAnonymousAuth(); // Ronda 18: las reglas exigen isAuthenticated()
       const db = getFirebaseFirestore();
       const docRef = doc(db, 'school_settings', 'main');
       // Ronda 16 (auditoría): NUNCA subir secretos a Firestore. Antes se subían

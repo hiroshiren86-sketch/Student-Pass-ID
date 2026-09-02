@@ -20,6 +20,7 @@ import { AttendanceStorageService } from '../services/attendanceStorage';
 import { AiService } from '../services/aiService';
 import { parseDocumentFile, ExtractedStudentDraft, normalizeGradeName, isValidGrade } from '../utils/documentParser';
 import { compressImageFile } from '../utils/imageCompressor';
+import { ConfirmDialog } from './ConfirmDialog';
 
 interface DocumentUploadModalProps {
   isOpen: boolean;
@@ -36,6 +37,8 @@ export const DocumentUploadModal: React.FC<DocumentUploadModalProps> = ({
 }) => {
   const [drafts, setDrafts] = useState<ExtractedStudentDraft[]>([]);
   const [isProcessing, setIsProcessing] = useState(false);
+  // Ronda 18 (H4): confirmación propia para limpiar registros extraídos
+  const [clearConfirmOpen, setClearConfirmOpen] = useState(false);
   const [showHelp, setShowHelp] = useState(false);
   const [dragActive, setDragActive] = useState(false);
   const [filterStatus, setFilterStatus] = useState<'all' | 'valid' | 'warning'>('all');
@@ -180,10 +183,12 @@ export const DocumentUploadModal: React.FC<DocumentUploadModalProps> = ({
   };
 
   const clearAllDrafts = () => {
-    if (drafts.length === 0 || confirm('¿Desea limpiar todos los registros extraídos?')) {
-      setDrafts([]);
-    }
+    // Ronda 18 (H4): ConfirmDialog propio del sistema en lugar de confirm() nativo
+    if (drafts.length === 0) return;
+    setClearConfirmOpen(true);
   };
+
+  const doClearAllDrafts = () => setDrafts([]);
 
   const handleSaveAll = () => {
     const validDrafts = drafts.filter((d) => d.documentId && d.firstName && d.status === 'valid');
@@ -519,6 +524,16 @@ export const DocumentUploadModal: React.FC<DocumentUploadModalProps> = ({
         </div>
 
       </div>
+    
+      {/* Ronda 18 (H4): modal de confirmación propio (reemplaza confirm() nativo) */}
+      <ConfirmDialog
+        open={clearConfirmOpen}
+        title="Limpiar registros extraídos"
+        message="¿Desea limpiar todos los registros extraídos? Se descartará lo aún no guardado."
+        confirmLabel="Sí, limpiar"
+        onConfirm={() => { setClearConfirmOpen(false); doClearAllDrafts(); }}
+        onCancel={() => setClearConfirmOpen(false)}
+      />
     </div>
   );
 };

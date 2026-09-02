@@ -137,36 +137,45 @@ export class AttendanceStorageService {
   /**
    * Initializes automatic bidirectional cloud sync with Firebase Firestore
    * Restores institutional settings if browser storage was wiped or when switching devices
+   *
+   * Ronda 18: espera la sesión anónima del terminal (Firebase Anonymous ya habilitado
+   * en la consola) ANTES de leer/escuchar Firestore, porque las reglas endurecidas
+   * exigen `isAuthenticated()`. La espera tiene tope de 6 s y jamás rechaza: si no
+   * hay red o el proveedor falla, el sync se intenta igualmente y la app sigue
+   * offline-first (cero bloqueo del arranque).
    */
   static initCloudSettingsSync(): void {
     if (this.isCloudSyncInitialized) return;
     this.isCloudSyncInitialized = true;
 
-    // 1. Initial fetch from Firestore
-    FirebaseService.loadSchoolSettings().then((cloudSettings) => {
-      if (cloudSettings) {
-        const local = this.getSettings();
-        // If local has empty or default worker URL but cloud has it, or if local is older
-        const merged: SchoolSettings = {
-          ...DEFAULT_SCHOOL_SETTINGS,
-          ...local,
-          ...cloudSettings,
-          cloudflareWorkerUrl: cloudSettings.cloudflareWorkerUrl || local.cloudflareWorkerUrl || DEFAULT_SCHOOL_SETTINGS.cloudflareWorkerUrl
-        };
-        this.saveSettings(merged, false);
-      }
+    FirebaseService.ensureAnonymousAuth().then(() => {
+      // 1. Initial fetch from Firestore
+      FirebaseService.loadSchoolSettings().then((cloudSettings) => {
+        if (cloudSettings) {
+          const local = this.getSettings();
+          // If local has empty or default worker URL but cloud has it, or if local is older
+          const merged: SchoolSettings = {
+            ...DEFAULT_SCHOOL_SETTINGS,
+            ...local,
+            ...cloudSettings,
+            cloudflareWorkerUrl: cloudSettings.cloudflareWorkerUrl || local.cloudflareWorkerUrl || DEFAULT_SCHOOL_SETTINGS.cloudflareWorkerUrl
+          };
+          this.saveSettings(merged, false);
+        }
+      }).catch(() => {});
+
+      // 2. Real-time listener for multi-device sync
+      FirebaseService.onSchoolSettingsChange((cloudSettings) => {
+        if (cloudSettings && (cloudSettings.schoolName || cloudSettings.cloudflareWorkerUrl)) {
+          const current = this.getSettings();
+          const updated = { ...current, ...cloudSettings };
+          this.saveSettings(updated as SchoolSettings, false);
+        }
+      });
     }).catch(() => {});
 
-    // 2. Real-time listener for multi-device sync
-    FirebaseService.onSchoolSettingsChange((cloudSettings) => {
-      if (cloudSettings && (cloudSettings.schoolName || cloudSettings.cloudflareWorkerUrl)) {
-        const current = this.getSettings();
-        const updated = { ...current, ...cloudSettings };
-        this.saveSettings(updated as SchoolSettings, false);
-      }
-    });
-
     // 3. Listen to auth changes (when Admin or Teacher logs in, restore their cloud profile settings)
+    //    No requiere espera: onAuthStateChanged es local al SDK y dispara con la sesión restaurada.
     FirebaseService.onAuthStateChange(async (user) => {
       if (user) {
         try {
@@ -1036,7 +1045,7 @@ export class AttendanceStorageService {
     return undefined;
   }
 
-  static checkTeacherConflict(params: { teacherId: string; dayOfWeek: number; slotId: string; excludeGrade?: string }): { conflict: boolean; conflictingGrade?: string; slotName?: string } | undefined {
+  static checkTeacherConflict(params: { teacherId: string; dayOfWeek: number; slotId: string; excludeGrade?: string }): { conflict: boolean; conflictingGrade?: string; conflictingSubject?: string; slotName?: string } | undefined {
     const assignments = this.getScheduleAssignments();
     const slots = this.getScheduleSlots();
     const conflict = assignments.find(a => 
@@ -1050,6 +1059,7 @@ export class AttendanceStorageService {
       return {
         conflict: true,
         conflictingGrade: conflict.grade,
+        conflictingSubject: conflict.subject,
         slotName: slot?.name || params.slotId
       };
     }

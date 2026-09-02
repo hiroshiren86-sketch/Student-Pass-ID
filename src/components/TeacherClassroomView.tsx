@@ -1,4 +1,5 @@
 import React, { useState, useMemo, useEffect, useRef } from 'react';
+import { ConfirmDialog } from './ConfirmDialog';
 import { 
   BookOpen, 
   CheckCircle2, 
@@ -337,17 +338,12 @@ export const TeacherClassroomView: React.FC<TeacherClassroomViewProps> = ({
   };
 
   // Close Block (Auto-Cierre Inteligente con Regla de Oro)
-  const handleCloseBlock = (force: boolean = false) => {
-    if (isNonComputableSlot.isNonComputable) {
-      alert(`Este bloque está clasificado como NO COMPUTABLE (${isNonComputableSlot.reason}). No se generan ausencias automáticas.`);
-      return;
-    }
+  // Ronda 18 (H4): las confirmaciones de cierre usan el ConfirmDialog propio del
+  // sistema (estándar Ronda 8/O2) — window.confirm nativo bloquea el hilo, es
+  // inconsistente con el diseño y algunos navegadores lo suprimen en iframes.
+  const [confirmState, setConfirmState] = useState<{ title: string; message: string; confirmLabel?: string; action: () => void } | null>(null);
 
-    const confirmClose = force || window.confirm(
-      `¿Desea ejecutar el cierre de asistencia para el bloque "${activeSlot.name}" en grado ${selectedGrade}?\n\n• Presentes: ${stats.attended}\n• Sin escanear: ${stats.unscanned}`
-    );
-    if (!confirmClose) return;
-
+  const executeCloseBlock = (force: boolean) => {
     const res = AttendanceStorageService.closeBlockAttendance({
       grade: selectedGrade,
       slotId: activeSlot.id,
@@ -363,12 +359,12 @@ export const TeacherClassroomView: React.FC<TeacherClassroomViewProps> = ({
         message: `Regla de Oro: ${res.reason || '0 escaneos registrados. Se clasificó como hora libre sin marcar ausencias a los estudiantes.'}`
       });
     } else if (res.status === 'PENDIENTE_REVISION') {
-      const forceChoice = window.confirm(
-        `Alerta de Cierre: ${res.reason}\n\n¿Desea forzar el marcado de ausencias de todas formas?`
-      );
-      if (forceChoice) {
-        handleCloseBlock(true);
-      }
+      setConfirmState({
+        title: 'Alerta de cierre',
+        message: `${res.reason}\n\n¿Desea forzar el marcado de ausencias de todas formas?`,
+        confirmLabel: 'Sí, forzar cierre',
+        action: () => executeCloseBlock(true)
+      });
     } else {
       setScanFeedback({
         type: 'success',
@@ -376,6 +372,29 @@ export const TeacherClassroomView: React.FC<TeacherClassroomViewProps> = ({
       });
     }
     setTimeout(() => setScanFeedback(null), 6000);
+  };
+
+  const handleCloseBlock = (force: boolean = false) => {
+    if (isNonComputableSlot.isNonComputable) {
+      setScanFeedback({
+        type: 'warning',
+        message: `Este bloque está clasificado como NO COMPUTABLE (${isNonComputableSlot.reason}). No se generan ausencias automáticas.`
+      });
+      setTimeout(() => setScanFeedback(null), 6000);
+      return;
+    }
+
+    if (!force) {
+      setConfirmState({
+        title: 'Cierre de bloque',
+        message: `¿Desea ejecutar el cierre de asistencia para el bloque "${activeSlot.name}" en grado ${selectedGrade}?\n\n• Presentes: ${stats.attended}\n• Sin escanear: ${stats.unscanned}`,
+        confirmLabel: 'Sí, cerrar bloque',
+        action: () => executeCloseBlock(false)
+      });
+      return;
+    }
+
+    executeCloseBlock(force);
   };
 
   // Toggle Non-Computable / Free hour
@@ -1264,6 +1283,16 @@ export const TeacherClassroomView: React.FC<TeacherClassroomViewProps> = ({
           </div>
         </div>
       )}
+
+      {/* Ronda 18 (H4): modal de confirmación propio (reemplaza window.confirm nativo) */}
+      <ConfirmDialog
+        open={!!confirmState}
+        title={confirmState?.title || ''}
+        message={confirmState?.message || ''}
+        confirmLabel={confirmState?.confirmLabel || 'Confirmar'}
+        onConfirm={() => { const a = confirmState?.action; setConfirmState(null); a?.(); }}
+        onCancel={() => setConfirmState(null)}
+      />
     </div>
   );
 };
