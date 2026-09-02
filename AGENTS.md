@@ -567,6 +567,9 @@ El primer roundtrip se ejecutó sin fijar `schoolCode` de prueba (el default es 
 - `AUTH_TOKEN` del Worker: el propietario lo activará en 1–2 días (mientras tanto el Worker queda abierto — riesgo aceptado y temporal); al activarlo: `wrangler secret put AUTH_TOKEN` + el mismo valor en Ajustes → Token de Acceso del Worker en cada terminal (el cliente ya envía `Authorization: Bearer` de forma uniforme).
 - La Web API Key de Firebase es pública por diseño; la protección real ahora es `isAuthenticated()` + (futuro) App Check.
 
+#### ⚠️ AVISO para la "prueba de fuego" de crear cuenta (verificado por REST, 02/09/2026)
+El proveedor **Email/Password NO está habilitado** en Firebase Console (`accounts:signUp` → `OPERATION_NOT_ALLOWED`). Consecuencias: (1) el botón "¿No tienes cuenta? Registrarse" de la pestaña Firebase responderá con el mensaje amable que la app ya tiene integrado ("El proveedor Email/Password está desactivado…"); (2) para probar la creación de cuentas el propietario debe activar **Firebase Console → Authentication → Sign-in method → Email/Password → Enable** (igual que hizo con Anonymous). El registro ya está blindado (Ronda 18): cualquier cuenta creada nacerá **DOCENTE**, nunca ADMIN. Cuentas fantasma documentadas para la limpieza final (paso 4 de la guía): 3 usuarios anónimos (2 de verificaciones REST Rondas 16/18 + 1 del E2E headless) + la cuenta `prueba.r18.ataque@gmail.com` NO llegó a crearse (el proveedor estaba deshabilitado — no hay nada que limpiar de ella).
+
 ---
 
 ### 🔒 Ronda 9 (02/09/2026): Corrección de Permisos en Firestore y Despliegue de Reglas de Seguridad — ⚠️ REGISTRO HISTÓRICO del otro agente: sus reglas abiertas fueron REVERTIDAS en Ronda 16
