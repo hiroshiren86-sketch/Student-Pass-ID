@@ -19,6 +19,7 @@ import { Student, DocumentType } from '../types/attendance';
 import { AttendanceStorageService } from '../services/attendanceStorage';
 import { AiService } from '../services/aiService';
 import { parseDocumentFile, ExtractedStudentDraft, normalizeGradeName, isValidGrade } from '../utils/documentParser';
+import { compressImageFile } from '../utils/imageCompressor';
 
 interface DocumentUploadModalProps {
   isOpen: boolean;
@@ -75,7 +76,7 @@ export const DocumentUploadModal: React.FC<DocumentUploadModalProps> = ({
             });
 
             if (visionData.success && visionData.students.length > 0) {
-              const photoDataUrl = await readFileAsDataUrl(file);
+              const photoDataUrl = await compressImageFile(file);
               const allowedDocTypes: DocumentType[] = ['TI', 'CC', 'RC', 'CE', 'PPT', 'PEP', 'NES'];
               for (const st of visionData.students) {
                 const docTypeRaw = String(st.documentType || 'TI').toUpperCase().trim() as DocumentType;
@@ -233,10 +234,10 @@ export const DocumentUploadModal: React.FC<DocumentUploadModalProps> = ({
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-6 bg-slate-950/80 backdrop-blur-md animate-fadeIn">
-      <div className="p-5 sm:p-7 rounded-3xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-2xl max-w-5xl w-full max-h-[92vh] flex flex-col space-y-4 text-slate-900 dark:text-white">
+      <div className="p-5 sm:p-7 rounded-3xl bg-white dark:bg-zinc-950 border border-slate-200 dark:border-zinc-800/50 shadow-2xl max-w-5xl w-full max-h-[92vh] flex flex-col space-y-4 text-slate-900 dark:text-white">
         
         {/* Modal Header */}
-        <div className="flex items-center justify-between border-b border-slate-100 dark:border-slate-800 pb-3">
+        <div className="flex items-center justify-between border-b border-slate-100 dark:border-zinc-800/50 pb-3">
           <div className="flex items-center gap-3">
             <div className="w-10 h-10 rounded-2xl bg-indigo-50 dark:bg-indigo-950 text-indigo-600 dark:text-indigo-400 flex items-center justify-center">
               <Upload className="w-5 h-5" />
@@ -277,19 +278,19 @@ export const DocumentUploadModal: React.FC<DocumentUploadModalProps> = ({
               <span>¿Qué archivos soporta y cómo funciona el algoritmo?</span>
             </div>
             <div className="grid grid-cols-1 md:grid-cols-3 gap-3 pt-1 text-[11px] leading-relaxed">
-              <div className="p-2.5 rounded-xl bg-white dark:bg-slate-900 border border-indigo-100 dark:border-indigo-900/60">
+              <div className="p-2.5 rounded-xl bg-white dark:bg-zinc-950 border border-indigo-100 dark:border-indigo-900/60">
                 <strong className="block text-indigo-600 dark:text-indigo-400 font-bold mb-1">
                   1. Fotos Carné / Imágenes (.JPG, .PNG)
                 </strong>
                 Si el nombre del archivo contiene datos (ej: <code className="font-mono bg-slate-100 dark:bg-slate-800 px-1 py-0.5 rounded">TI 1025883921 Gómez Carlos 10-4.jpg</code>), el algoritmo extrae nombres, documento, grado y <strong>adjunta la foto al carné digital</strong>.
               </div>
-              <div className="p-2.5 rounded-xl bg-white dark:bg-slate-900 border border-indigo-100 dark:border-indigo-900/60">
+              <div className="p-2.5 rounded-xl bg-white dark:bg-zinc-950 border border-indigo-100 dark:border-indigo-900/60">
                 <strong className="block text-indigo-600 dark:text-indigo-400 font-bold mb-1">
                   2. Planillas CSV / Excel / SIMAT
                 </strong>
                 Reconoce columnas oficiales de secretaría: Tipo Doc (TI, CC, RC, CE, PPT), Documento, Nombres, Apellidos y Grado. Procesa cientos de filas en milisegundos.
               </div>
-              <div className="p-2.5 rounded-xl bg-white dark:bg-slate-900 border border-indigo-100 dark:border-indigo-900/60">
+              <div className="p-2.5 rounded-xl bg-white dark:bg-zinc-950 border border-indigo-100 dark:border-indigo-900/60">
                 <strong className="block text-indigo-600 dark:text-indigo-400 font-bold mb-1">
                   3. Fichas de Matrícula PDF
                 </strong>
@@ -322,7 +323,7 @@ export const DocumentUploadModal: React.FC<DocumentUploadModalProps> = ({
           className={`border-2 border-dashed rounded-3xl p-6 sm:p-8 text-center cursor-pointer transition-all flex flex-col items-center justify-center gap-2 ${
             dragActive
               ? 'border-indigo-500 bg-indigo-50/50 dark:bg-indigo-950/30 scale-[0.99]'
-              : 'border-slate-300 dark:border-slate-700 hover:border-indigo-400 hover:bg-slate-50/60 dark:hover:bg-slate-800/40'
+              : 'border-slate-300 dark:border-zinc-800 hover:border-indigo-400 hover:bg-slate-50/60 dark:hover:bg-slate-800/40'
           }`}
         >
           <input
@@ -381,9 +382,9 @@ export const DocumentUploadModal: React.FC<DocumentUploadModalProps> = ({
               </div>
             </div>
 
-            <div className="flex-1 overflow-y-auto border border-slate-200 dark:border-slate-800 rounded-2xl">
+            <div className="flex-1 overflow-y-auto border border-slate-200 dark:border-zinc-800/50 rounded-2xl">
               <table className="w-full text-left text-xs">
-                <thead className="sticky top-0 bg-slate-50 dark:bg-slate-800/90 backdrop-blur-md z-10 border-b border-slate-200 dark:border-slate-700 text-slate-500 font-bold uppercase text-[10px]">
+                <thead className="sticky top-0 bg-slate-50 dark:bg-slate-800/90 backdrop-blur-md z-10 border-b border-slate-200 dark:border-zinc-800 text-slate-500 font-bold uppercase text-[10px]">
                   <tr>
                     <th className="py-2.5 px-3">Foto / Origen</th>
                     <th className="py-2.5 px-3">Tipo Doc</th>
@@ -403,10 +404,10 @@ export const DocumentUploadModal: React.FC<DocumentUploadModalProps> = ({
                             <img
                               src={draft.photoUrl}
                               alt="Foto carné"
-                              className="w-8 h-8 rounded-lg object-cover border border-slate-300 dark:border-slate-700 shadow-xs shrink-0"
+                              className="w-8 h-8 rounded-lg object-cover border border-slate-300 dark:border-zinc-800 shadow-xs shrink-0"
                             />
                           ) : (
-                            <div className="w-8 h-8 rounded-lg bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 flex items-center justify-center text-slate-400 shrink-0">
+                            <div className="w-8 h-8 rounded-lg bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-zinc-800 flex items-center justify-center text-slate-400 shrink-0">
                               <FileText className="w-4 h-4" />
                             </div>
                           )}
@@ -420,7 +421,7 @@ export const DocumentUploadModal: React.FC<DocumentUploadModalProps> = ({
                         <select
                           value={draft.documentType}
                           onChange={(e) => updateDraft(draft.id, { documentType: e.target.value as DocumentType })}
-                          className="px-2 py-1 bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-lg text-xs font-bold"
+                          className="px-2 py-1 bg-white dark:bg-black border border-slate-200 dark:border-zinc-800/50 rounded-lg text-xs font-bold"
                         >
                           <option value="TI">TI (Tarjeta de Identidad)</option>
                           <option value="CC">CC (Cédula de Ciudadanía)</option>
@@ -437,7 +438,7 @@ export const DocumentUploadModal: React.FC<DocumentUploadModalProps> = ({
                           type="text"
                           value={draft.documentId}
                           onChange={(e) => updateDraft(draft.id, { documentId: e.target.value })}
-                          className="w-28 px-2 py-1 bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-lg font-mono text-xs font-bold text-indigo-600 dark:text-indigo-400"
+                          className="w-28 px-2 py-1 bg-white dark:bg-black border border-slate-200 dark:border-zinc-800/50 rounded-lg font-mono text-xs font-bold text-indigo-600 dark:text-indigo-400"
                         />
                       </td>
 
@@ -446,7 +447,7 @@ export const DocumentUploadModal: React.FC<DocumentUploadModalProps> = ({
                           type="text"
                           value={draft.firstName}
                           onChange={(e) => updateDraft(draft.id, { firstName: e.target.value.toUpperCase() })}
-                          className="w-32 px-2 py-1 bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-lg text-xs font-bold uppercase"
+                          className="w-32 px-2 py-1 bg-white dark:bg-black border border-slate-200 dark:border-zinc-800/50 rounded-lg text-xs font-bold uppercase"
                         />
                       </td>
 
@@ -455,7 +456,7 @@ export const DocumentUploadModal: React.FC<DocumentUploadModalProps> = ({
                           type="text"
                           value={draft.lastName}
                           onChange={(e) => updateDraft(draft.id, { lastName: e.target.value.toUpperCase() })}
-                          className="w-32 px-2 py-1 bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-lg text-xs uppercase"
+                          className="w-32 px-2 py-1 bg-white dark:bg-black border border-slate-200 dark:border-zinc-800/50 rounded-lg text-xs uppercase"
                         />
                       </td>
 
@@ -465,7 +466,7 @@ export const DocumentUploadModal: React.FC<DocumentUploadModalProps> = ({
                           value={draft.grade}
                           onChange={(e) => updateDraft(draft.id, { grade: e.target.value })}
                           placeholder="ej: 6°5, 10°4"
-                          className="w-20 px-2 py-1 bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-lg text-xs font-bold text-slate-800 dark:text-slate-200"
+                          className="w-20 px-2 py-1 bg-white dark:bg-black border border-slate-200 dark:border-zinc-800/50 rounded-lg text-xs font-bold text-slate-800 dark:text-slate-200"
                         />
                       </td>
 
@@ -487,7 +488,7 @@ export const DocumentUploadModal: React.FC<DocumentUploadModalProps> = ({
         )}
 
         {/* Modal Footer / Actions */}
-        <div className="flex flex-col sm:flex-row items-center justify-between gap-3 pt-2 border-t border-slate-100 dark:border-slate-800">
+        <div className="flex flex-col sm:flex-row items-center justify-between gap-3 pt-2 border-t border-slate-100 dark:border-zinc-800/50">
           <div className="text-xs text-slate-500">
             {drafts.length > 0 ? (
               <span>Se guardarán en el directorio escolar y se generarán sus códigos QR/barras de inmediato.</span>

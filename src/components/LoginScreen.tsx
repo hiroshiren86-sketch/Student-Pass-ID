@@ -19,6 +19,7 @@ import {
 import { UserRole, Teacher, Student } from '../types/attendance';
 import { AttendanceStorageService } from '../services/attendanceStorage';
 import { FirebaseService } from '../services/firebase';
+import { DevFloatingMenu } from './DevFloatingMenu';
 
 interface LoginScreenProps {
   onLoginSuccess: (role: UserRole, userPayload?: { teacher?: Teacher; student?: Student; username: string; email?: string; photoURL?: string }) => void;
@@ -267,7 +268,7 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onLoginSuccess }) => {
   ];
 
   return (
-    <div className="min-h-screen bg-slate-100 dark:bg-slate-950 text-slate-900 dark:text-slate-100 flex flex-col justify-center items-center p-4 sm:p-6 transition-colors duration-200">
+    <div className="min-h-screen bg-slate-100 dark:bg-black text-slate-900 dark:text-slate-100 flex flex-col justify-center items-center p-4 sm:p-6 transition-colors duration-200">
       <div className="w-full max-w-4xl space-y-6">
         {/* Institutional Branding Header */}
         <div className="text-center space-y-2">
@@ -283,9 +284,9 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onLoginSuccess }) => {
         </div>
 
         {/* Login Container Box */}
-        <div className="grid grid-cols-1 lg:grid-cols-12 rounded-3xl bg-white/80 dark:bg-slate-900/80 border border-slate-200/80 dark:border-slate-800 backdrop-blur-2xl shadow-2xl overflow-hidden">
+        <div className="grid grid-cols-1 lg:grid-cols-12 rounded-3xl bg-white/80 dark:bg-zinc-950/80 border border-slate-200/80 dark:border-zinc-800/50 backdrop-blur-2xl shadow-2xl overflow-hidden">
           {/* Left Column: Role Selector */}
-          <div className="lg:col-span-5 p-6 sm:p-8 bg-slate-50/80 dark:bg-slate-950/50 border-b lg:border-b-0 lg:border-r border-slate-200/80 dark:border-slate-800 space-y-4">
+          <div className="lg:col-span-5 p-6 sm:p-8 bg-slate-50/80 dark:bg-black/50 border-b lg:border-b-0 lg:border-r border-slate-200/80 dark:border-zinc-800/50 space-y-4">
             <div>
               <span className="text-[10px] font-bold uppercase tracking-wider text-indigo-600 dark:text-indigo-400">
                 Paso 1: Seleccione su Perfil
@@ -308,7 +309,7 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onLoginSuccess }) => {
                     className={`w-full p-4 rounded-2xl border text-left transition-all flex items-center justify-between group ${
                       isSelected
                         ? r.activeBorder
-                        : 'border-slate-200 dark:border-slate-800/80 bg-white dark:bg-slate-900 hover:border-slate-300 dark:hover:border-slate-700'
+                        : 'border-slate-200 dark:border-zinc-800/50/80 bg-white dark:bg-zinc-950 hover:border-slate-300 dark:hover:border-slate-700'
                     }`}
                   >
                     <div className="flex items-center gap-3.5">
@@ -326,7 +327,7 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onLoginSuccess }) => {
                     </div>
 
                     <div className={`w-4 h-4 rounded-full border flex items-center justify-center transition-colors ${
-                      isSelected ? 'border-indigo-600 bg-indigo-600 text-white' : 'border-slate-300 dark:border-slate-700'
+                      isSelected ? 'border-indigo-600 bg-indigo-600 text-white' : 'border-slate-300 dark:border-zinc-800'
                     }`}>
                       {isSelected && <div className="w-1.5 h-1.5 rounded-full bg-white" />}
                     </div>
@@ -346,7 +347,7 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onLoginSuccess }) => {
             </button>
 
             {showDemoAccountsModal && (
-              <div className="p-3.5 rounded-2xl bg-white dark:bg-slate-900 border border-indigo-200 dark:border-indigo-800 text-[11px] space-y-2 shadow-lg animate-fadeIn">
+              <div className="p-3.5 rounded-2xl bg-white dark:bg-zinc-950 border border-indigo-200 dark:border-indigo-800 text-[11px] space-y-2 shadow-lg animate-fadeIn">
                 <div className="font-black text-indigo-600 dark:text-indigo-400 flex items-center gap-1.5">
                   <Info className="w-3.5 h-3.5" />
                   Credenciales de Demostración:
@@ -364,13 +365,13 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onLoginSuccess }) => {
           <div className="lg:col-span-7 p-6 sm:p-8 flex flex-col justify-between space-y-6">
             <div>
               {/* Auth Mode Tabs */}
-              <div className="flex items-center bg-slate-100 dark:bg-slate-800/80 p-1 rounded-2xl border border-slate-200 dark:border-slate-700 mb-5">
+              <div className="flex items-center bg-slate-100 dark:bg-slate-800/80 p-1 rounded-2xl border border-slate-200 dark:border-zinc-800 mb-5">
                 <button
                   type="button"
                   onClick={() => setAuthMode('ROLE_QUICK')}
                   className={`flex-1 py-2 px-3 rounded-xl text-xs font-bold transition-all ${
                     authMode === 'ROLE_QUICK'
-                      ? 'bg-white dark:bg-slate-900 text-indigo-600 dark:text-indigo-400 shadow-sm'
+                      ? 'bg-white dark:bg-zinc-950 text-indigo-600 dark:text-indigo-400 shadow-sm'
                       : 'text-slate-600 dark:text-slate-400'
                   }`}
                 >
@@ -381,7 +382,7 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onLoginSuccess }) => {
                   onClick={() => setAuthMode('GOOGLE')}
                   className={`flex-1 py-2 px-3 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-1.5 ${
                     authMode === 'GOOGLE'
-                      ? 'bg-white dark:bg-slate-900 text-indigo-600 dark:text-indigo-400 shadow-sm'
+                      ? 'bg-white dark:bg-zinc-950 text-indigo-600 dark:text-indigo-400 shadow-sm'
                       : 'text-slate-600 dark:text-slate-400'
                   }`}
                 >
@@ -398,7 +399,7 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onLoginSuccess }) => {
                   onClick={() => setAuthMode('FIREBASE_EMAIL')}
                   className={`flex-1 py-2 px-3 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-1.5 ${
                     authMode === 'FIREBASE_EMAIL'
-                      ? 'bg-white dark:bg-slate-900 text-indigo-600 dark:text-indigo-400 shadow-sm'
+                      ? 'bg-white dark:bg-zinc-950 text-indigo-600 dark:text-indigo-400 shadow-sm'
                       : 'text-slate-600 dark:text-slate-400'
                   }`}
                 >
@@ -443,7 +444,7 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onLoginSuccess }) => {
                           selectedRole === 'ESTUDIANTE_ACUDIENTE' ? 'Ej: 1000000002' : 
                           selectedRole === 'DOCENTE' ? 'Ej: jperez' : 'Ej: admin'
                         }
-                        className="w-full pl-10 pr-4 py-3 bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-2xl text-xs font-bold text-slate-900 dark:text-white focus:ring-2 focus:ring-indigo-500 outline-none"
+                        className="w-full pl-10 pr-4 py-3 bg-slate-50 dark:bg-black border border-slate-200 dark:border-zinc-800/50 rounded-2xl text-xs font-bold text-slate-900 dark:text-white focus:ring-2 focus:ring-indigo-500 outline-none"
                         required
                       />
                     </div>
@@ -462,7 +463,7 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onLoginSuccess }) => {
                         value={password}
                         onChange={(e) => setPassword(e.target.value)}
                         placeholder="••••••••"
-                        className="w-full pl-10 pr-10 py-3 bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-2xl text-xs font-bold text-slate-900 dark:text-white focus:ring-2 focus:ring-indigo-500 outline-none font-mono"
+                        className="w-full pl-10 pr-10 py-3 bg-slate-50 dark:bg-black border border-slate-200 dark:border-zinc-800/50 rounded-2xl text-xs font-bold text-slate-900 dark:text-white focus:ring-2 focus:ring-indigo-500 outline-none font-mono"
                         required
                       />
                       <button
@@ -478,7 +479,7 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onLoginSuccess }) => {
                   <button
                     type="submit"
                     disabled={isLoading}
-                    className="w-full py-3.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-2xl text-xs font-bold shadow-lg shadow-indigo-600/30 flex items-center justify-center gap-2 transition-all disabled:opacity-50 mt-2"
+                    className="w-full py-3.5 bg-indigo-600 dark:bg-white hover:bg-indigo-500 dark:hover:bg-zinc-200 text-white dark:text-black rounded-2xl text-xs font-bold shadow-lg shadow-indigo-600/30 flex items-center justify-center gap-2 transition-all disabled:opacity-50 mt-2"
                   >
                     {isLoading ? (
                       <span>Iniciando sesión...</span>
@@ -495,7 +496,7 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onLoginSuccess }) => {
               {/* MODE 2: GOOGLE AUTH */}
               {authMode === 'GOOGLE' && (
                 <div className="space-y-5 text-center py-4">
-                  <div className="w-16 h-16 rounded-full bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 shadow-md mx-auto flex items-center justify-center">
+                  <div className="w-16 h-16 rounded-full bg-white dark:bg-slate-800 border border-slate-200 dark:border-zinc-800 shadow-md mx-auto flex items-center justify-center">
                     <svg className="w-8 h-8" viewBox="0 0 24 24">
                       <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/>
                       <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/>
@@ -517,7 +518,7 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onLoginSuccess }) => {
                     type="button"
                     onClick={handleGoogleLogin}
                     disabled={isLoading}
-                    className="w-full py-3.5 bg-white dark:bg-slate-800 hover:bg-slate-50 dark:hover:bg-slate-700 text-slate-800 dark:text-white border border-slate-300 dark:border-slate-700 rounded-2xl text-xs font-bold shadow-md flex items-center justify-center gap-3 transition-all disabled:opacity-50"
+                    className="w-full py-3.5 bg-white dark:bg-slate-800 hover:bg-slate-50 dark:hover:bg-slate-700 text-slate-800 dark:text-white border border-slate-300 dark:border-zinc-800 rounded-2xl text-xs font-bold shadow-md flex items-center justify-center gap-3 transition-all disabled:opacity-50"
                   >
                     <svg className="w-4 h-4" viewBox="0 0 24 24">
                       <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/>
@@ -543,7 +544,7 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onLoginSuccess }) => {
                         value={firebaseDisplayName}
                         onChange={(e) => setFirebaseDisplayName(e.target.value)}
                         placeholder="Ej: Lic. Carlos Mendoza"
-                        className="w-full px-4 py-2.5 bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-2xl text-xs font-bold text-slate-900 dark:text-white outline-none focus:ring-2 focus:ring-indigo-500"
+                        className="w-full px-4 py-2.5 bg-slate-50 dark:bg-black border border-slate-200 dark:border-zinc-800/50 rounded-2xl text-xs font-bold text-slate-900 dark:text-white outline-none focus:ring-2 focus:ring-indigo-500"
                         required
                       />
                     </div>
@@ -560,7 +561,7 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onLoginSuccess }) => {
                         value={firebaseEmail}
                         onChange={(e) => setFirebaseEmail(e.target.value)}
                         placeholder="usuario@inas.edu.co"
-                        className="w-full pl-10 pr-4 py-2.5 bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-2xl text-xs font-bold text-slate-900 dark:text-white outline-none focus:ring-2 focus:ring-indigo-500"
+                        className="w-full pl-10 pr-4 py-2.5 bg-slate-50 dark:bg-black border border-slate-200 dark:border-zinc-800/50 rounded-2xl text-xs font-bold text-slate-900 dark:text-white outline-none focus:ring-2 focus:ring-indigo-500"
                         required
                       />
                     </div>
@@ -577,7 +578,7 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onLoginSuccess }) => {
                         value={firebasePassword}
                         onChange={(e) => setFirebasePassword(e.target.value)}
                         placeholder="••••••••"
-                        className="w-full pl-10 pr-4 py-2.5 bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-2xl text-xs font-bold text-slate-900 dark:text-white outline-none focus:ring-2 focus:ring-indigo-500 font-mono"
+                        className="w-full pl-10 pr-4 py-2.5 bg-slate-50 dark:bg-black border border-slate-200 dark:border-zinc-800/50 rounded-2xl text-xs font-bold text-slate-900 dark:text-white outline-none focus:ring-2 focus:ring-indigo-500 font-mono"
                         required
                       />
                     </div>
@@ -596,7 +597,7 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onLoginSuccess }) => {
                   <button
                     type="submit"
                     disabled={isLoading}
-                    className="w-full py-3 bg-indigo-600 hover:bg-indigo-500 text-white rounded-2xl text-xs font-bold shadow-lg shadow-indigo-600/30 flex items-center justify-center gap-2 transition-all disabled:opacity-50"
+                    className="w-full py-3 bg-indigo-600 dark:bg-white hover:bg-indigo-500 dark:hover:bg-zinc-200 text-white dark:text-black rounded-2xl text-xs font-bold shadow-lg shadow-indigo-600/30 flex items-center justify-center gap-2 transition-all disabled:opacity-50"
                   >
                     {isLoading ? (
                       <span>Procesando...</span>
@@ -612,7 +613,7 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onLoginSuccess }) => {
             </div>
 
             {/* Bottom Security Info */}
-            <div className="pt-4 border-t border-slate-100 dark:border-slate-800 flex items-center justify-between text-[11px] text-slate-400 font-medium">
+            <div className="pt-4 border-t border-slate-100 dark:border-zinc-800/50 flex items-center justify-between text-[11px] text-slate-400 font-medium">
               <span>Firebase Cloud Firestore</span>
               <span>HMAC-SHA256 • Ley 1581</span>
             </div>
@@ -620,43 +621,8 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onLoginSuccess }) => {
         </div>
       </div>
 
-      {/* Floating Quick Test Login Bar */}
-      <div className="fixed bottom-4 left-1/2 -translate-x-1/2 z-50 bg-slate-900/95 text-white p-2.5 sm:p-3 rounded-2xl border border-slate-700 shadow-2xl backdrop-blur-xl flex items-center gap-2 max-w-full overflow-x-auto">
-        <span className="text-[10px] font-mono font-bold px-2 py-1 rounded-lg bg-indigo-500/20 text-indigo-300 border border-indigo-500/30 shrink-0 flex items-center gap-1">
-          <KeyRound className="w-3 h-3 text-indigo-400" /> ACCESO RÁPIDO DE PRUEBAS:
-        </span>
-        <div className="flex items-center gap-1.5 shrink-0">
-          <button
-            type="button"
-            onClick={() => {
-              onLoginSuccess('ADMIN', { username: 'Rectoría / Admin' });
-            }}
-            className="px-2.5 py-1.5 rounded-xl bg-purple-600 hover:bg-purple-500 text-white text-[11px] font-bold transition-all shadow-xs flex items-center gap-1"
-          >
-            🛡️ Rectoría
-          </button>
-          <button
-            type="button"
-            onClick={() => {
-              const firstTeacher = AttendanceStorageService.getTeachers()[0];
-              onLoginSuccess('DOCENTE', { teacher: firstTeacher, username: firstTeacher?.fullName || 'Prof. Juan Pablo Pérez' });
-            }}
-            className="px-2.5 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-[11px] font-bold transition-all shadow-xs flex items-center gap-1"
-          >
-            👨‍🏫 Docente
-          </button>
-          <button
-            type="button"
-            onClick={() => {
-              const firstStudent = AttendanceStorageService.getStudents()[0];
-              onLoginSuccess('ESTUDIANTE_ACUDIENTE', { student: firstStudent, username: `${firstStudent?.firstName} ${firstStudent?.lastName}` });
-            }}
-            className="px-2.5 py-1.5 rounded-xl bg-sky-600 hover:bg-sky-500 text-white text-[11px] font-bold transition-all shadow-xs flex items-center gap-1"
-          >
-            🎓 Estudiante
-          </button>
-        </div>
-      </div>
+      {/* ZONA DEBUG: DevFloatingMenu Inyectado */} 
+      <DevFloatingMenu onLoginSuccess={onLoginSuccess} />
     </div>
   );
 };

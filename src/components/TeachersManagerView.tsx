@@ -213,7 +213,7 @@ export const TeachersManagerView: React.FC = () => {
       )}
 
       {/* Header Banner */}
-      <div className="p-6 rounded-3xl bg-white/70 dark:bg-slate-900/70 border border-slate-200/80 dark:border-slate-800 backdrop-blur-xl shadow-sm flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
+      <div className="p-6 rounded-3xl bg-white/70 dark:bg-zinc-950/70 border border-slate-200/80 dark:border-zinc-800/50 backdrop-blur-xl shadow-sm flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
         <div>
           <div className="flex items-center gap-2">
             <span className="text-[11px] font-bold px-2.5 py-0.5 rounded-full bg-purple-50 dark:bg-purple-950/60 text-purple-700 dark:text-purple-300 border border-purple-200 dark:border-purple-800 uppercase tracking-wider">
@@ -230,7 +230,7 @@ export const TeachersManagerView: React.FC = () => {
 
         <button
           onClick={handleOpenAdd}
-          className="px-4 py-2.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-2xl text-xs font-bold transition-all shadow-md shadow-indigo-600/20 flex items-center gap-2 self-stretch md:self-auto justify-center"
+          className="px-4 py-2.5 bg-indigo-600 dark:bg-white hover:bg-indigo-500 dark:hover:bg-zinc-200 text-white dark:text-black rounded-2xl text-xs font-bold transition-all shadow-md shadow-indigo-600/20 flex items-center gap-2 self-stretch md:self-auto justify-center"
         >
           <UserPlus className="w-4 h-4" />
           <span>Registrar Nuevo Docente</span>
@@ -238,7 +238,7 @@ export const TeachersManagerView: React.FC = () => {
       </div>
 
       {/* Search and Summary Counter */}
-      <div className="p-4 rounded-3xl bg-white/70 dark:bg-slate-900/70 border border-slate-200/80 dark:border-slate-800 backdrop-blur-xl shadow-xs flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3">
+      <div className="p-4 rounded-3xl bg-white/70 dark:bg-zinc-950/70 border border-slate-200/80 dark:border-zinc-800/50 backdrop-blur-xl shadow-xs flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3">
         <div className="relative flex-1 max-w-md">
           <Search className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
           <input
@@ -246,7 +246,7 @@ export const TeachersManagerView: React.FC = () => {
             placeholder="Buscar docente por nombre, cédula, materia o usuario..."
             value={searchTerm}
             onChange={(e) => setSearchTerm(e.target.value)}
-            className="w-full pl-9 pr-4 py-2 bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-2xl text-xs font-medium text-slate-900 dark:text-white focus:ring-2 focus:ring-indigo-500 outline-none"
+            className="w-full pl-9 pr-4 py-2 bg-slate-50 dark:bg-black border border-slate-200 dark:border-zinc-800/50 rounded-2xl text-xs font-medium text-slate-900 dark:text-white focus:ring-2 focus:ring-indigo-500 outline-none"
           />
         </div>
 
@@ -261,7 +261,7 @@ export const TeachersManagerView: React.FC = () => {
         {filteredTeachers.map((teacher) => (
           <div
             key={teacher.id}
-            className="p-5 rounded-3xl bg-white/80 dark:bg-slate-900/80 border border-slate-200/80 dark:border-slate-800 backdrop-blur-xl shadow-sm hover:shadow-md transition-all flex flex-col justify-between space-y-4"
+            className="p-5 rounded-3xl bg-white/80 dark:bg-zinc-950/80 border border-slate-200/80 dark:border-zinc-800/50 backdrop-blur-xl shadow-sm hover:shadow-md transition-all flex flex-col justify-between space-y-4"
           >
             {/* Top: Avatar & Basic Info */}
             <div className="space-y-3">
@@ -302,7 +302,7 @@ export const TeachersManagerView: React.FC = () => {
               </div>
 
               {/* Subjects & Grades Badges */}
-              <div className="space-y-1.5 pt-2 border-t border-slate-100 dark:border-slate-800">
+              <div className="space-y-1.5 pt-2 border-t border-slate-100 dark:border-zinc-800/50">
                 {/* Director de Grupo Badge */}
                 <div className="flex items-center gap-1.5">
                   {teacher.directorGrade ? (
@@ -338,7 +338,7 @@ export const TeachersManagerView: React.FC = () => {
               </div>
 
               {/* Access Credentials Box */}
-              <div className="p-3 rounded-2xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 space-y-1.5">
+              <div className="p-3 rounded-2xl bg-slate-50 dark:bg-black border border-slate-200 dark:border-zinc-800/50 space-y-1.5">
                 <div className="flex items-center justify-between text-[11px]">
                   <span className="font-bold text-slate-500">Usuario:</span>
                   <span className="font-mono font-black text-indigo-600 dark:text-indigo-400">
@@ -355,7 +355,7 @@ export const TeachersManagerView: React.FC = () => {
             </div>
 
             {/* Bottom Actions */}
-            <div className="pt-2 border-t border-slate-100 dark:border-slate-800 flex items-center justify-between gap-1.5">
+            <div className="pt-2 border-t border-slate-100 dark:border-zinc-800/50 flex items-center justify-between gap-1.5">
               <button
                 onClick={() => handleResetPassword(teacher)}
                 className="px-2.5 py-1.5 rounded-xl bg-amber-50 hover:bg-amber-100 dark:bg-amber-950/60 dark:hover:bg-amber-900/60 text-amber-700 dark:text-amber-300 text-[11px] font-bold transition-all border border-amber-200 dark:border-amber-800 flex items-center gap-1"
@@ -389,8 +389,8 @@ export const TeachersManagerView: React.FC = () => {
       {/* MODAL: ADD / EDIT TEACHER */}
       {showModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-md animate-fadeIn">
-          <div className="p-6 sm:p-8 rounded-3xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-2xl max-w-lg w-full space-y-5 max-h-[90vh] overflow-y-auto">
-            <div className="flex items-center justify-between border-b border-slate-100 dark:border-slate-800 pb-3">
+          <div className="p-6 sm:p-8 rounded-3xl bg-white dark:bg-zinc-950 border border-slate-200 dark:border-zinc-800/50 shadow-2xl max-w-lg w-full space-y-5 max-h-[90vh] overflow-y-auto">
+            <div className="flex items-center justify-between border-b border-slate-100 dark:border-zinc-800/50 pb-3">
               <div>
                 <h3 className="text-lg font-black text-slate-900 dark:text-white">
                   {editingTeacher ? 'Editar Ficha del Docente' : 'Registrar Nuevo Docente'}
@@ -419,7 +419,7 @@ export const TeachersManagerView: React.FC = () => {
                     placeholder="Ej: 71829301"
                     value={formData.documentId}
                     onChange={(e) => setFormData({ ...formData, documentId: e.target.value })}
-                    className="w-full px-3 py-2 bg-white dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-xl text-xs font-mono text-slate-900 dark:text-white focus:ring-2 focus:ring-indigo-500 outline-none"
+                    className="w-full px-3 py-2 bg-white dark:bg-black border border-slate-300 dark:border-zinc-800 rounded-xl text-xs font-mono text-slate-900 dark:text-white focus:ring-2 focus:ring-indigo-500 outline-none"
                     required
                   />
                 </div>
@@ -434,7 +434,7 @@ export const TeachersManagerView: React.FC = () => {
                     placeholder="Ej: Juan Pablo Pérez Gómez"
                     value={formData.fullName}
                     onChange={(e) => setFormData({ ...formData, fullName: e.target.value })}
-                    className="w-full px-3 py-2 bg-white dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-xl text-xs font-bold text-slate-900 dark:text-white focus:ring-2 focus:ring-indigo-500 outline-none"
+                    className="w-full px-3 py-2 bg-white dark:bg-black border border-slate-300 dark:border-zinc-800 rounded-xl text-xs font-bold text-slate-900 dark:text-white focus:ring-2 focus:ring-indigo-500 outline-none"
                     required
                   />
                 </div>
@@ -451,7 +451,7 @@ export const TeachersManagerView: React.FC = () => {
                     placeholder="jperez@inas.edu.co"
                     value={formData.email}
                     onChange={(e) => setFormData({ ...formData, email: e.target.value })}
-                    className="w-full px-3 py-2 bg-white dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-xl text-xs text-slate-900 dark:text-white focus:ring-2 focus:ring-indigo-500 outline-none"
+                    className="w-full px-3 py-2 bg-white dark:bg-black border border-slate-300 dark:border-zinc-800 rounded-xl text-xs text-slate-900 dark:text-white focus:ring-2 focus:ring-indigo-500 outline-none"
                   />
                 </div>
 
@@ -465,7 +465,7 @@ export const TeachersManagerView: React.FC = () => {
                     placeholder="3001234567"
                     value={formData.phone}
                     onChange={(e) => setFormData({ ...formData, phone: e.target.value })}
-                    className="w-full px-3 py-2 bg-white dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-xl text-xs text-slate-900 dark:text-white focus:ring-2 focus:ring-indigo-500 outline-none"
+                    className="w-full px-3 py-2 bg-white dark:bg-black border border-slate-300 dark:border-zinc-800 rounded-xl text-xs text-slate-900 dark:text-white focus:ring-2 focus:ring-indigo-500 outline-none"
                   />
                 </div>
               </div>
@@ -480,7 +480,7 @@ export const TeachersManagerView: React.FC = () => {
                   placeholder="Matemáticas, Física, Geometría"
                   value={formData.subjectsText}
                   onChange={(e) => setFormData({ ...formData, subjectsText: e.target.value })}
-                  className="w-full px-3 py-2 bg-white dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-xl text-xs text-slate-900 dark:text-white focus:ring-2 focus:ring-indigo-500 outline-none"
+                  className="w-full px-3 py-2 bg-white dark:bg-black border border-slate-300 dark:border-zinc-800 rounded-xl text-xs text-slate-900 dark:text-white focus:ring-2 focus:ring-indigo-500 outline-none"
                   required
                 />
               </div>
@@ -490,7 +490,7 @@ export const TeachersManagerView: React.FC = () => {
                 <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 uppercase tracking-wider mb-1.5">
                   Cursos / Salones Asignados
                 </label>
-                <div className="flex flex-wrap gap-1.5 max-h-28 overflow-y-auto p-2 bg-slate-50 dark:bg-slate-950 rounded-2xl border border-slate-200 dark:border-slate-800">
+                <div className="flex flex-wrap gap-1.5 max-h-28 overflow-y-auto p-2 bg-slate-50 dark:bg-black rounded-2xl border border-slate-200 dark:border-zinc-800/50">
                   {uniqueGrades.map(g => {
                     const isSelected = formData.assignedGrades.includes(g);
                     return (
@@ -501,7 +501,7 @@ export const TeachersManagerView: React.FC = () => {
                         className={`px-2.5 py-1 rounded-xl text-xs font-bold transition-all ${
                           isSelected
                             ? 'bg-indigo-600 text-white shadow-xs'
-                            : 'bg-white dark:bg-slate-800 text-slate-600 dark:text-slate-300 border border-slate-200 dark:border-slate-700'
+                            : 'bg-white dark:bg-slate-800 text-slate-600 dark:text-slate-300 border border-slate-200 dark:border-zinc-800'
                         }`}
                       >
                         {g}
@@ -524,7 +524,7 @@ export const TeachersManagerView: React.FC = () => {
                 <select
                   value={formData.directorGrade}
                   onChange={(e) => setFormData({ ...formData, directorGrade: e.target.value })}
-                  className="w-full px-3 py-2 bg-white dark:bg-slate-950 border border-amber-300 dark:border-amber-800 rounded-xl text-xs font-bold text-slate-900 dark:text-white outline-none focus:ring-2 focus:ring-amber-500"
+                  className="w-full px-3 py-2 bg-white dark:bg-black border border-amber-300 dark:border-amber-800 rounded-xl text-xs font-bold text-slate-900 dark:text-white outline-none focus:ring-2 focus:ring-amber-500"
                 >
                   <option value="">N/A - Sin dirección de grupo asignada</option>
                   {uniqueGrades.map(g => (
@@ -539,7 +539,7 @@ export const TeachersManagerView: React.FC = () => {
               </div>
 
               {/* Credentials Section */}
-              <div className="pt-2 border-t border-slate-100 dark:border-slate-800 grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div className="pt-2 border-t border-slate-100 dark:border-zinc-800/50 grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
                   <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 uppercase tracking-wider mb-1">
                     Usuario de Acceso
@@ -549,7 +549,7 @@ export const TeachersManagerView: React.FC = () => {
                     placeholder="jperez"
                     value={formData.username}
                     onChange={(e) => setFormData({ ...formData, username: e.target.value })}
-                    className="w-full px-3 py-2 bg-white dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-xl text-xs font-mono font-bold text-slate-900 dark:text-white focus:ring-2 focus:ring-indigo-500 outline-none"
+                    className="w-full px-3 py-2 bg-white dark:bg-black border border-slate-300 dark:border-zinc-800 rounded-xl text-xs font-mono font-bold text-slate-900 dark:text-white focus:ring-2 focus:ring-indigo-500 outline-none"
                   />
                 </div>
 
@@ -561,12 +561,12 @@ export const TeachersManagerView: React.FC = () => {
                     type="text"
                     value={formData.tempPassword}
                     onChange={(e) => setFormData({ ...formData, tempPassword: e.target.value })}
-                    className="w-full px-3 py-2 bg-white dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-xl text-xs font-mono text-slate-900 dark:text-white focus:ring-2 focus:ring-indigo-500 outline-none"
+                    className="w-full px-3 py-2 bg-white dark:bg-black border border-slate-300 dark:border-zinc-800 rounded-xl text-xs font-mono text-slate-900 dark:text-white focus:ring-2 focus:ring-indigo-500 outline-none"
                   />
                 </div>
               </div>
 
-              <div className="pt-4 border-t border-slate-100 dark:border-slate-800 flex justify-end gap-2">
+              <div className="pt-4 border-t border-slate-100 dark:border-zinc-800/50 flex justify-end gap-2">
                 <button
                   type="button"
                   onClick={() => setShowModal(false)}
@@ -590,7 +590,7 @@ export const TeachersManagerView: React.FC = () => {
       {/* MODAL: RESET PASSWORD SUCCESS NOTIFICATION */}
       {resetModalTeacher && newGeneratedPass && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-md animate-fadeIn">
-          <div className="p-6 rounded-3xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-2xl max-w-sm w-full space-y-4 text-center">
+          <div className="p-6 rounded-3xl bg-white dark:bg-zinc-950 border border-slate-200 dark:border-zinc-800/50 shadow-2xl max-w-sm w-full space-y-4 text-center">
             <div className="w-12 h-12 rounded-2xl bg-amber-50 dark:bg-amber-950/80 text-amber-600 mx-auto flex items-center justify-center">
               <Key className="w-6 h-6" />
             </div>
@@ -604,7 +604,7 @@ export const TeachersManagerView: React.FC = () => {
               </p>
             </div>
 
-            <div className="p-4 rounded-2xl bg-slate-100 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 flex items-center justify-between">
+            <div className="p-4 rounded-2xl bg-slate-100 dark:bg-black border border-slate-200 dark:border-zinc-800/50 flex items-center justify-between">
               <span className="font-mono text-base font-black text-indigo-600 dark:text-indigo-400">
                 {newGeneratedPass}
               </span>

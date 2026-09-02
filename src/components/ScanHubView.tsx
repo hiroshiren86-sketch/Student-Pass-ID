@@ -173,7 +173,7 @@ export const ScanHubView: React.FC<ScanHubViewProps> = ({ onScanSuccess }) => {
   return (
     <div className="max-w-4xl mx-auto space-y-5 animate-fadeIn" id="scan-hub-view">
       {/* Top Banner with Clock & Offline Status */}
-      <div className="p-5 sm:p-6 rounded-3xl bg-white/80 dark:bg-slate-900/80 border border-slate-200/80 dark:border-slate-800 backdrop-blur-xl shadow-xs flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+      <div className="p-5 sm:p-6 rounded-3xl bg-white/80 dark:bg-zinc-950/80 border border-slate-200/80 dark:border-zinc-800/50 backdrop-blur-xl shadow-xs flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
         <div className="flex items-center gap-3.5">
           <div className="w-12 h-12 rounded-2xl bg-indigo-600/10 dark:bg-indigo-500/20 text-indigo-600 dark:text-indigo-400 flex items-center justify-center border border-indigo-200 dark:border-indigo-500/30 shrink-0">
             <ScanLine className="w-6 h-6 animate-pulse" />
@@ -210,7 +210,7 @@ export const ScanHubView: React.FC<ScanHubViewProps> = ({ onScanSuccess }) => {
             className={`px-3 py-2 rounded-2xl border transition-all flex items-center gap-1.5 text-xs font-bold ${
               soundEnabled 
                 ? 'bg-indigo-50 dark:bg-indigo-950/60 text-indigo-600 dark:text-indigo-400 border-indigo-200 dark:border-indigo-800' 
-                : 'bg-slate-100 dark:bg-slate-800 text-slate-400 border-slate-200 dark:border-slate-700'
+                : 'bg-slate-100 dark:bg-slate-800 text-slate-400 border-slate-200 dark:border-zinc-800'
             }`}
             title={soundEnabled ? 'Sonido Activado' : 'Sonido Silenciado'}
           >
@@ -244,7 +244,7 @@ export const ScanHubView: React.FC<ScanHubViewProps> = ({ onScanSuccess }) => {
       {/* Unified Modifiers */}
       <div className="max-w-md mx-auto">
         {/* Toggle USB HID vs Cámara */}
-        <div className="p-1.5 bg-white/80 dark:bg-slate-900/80 border border-slate-200/80 dark:border-slate-800 rounded-2xl flex items-center gap-1 shadow-xs">
+        <div className="p-1.5 bg-white/80 dark:bg-zinc-950/80 border border-slate-200/80 dark:border-zinc-800/50 rounded-2xl flex items-center gap-1 shadow-xs">
           <button
             onClick={() => setScanMethod('USB')}
             className={`flex-1 py-2.5 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-2 ${
@@ -271,7 +271,7 @@ export const ScanHubView: React.FC<ScanHubViewProps> = ({ onScanSuccess }) => {
       </div>
 
       {/* Main Scanner Section */}
-      <div className="p-6 sm:p-7 rounded-3xl bg-white/80 dark:bg-slate-900/80 border border-slate-200/80 dark:border-slate-800 backdrop-blur-xl shadow-xs space-y-5">
+      <div className="p-6 sm:p-7 rounded-3xl bg-white/80 dark:bg-zinc-950/80 border border-slate-200/80 dark:border-zinc-800/50 backdrop-blur-xl shadow-xs space-y-5">
         {scanMethod === 'USB' ? (
           <div className="space-y-4 text-center max-w-lg mx-auto py-1">
             <div className="space-y-1">
@@ -306,7 +306,7 @@ export const ScanHubView: React.FC<ScanHubViewProps> = ({ onScanSuccess }) => {
                 onClick={() => setPreventVirtualKeyboard(!preventVirtualKeyboard)}
                 className={`text-[11px] font-bold px-3 py-1.5 rounded-xl border transition-all flex items-center gap-1.5 ${
                   preventVirtualKeyboard
-                    ? 'bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 border-slate-200 dark:border-slate-700'
+                    ? 'bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 border-slate-200 dark:border-zinc-800'
                     : 'bg-indigo-50 dark:bg-indigo-950 text-indigo-600 dark:text-indigo-400 border-indigo-200 dark:border-indigo-800'
                 }`}
               >
@@ -376,8 +376,8 @@ export const ScanHubView: React.FC<ScanHubViewProps> = ({ onScanSuccess }) => {
       </div>
 
       {/* Recent Scans Strip */}
-      <div className="p-5 sm:p-6 rounded-3xl bg-white/80 dark:bg-slate-900/80 border border-slate-200/80 dark:border-slate-800 backdrop-blur-xl shadow-xs space-y-3.5">
-        <div className="flex items-center justify-between border-b border-slate-100 dark:border-slate-800/80 pb-3">
+      <div className="p-5 sm:p-6 rounded-3xl bg-white/80 dark:bg-zinc-950/80 border border-slate-200/80 dark:border-zinc-800/50 backdrop-blur-xl shadow-xs space-y-3.5">
+        <div className="flex items-center justify-between border-b border-slate-100 dark:border-zinc-800/50/80 pb-3">
           <div className="flex items-center gap-2">
             <UserCheck className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />
             <h3 className="text-xs font-bold uppercase tracking-wider text-slate-800 dark:text-slate-200">
@@ -394,7 +394,7 @@ export const ScanHubView: React.FC<ScanHubViewProps> = ({ onScanSuccess }) => {
             {recentScans.map((record) => (
               <div 
                 key={record.id} 
-                className="p-3 rounded-2xl bg-slate-50 dark:bg-slate-950/70 border border-slate-200/80 dark:border-slate-800/80 flex items-center justify-between gap-3 shadow-xs"
+                className="p-3 rounded-2xl bg-slate-50 dark:bg-black/70 border border-slate-200/80 dark:border-zinc-800/50/80 flex items-center justify-between gap-3 shadow-xs"
               >
                 <div className="min-w-0">
                   <p className="font-bold text-xs text-slate-900 dark:text-white truncate">

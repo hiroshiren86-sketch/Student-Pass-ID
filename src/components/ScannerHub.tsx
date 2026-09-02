@@ -132,8 +132,8 @@ export const ScannerHub: React.FC<ScannerHubProps> = ({
       <div className="absolute bottom-0 left-0 w-80 h-80 bg-cyan-500/10 rounded-full blur-3xl pointer-events-none -ml-20 -mb-20" />
 
       {/* Tab Navigation */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-6 pb-4 border-b border-slate-100 dark:border-slate-800/80 relative z-10">
-        <div className="grid grid-cols-3 sm:flex items-center gap-1.5 p-1.5 bg-slate-100/90 dark:bg-slate-950/80 rounded-2xl border border-slate-200/80 dark:border-slate-800/80 w-full sm:w-auto shadow-inner">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-6 pb-4 border-b border-slate-100 dark:border-zinc-800/50/80 relative z-10">
+        <div className="grid grid-cols-3 sm:flex items-center gap-1.5 p-1.5 bg-slate-100/90 dark:bg-black/80 rounded-2xl border border-slate-200/80 dark:border-zinc-800/50/80 w-full sm:w-auto shadow-inner">
           <button
             onClick={() => setActiveTab('usb')}
             id="tab-usb-scanner"
@@ -175,7 +175,7 @@ export const ScannerHub: React.FC<ScannerHubProps> = ({
         </div>
 
         {/* Live Status indicator & Device Pill */}
-        <div className="flex items-center justify-between sm:justify-start gap-2 text-xs font-mono text-slate-600 dark:text-slate-400 bg-slate-100/90 dark:bg-slate-950/80 px-3.5 py-1.5 rounded-full border border-slate-200/80 dark:border-slate-800/80 self-stretch sm:self-auto shadow-xs">
+        <div className="flex items-center justify-between sm:justify-start gap-2 text-xs font-mono text-slate-600 dark:text-slate-400 bg-slate-100/90 dark:bg-black/80 px-3.5 py-1.5 rounded-full border border-slate-200/80 dark:border-zinc-800/50/80 self-stretch sm:self-auto shadow-xs">
           <div className="flex items-center gap-2">
             <span className="w-2 h-2 rounded-full bg-emerald-500 animate-ping" />
             <span className="font-semibold text-emerald-700 dark:text-emerald-400">LISTO PARA ESCANEO</span>
@@ -223,7 +223,7 @@ export const ScannerHub: React.FC<ScannerHubProps> = ({
                     onKeyDown={handleUsbKeyDown}
                     placeholder="Esperando lectura de código..."
                     autoFocus={!isTouchDevice}
-                    className="w-full bg-white dark:bg-slate-950 border-2 border-indigo-400 dark:border-indigo-500/80 focus:border-cyan-500 focus:ring-4 focus:ring-cyan-500/20 text-slate-900 dark:text-white font-mono text-sm px-4 py-3 rounded-2xl shadow-inner outline-none transition-all placeholder:text-slate-400 dark:placeholder:text-slate-600"
+                    className="w-full bg-white dark:bg-black border-2 border-indigo-400 dark:border-indigo-500/80 focus:border-cyan-500 focus:ring-4 focus:ring-cyan-500/20 text-slate-900 dark:text-white font-mono text-sm px-4 py-3 rounded-2xl shadow-inner outline-none transition-all placeholder:text-slate-400 dark:placeholder:text-slate-600"
                   />
                   <div className="absolute right-3 top-1/2 -translate-y-1/2 flex items-center gap-1.5">
                     <span className="text-[11px] font-mono font-bold px-2 py-0.5 rounded-lg bg-indigo-100 dark:bg-indigo-500/20 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-500/30">
@@ -233,7 +233,7 @@ export const ScannerHub: React.FC<ScannerHubProps> = ({
                 </div>
 
                 {/* Modern Toggles Row */}
-                <div className="bg-slate-100/80 dark:bg-slate-950/80 p-3 rounded-xl border border-slate-200 dark:border-slate-800/80 space-y-2.5">
+                <div className="bg-slate-100/80 dark:bg-black/80 p-3 rounded-xl border border-slate-200 dark:border-zinc-800/50/80 space-y-2.5">
                   <ToggleSwitch
                     checked={isUsbModeActive}
                     onChange={setIsUsbModeActive}
@@ -244,7 +244,7 @@ export const ScannerHub: React.FC<ScannerHubProps> = ({
                   />
 
                   {isTouchDevice && (
-                    <div className="pt-2 border-t border-slate-200 dark:border-slate-800">
+                    <div className="pt-2 border-t border-slate-200 dark:border-zinc-800/50">
                       <ToggleSwitch
                         checked={preventVirtualKeyboard}
                         onChange={setPreventVirtualKeyboard}
@@ -258,7 +258,7 @@ export const ScannerHub: React.FC<ScannerHubProps> = ({
                   )}
 
                   {lastScannedCode && (
-                    <div className="pt-2 border-t border-slate-200 dark:border-slate-800 flex items-center justify-between text-[11px]">
+                    <div className="pt-2 border-t border-slate-200 dark:border-zinc-800/50 flex items-center justify-between text-[11px]">
                       <span className="text-slate-500 dark:text-slate-400 font-medium">Último leído:</span>
                       <span className="font-mono font-bold text-indigo-600 dark:text-cyan-300 truncate max-w-[180px]">
                         {lastScannedCode}
@@ -363,13 +363,13 @@ export const ScannerHub: React.FC<ScannerHubProps> = ({
                     if (selectedStudent) setSelectedStudent(null);
                   }}
                   placeholder="Ej. Santiago, 1025890123, 11°, Gómez..."
-                  className="w-full bg-white dark:bg-slate-950 border border-slate-300 dark:border-slate-700 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 text-slate-900 dark:text-white text-sm pl-10 pr-4 py-2.5 rounded-xl outline-none transition-all placeholder:text-slate-400 dark:placeholder:text-slate-500 shadow-xs"
+                  className="w-full bg-white dark:bg-black border border-slate-300 dark:border-zinc-800 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 text-slate-900 dark:text-white text-sm pl-10 pr-4 py-2.5 rounded-xl outline-none transition-all placeholder:text-slate-400 dark:placeholder:text-slate-500 shadow-xs"
                 />
               </div>
 
               {/* Autocomplete Dropdown */}
               {filteredStudents.length > 0 && !selectedStudent && (
-                <div className="absolute top-full left-0 right-0 mt-1 bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-700 rounded-xl shadow-2xl z-30 overflow-hidden divide-y divide-slate-100 dark:divide-slate-800">
+                <div className="absolute top-full left-0 right-0 mt-1 bg-white dark:bg-black border border-slate-200 dark:border-zinc-800 rounded-xl shadow-2xl z-30 overflow-hidden divide-y divide-slate-100 dark:divide-slate-800">
                   {filteredStudents.map((std) => (
                     <button
                       type="button"
@@ -452,7 +452,7 @@ export const ScannerHub: React.FC<ScannerHubProps> = ({
                 <select
                   value={manualStatus}
                   onChange={(e) => setManualStatus(e.target.value as AttendanceStatus)}
-                  className="w-full bg-white dark:bg-slate-950 border border-slate-300 dark:border-slate-700 text-slate-900 dark:text-white text-sm px-3 py-2.5 rounded-xl outline-none focus:border-indigo-500 shadow-xs"
+                  className="w-full bg-white dark:bg-black border border-slate-300 dark:border-zinc-800 text-slate-900 dark:text-white text-sm px-3 py-2.5 rounded-xl outline-none focus:border-indigo-500 shadow-xs"
                 >
                   <option value="punctual">Puntual (A tiempo)</option>
                   <option value="tardy">Tardanza (Con justificación o retraso)</option>
@@ -470,7 +470,7 @@ export const ScannerHub: React.FC<ScannerHubProps> = ({
                   value={manualNotes}
                   onChange={(e) => setManualNotes(e.target.value)}
                   placeholder="Ej. Cita médica, transporte demorado..."
-                  className="w-full bg-white dark:bg-slate-950 border border-slate-300 dark:border-slate-700 text-slate-900 dark:text-white text-sm px-3 py-2.5 rounded-xl outline-none focus:border-indigo-500 placeholder:text-slate-400 dark:placeholder:text-slate-600 shadow-xs"
+                  className="w-full bg-white dark:bg-black border border-slate-300 dark:border-zinc-800 text-slate-900 dark:text-white text-sm px-3 py-2.5 rounded-xl outline-none focus:border-indigo-500 placeholder:text-slate-400 dark:placeholder:text-slate-600 shadow-xs"
                 />
               </div>
             </div>

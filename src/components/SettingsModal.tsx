@@ -13,6 +13,7 @@ import {
   AlertTriangle,
   Sparkles,
   Cloud,
+  Trash2,
   RefreshCw,
   Calendar,
   Layers,
@@ -29,6 +30,8 @@ import { FirebaseService } from '../services/firebase';
 import { CloudflareSyncService, CloudflareSyncResult } from '../services/cloudflareSync';
 import { AiService } from '../services/aiService';
 import { AiProviderMark } from './AiProviderMark';
+
+import { SyncOverlay } from './SyncOverlay';
 
 interface SettingsModalProps {
   onClose: () => void;
@@ -48,6 +51,20 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ onClose }) => {
   const [availableModels, setAvailableModels] = useState<Array<{ id: string; name: string; isRecommended?: boolean; isVision?: boolean; description?: string }>>([]);
   const [isLoadingModels, setIsLoadingModels] = useState(false);
   const [modelsFetchStatus, setModelsFetchStatus] = useState<string | null>(null);
+
+  const [syncOverlay, setSyncOverlay] = useState<{
+    isOpen: boolean;
+    provider: 'firebase' | 'cloudflare';
+    action: 'push' | 'pull';
+    status: 'syncing' | 'success' | 'error';
+    message: string;
+  }>({
+    isOpen: false,
+    provider: 'cloudflare',
+    action: 'push',
+    status: 'syncing',
+    message: ''
+  });
   
   // AI Connection Test state
   const [isTestingAi, setIsTestingAi] = useState(false);
@@ -125,6 +142,13 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ onClose }) => {
   const handleCloudSync = async () => {
     setIsSyncingCloud(true);
     setCloudSyncMsg(null);
+    setSyncOverlay({
+      isOpen: true,
+      provider: 'firebase',
+      action: 'push',
+      status: 'syncing',
+      message: 'Subiendo datos a Firebase Firestore...'
+    });
     try {
       const data = {
         students: AttendanceStorageService.getStudents(),
@@ -135,8 +159,10 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ onClose }) => {
         scheduleSlots: AttendanceStorageService.getScheduleSlots()
       };
       const res = await FirebaseService.backupAllToFirestore(data);
+      setSyncOverlay(prev => ({ ...prev, status: 'success', message: res.message }));
       setCloudSyncMsg(res.message);
     } catch (e: any) {
+      setSyncOverlay(prev => ({ ...prev, status: 'error', message: `Error al respaldar en Firebase: ${e.message || e}` }));
       setCloudSyncMsg(`Error al respaldar en Firebase: ${e.message || e}`);
     } finally {
       setIsSyncingCloud(false);
@@ -163,12 +189,18 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ onClose }) => {
 
   const handlePullCloudflare = async () => {
     AttendanceStorageService.saveSettings(settings);
-    if (!window.confirm('¿Deseas descargar los datos de asistencia y estudiantes desde Cloudflare para sincronizar este dispositivo?')) {
-      return;
-    }
+    // Remover window.confirm porque el overlay asume la confirmación de iniciar
+    setSyncOverlay({
+      isOpen: true,
+      provider: 'cloudflare',
+      action: 'pull',
+      status: 'syncing',
+      message: 'Descargando datos desde Cloudflare Worker (D1/KV)...'
+    });
     setIsPullingCloudflare(true);
     try {
       const res = await CloudflareSyncService.pullFromCloudflare();
+      setSyncOverlay(prev => ({ ...prev, status: res.success ? 'success' : 'error', message: res.message }));
       setCloudflareSyncResult({
         success: res.success,
         timestamp: new Date().toLocaleTimeString('es-CO'),
@@ -177,6 +209,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ onClose }) => {
         message: res.message,
         target: 'Cloudflare D1'
       });
+    } catch (err: any) {
+      setSyncOverlay(prev => ({ ...prev, status: 'error', message: err.message || 'Error desconocido' }));
     } finally {
       setIsPullingCloudflare(false);
     }
@@ -185,18 +219,28 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ onClose }) => {
   const handleCloudflareSync = async () => {
     setIsSyncingCloudflare(true);
     setCloudflareSyncResult(null);
+    setSyncOverlay({
+      isOpen: true,
+      provider: 'cloudflare',
+      action: 'push',
+      status: 'syncing',
+      message: 'Sincronizando datos con Cloudflare D1/KV...'
+    });
     try {
       // Guardar primero para que use los tokens recién editados
       AttendanceStorageService.saveSettings(settings);
       const res = await CloudflareSyncService.performCloudflareSync();
+      setSyncOverlay(prev => ({ ...prev, status: res.success ? 'success' : 'error', message: res.message }));
       setCloudflareSyncResult(res);
     } catch (err: any) {
+      const errorMsg = `Error al sincronizar con Cloudflare: ${err.message || err}`;
+      setSyncOverlay(prev => ({ ...prev, status: 'error', message: errorMsg }));
       setCloudflareSyncResult({
         success: false,
         timestamp: new Date().toLocaleTimeString('es-CO'),
         syncedRecordsCount: 0,
         syncedStudentsCount: 0,
-        message: `Error al sincronizar con Cloudflare: ${err.message || err}`,
+        message: errorMsg,
         target: 'Cloudflare D1'
       });
     } finally {
@@ -225,15 +269,22 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ onClose }) => {
     }
   };
 
+
+
   // Ronda 4 (F1): lista fusionada (oficiales + CUSTOM de Rectoría); activo resuelto por ID con compat de TYPE legado
   const activeTemplateDef = AttendanceStorageService.getActiveDayTemplate();
   const allTemplates = AttendanceStorageService.getDayTemplates();
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-slate-950/75 dark:bg-slate-950/85 backdrop-blur-md animate-fadeIn" id="settings-modal">
-      <div className="glass-panel rounded-3xl max-w-xl w-full p-4 sm:p-6 shadow-2xl relative space-y-5 max-h-[92vh] overflow-y-auto transition-colors">
-        {/* Header */}
-        <div className="flex items-center justify-between border-b border-slate-100 dark:border-slate-800 pb-4">
+    <>
+      <SyncOverlay 
+        {...syncOverlay}
+        onClose={() => setSyncOverlay(prev => ({ ...prev, isOpen: false }))}
+      />
+      <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-slate-950/75 dark:bg-black/85 backdrop-blur-md animate-fadeIn" id="settings-modal">
+        <div className="glass-panel rounded-3xl max-w-xl w-full p-4 sm:p-6 shadow-2xl relative space-y-5 max-h-[92vh] overflow-y-auto transition-colors">
+          {/* Header */}
+        <div className="flex items-center justify-between border-b border-slate-100 dark:border-zinc-800/50 pb-4">
           <div className="flex items-center gap-2.5">
             <div className="p-2.5 bg-indigo-50 dark:bg-indigo-500/20 text-indigo-600 dark:text-indigo-400 rounded-2xl shadow-xs">
               <Settings className="w-5 h-5" />
@@ -264,7 +315,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ onClose }) => {
                 type="text"
                 value={settings.schoolName}
                 onChange={(e) => handleChange('schoolName', e.target.value)}
-                className="w-full bg-white dark:bg-slate-950 border border-slate-300 dark:border-slate-700 focus:border-indigo-500 text-slate-900 dark:text-white text-xs pl-9 pr-3 py-2.5 rounded-xl outline-none shadow-xs"
+                className="w-full bg-white dark:bg-black border border-slate-300 dark:border-zinc-800 focus:border-indigo-500 text-slate-900 dark:text-white text-xs pl-9 pr-3 py-2.5 rounded-xl outline-none shadow-xs"
                 required
               />
             </div>
@@ -285,7 +336,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ onClose }) => {
             <select
               value={activeTemplateDef.id}
               onChange={(e) => handleDayTemplateChange(e.target.value)}
-              className="w-full bg-white dark:bg-slate-900 border border-indigo-200 dark:border-indigo-800 text-slate-900 dark:text-white text-xs font-bold px-3 py-2 rounded-xl outline-none"
+              className="w-full bg-white dark:bg-zinc-950 border border-indigo-200 dark:border-indigo-800 text-slate-900 dark:text-white text-xs font-bold px-3 py-2 rounded-xl outline-none"
             >
               {allTemplates.map(tpl => (
                 <option key={tpl.id} value={tpl.id}>
@@ -311,7 +362,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ onClose }) => {
                   type="time"
                   value={settings.dailyStartTime}
                   onChange={(e) => handleChange('dailyStartTime', e.target.value)}
-                  className="w-full bg-white dark:bg-slate-950 border border-slate-300 dark:border-slate-700 focus:border-indigo-500 text-slate-900 dark:text-white text-xs pl-9 pr-3 py-2.5 rounded-xl outline-none font-mono shadow-xs"
+                  className="w-full bg-white dark:bg-black border border-slate-300 dark:border-zinc-800 focus:border-indigo-500 text-slate-900 dark:text-white text-xs pl-9 pr-3 py-2.5 rounded-xl outline-none font-mono shadow-xs"
                   required
                 />
               </div>
@@ -329,7 +380,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ onClose }) => {
                   max="60"
                   value={settings.tardyGracePeriodMinutes}
                   onChange={(e) => handleChange('tardyGracePeriodMinutes', Number(e.target.value))}
-                  className="w-full bg-white dark:bg-slate-950 border border-slate-300 dark:border-slate-700 focus:border-indigo-500 text-slate-900 dark:text-white text-xs px-3 py-2.5 rounded-xl outline-none font-mono shadow-xs"
+                  className="w-full bg-white dark:bg-black border border-slate-300 dark:border-zinc-800 focus:border-indigo-500 text-slate-900 dark:text-white text-xs px-3 py-2.5 rounded-xl outline-none font-mono shadow-xs"
                   required
                 />
                 <span className="text-xs text-slate-500 dark:text-slate-400 ml-2">min</span>
@@ -355,7 +406,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ onClose }) => {
                   type="time"
                   value={settings.dailyEndTime}
                   onChange={(e) => handleChange('dailyEndTime', e.target.value)}
-                  className="w-full bg-white dark:bg-slate-950 border border-slate-300 dark:border-slate-700 focus:border-indigo-500 text-slate-900 dark:text-white text-xs pl-9 pr-3 py-2.5 rounded-xl outline-none font-mono shadow-xs"
+                  className="w-full bg-white dark:bg-black border border-slate-300 dark:border-zinc-800 focus:border-indigo-500 text-slate-900 dark:text-white text-xs pl-9 pr-3 py-2.5 rounded-xl outline-none font-mono shadow-xs"
                   required
                 />
               </div>
@@ -364,7 +415,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ onClose }) => {
           </div>
 
           {/* AI Engine & Multi-Provider Configuration */}
-          <div className="p-4 rounded-2xl bg-slate-100 dark:bg-slate-900/90 border border-slate-200 dark:border-slate-800 space-y-3">
+          <div className="p-4 rounded-2xl bg-slate-100 dark:bg-zinc-950/90 border border-slate-200 dark:border-zinc-800/50 space-y-3">
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-2 text-xs font-black text-slate-900 dark:text-white">
                 <AiProviderMark provider={settings.aiProvider} active={Boolean(settings.customAiApiKey?.trim())} className="w-4 h-4" />
@@ -390,7 +441,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ onClose }) => {
                     setSettings(prev => ({ ...prev, aiProvider: newProvider, aiModel: recommended }));
                     fetchProviderModels(newProvider, settings.customAiApiKey);
                   }}
-                  className="w-full bg-white dark:bg-slate-950 border border-slate-300 dark:border-slate-700 text-slate-900 dark:text-white text-xs font-bold px-2.5 py-2 rounded-xl outline-none"
+                  className="w-full bg-white dark:bg-black border border-slate-300 dark:border-zinc-800 text-slate-900 dark:text-white text-xs font-bold px-2.5 py-2 rounded-xl outline-none"
                 >
                   <option value="groq">Groq Cloud (GPT-OSS 120B / Compound / LPU)</option>
                   <option value="mistral">Mistral AI (Mistral Small / Pixtral Vision)</option>
@@ -416,7 +467,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ onClose }) => {
                 <select
                   value={settings.aiModel || (availableModels[0]?.id || '')}
                   onChange={(e) => handleChange('aiModel', e.target.value)}
-                  className="w-full bg-white dark:bg-slate-950 border border-slate-300 dark:border-slate-700 text-slate-900 dark:text-white text-xs font-bold px-2.5 py-2 rounded-xl outline-none"
+                  className="w-full bg-white dark:bg-black border border-slate-300 dark:border-zinc-800 text-slate-900 dark:text-white text-xs font-bold px-2.5 py-2 rounded-xl outline-none"
                 >
                   {availableModels.map((m) => (
                     <option key={m.id} value={m.id}>
@@ -450,7 +501,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ onClose }) => {
                   value={settings.customAiApiKey || ''}
                   onChange={(e) => handleChange('customAiApiKey', e.target.value)}
                   placeholder={`Ingresa tu API Key de ${settings.aiProvider?.toUpperCase() || 'IA'}...`}
-                  className="w-full bg-white dark:bg-slate-950 border border-slate-300 dark:border-slate-700 text-slate-900 dark:text-white text-xs pl-3 pr-9 py-2 rounded-xl outline-none font-mono"
+                  className="w-full bg-white dark:bg-black border border-slate-300 dark:border-zinc-800 text-slate-900 dark:text-white text-xs pl-3 pr-9 py-2 rounded-xl outline-none font-mono"
                 />
                 <button
                   type="button"
@@ -490,7 +541,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ onClose }) => {
             </div>
 
             {/* AI Test Connection Button & Result */}
-            <div className="pt-2 border-t border-slate-200 dark:border-slate-800 space-y-2">
+            <div className="pt-2 border-t border-slate-200 dark:border-zinc-800/50 space-y-2">
               <div className="flex items-center justify-between">
                 <button
                   type="button"
@@ -546,7 +597,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ onClose }) => {
                   value={settings.cloudflareWorkerUrl || ''}
                   onChange={(e) => handleChange('cloudflareWorkerUrl', e.target.value)}
                   placeholder="https://inas-attendance-worker.hiroshiren86.workers.dev"
-                  className="w-full bg-white dark:bg-slate-950 border border-amber-200 dark:border-amber-800 text-slate-900 dark:text-white text-xs px-2.5 py-2 rounded-xl outline-none font-mono"
+                  className="w-full bg-white dark:bg-black border border-amber-200 dark:border-amber-800 text-slate-900 dark:text-white text-xs px-2.5 py-2 rounded-xl outline-none font-mono"
                 />
               </div>
 
@@ -557,7 +608,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ onClose }) => {
                 <select
                   value={settings.cloudflareSyncIntervalMinutes || 5}
                   onChange={(e) => handleChange('cloudflareSyncIntervalMinutes', Number(e.target.value))}
-                  className="w-full bg-white dark:bg-slate-950 border border-amber-200 dark:border-amber-800 text-slate-900 dark:text-white text-xs font-bold px-2.5 py-2 rounded-xl outline-none"
+                  className="w-full bg-white dark:bg-black border border-amber-200 dark:border-amber-800 text-slate-900 dark:text-white text-xs font-bold px-2.5 py-2 rounded-xl outline-none"
                 >
                   <option value={1}>Cada 1 minuto (Tiempo Real)</option>
                   <option value={5}>Cada 5 minutos (Recomendado)</option>
@@ -577,7 +628,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ onClose }) => {
                   value={settings.cloudflareAccountId || ''}
                   onChange={(e) => handleChange('cloudflareAccountId', e.target.value)}
                   placeholder="ID de cuenta Cloudflare"
-                  className="w-full bg-white dark:bg-slate-950 border border-amber-200 dark:border-amber-800 text-slate-900 dark:text-white text-xs px-2.5 py-2 rounded-xl outline-none font-mono"
+                  className="w-full bg-white dark:bg-black border border-amber-200 dark:border-amber-800 text-slate-900 dark:text-white text-xs px-2.5 py-2 rounded-xl outline-none font-mono"
                 />
               </div>
 
@@ -591,7 +642,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ onClose }) => {
                     value={settings.cloudflareApiToken || ''}
                     onChange={(e) => handleChange('cloudflareApiToken', e.target.value)}
                     placeholder="API Token con permisos D1:Edit"
-                    className="w-full bg-white dark:bg-slate-950 border border-amber-200 dark:border-amber-800 text-slate-900 dark:text-white text-xs pl-2.5 pr-8 py-2 rounded-xl outline-none font-mono"
+                    className="w-full bg-white dark:bg-black border border-amber-200 dark:border-amber-800 text-slate-900 dark:text-white text-xs pl-2.5 pr-8 py-2 rounded-xl outline-none font-mono"
                   />
                   <button
                     type="button"
@@ -624,7 +675,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ onClose }) => {
                 <button
                   type="button"
                   onClick={handlePullCloudflare}
-                  disabled={isPullingCloudflare || !settings.cloudflareWorkerUrl}
+                  disabled={isPullingCloudflare || (!settings.cloudflareWorkerUrl && !(settings.cloudflareAccountId && settings.cloudflareApiToken && settings.cloudflareD1DatabaseId))}
                   className="px-2.5 py-1.5 bg-sky-600/15 hover:bg-sky-600/25 text-sky-900 dark:text-sky-200 border border-sky-500/30 rounded-xl text-[11px] font-bold flex items-center gap-1 transition-all disabled:opacity-40"
                   title="Descargar estudiantes y asistencias desde Cloudflare a este dispositivo"
                 >
@@ -635,7 +686,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ onClose }) => {
                 <button
                   type="button"
                   onClick={handleCloudflareSync}
-                  disabled={isSyncingCloudflare}
+                  disabled={isSyncingCloudflare || (!settings.cloudflareWorkerUrl && !(settings.cloudflareAccountId && settings.cloudflareApiToken && settings.cloudflareD1DatabaseId))}
                   className="px-3 py-1.5 bg-amber-600 hover:bg-amber-500 text-white rounded-xl text-xs font-bold shadow-xs flex items-center gap-1.5 transition-all disabled:opacity-50"
                   title="Subir datos locales a la base de datos D1 y KV de Cloudflare"
                 >
@@ -658,7 +709,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ onClose }) => {
           </div>
 
           {/* Secret QR HMAC Key */}
-          <div className="pt-2 border-t border-slate-100 dark:border-slate-800">
+          <div className="pt-2 border-t border-slate-100 dark:border-zinc-800/50">
             <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 uppercase tracking-wider mb-1.5">
               Clave Secreta HMAC-SHA256 (QR_SECRET)
             </label>
@@ -668,7 +719,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ onClose }) => {
                 type="password"
                 value={settings.qrSecret}
                 onChange={(e) => handleChange('qrSecret', e.target.value)}
-                className="w-full bg-white dark:bg-slate-950 border border-slate-300 dark:border-slate-700 focus:border-indigo-500 text-slate-900 dark:text-white text-xs pl-9 pr-3 py-2 rounded-xl outline-none font-mono shadow-xs"
+                className="w-full bg-white dark:bg-black border border-slate-300 dark:border-zinc-800 focus:border-indigo-500 text-slate-900 dark:text-white text-xs pl-9 pr-3 py-2 rounded-xl outline-none font-mono shadow-xs"
               />
             </div>
             <span className="text-[10px] text-slate-500 dark:text-slate-400 block mt-1">
@@ -687,34 +738,38 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ onClose }) => {
                 type="button"
                 onClick={handleCloudSync}
                 disabled={isSyncingCloud}
-                className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-[11px] font-bold shadow-xs flex items-center gap-1.5 transition-all disabled:opacity-50"
+                className="px-3 py-1.5 bg-indigo-600 dark:bg-white hover:bg-indigo-500 dark:hover:bg-zinc-200 text-white dark:text-black rounded-xl text-[11px] font-bold shadow-xs flex items-center gap-1.5 transition-all disabled:opacity-50"
               >
                 <RefreshCw className={`w-3.5 h-3.5 ${isSyncingCloud ? 'animate-spin' : ''}`} />
                 <span>{isSyncingCloud ? 'Respaldando...' : 'Respaldar en Firestore'}</span>
               </button>
             </div>
             {cloudSyncMsg && (
-              <p className="text-[10px] font-medium text-indigo-700 dark:text-indigo-300 bg-white/80 dark:bg-slate-900/80 p-2 rounded-xl border border-indigo-100 dark:border-indigo-900">
+              <p className="text-[10px] font-medium text-indigo-700 dark:text-indigo-300 bg-white/80 dark:bg-zinc-950/80 p-2 rounded-xl border border-indigo-100 dark:border-indigo-900">
                 {cloudSyncMsg}
               </p>
             )}
           </div>
 
           {/* Actions */}
-          <div className="pt-4 flex items-center justify-between gap-3 border-t border-slate-100 dark:border-slate-800">
-            <button
-              type="button"
-              onClick={handleResetData}
-              className="px-3.5 py-2 bg-rose-500/10 hover:bg-rose-500/20 text-rose-700 dark:text-rose-300 border border-rose-500/30 rounded-xl text-xs font-bold flex items-center gap-1.5 transition-colors"
-            >
-              <RotateCcw className="w-3.5 h-3.5" />
-              <span>Reiniciar Demo</span>
-            </button>
+          <div className="pt-4 flex items-center justify-between gap-3 border-t border-slate-100 dark:border-zinc-800/50">
+            <div className="flex gap-2">
+              <button
+                type="button"
+                onClick={handleResetData}
+                className="px-3.5 py-2 bg-slate-500/10 hover:bg-slate-500/20 text-slate-700 dark:text-slate-300 border border-slate-500/30 rounded-xl text-xs font-bold flex items-center gap-1.5 transition-colors"
+                title="Restaurar a datos de prueba"
+              >
+                <RotateCcw className="w-3.5 h-3.5" />
+              </button>
+              
+
+            </div>
 
             <button
               type="submit"
               id="btn-save-settings"
-              className="px-5 py-2.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-xs font-bold shadow-lg shadow-indigo-600/30 flex items-center gap-2 transition-all"
+              className="px-5 py-2.5 bg-indigo-600 dark:bg-white hover:bg-indigo-500 dark:hover:bg-zinc-200 text-white dark:text-black rounded-xl text-xs font-bold shadow-lg shadow-indigo-600/30 flex items-center gap-2 transition-all"
             >
               <Save className="w-4 h-4" />
               <span>{showSavedToast ? '¡Guardado!' : 'Guardar Cambios'}</span>
@@ -723,6 +778,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ onClose }) => {
         </form>
       </div>
     </div>
+    </>
   );
 };
 

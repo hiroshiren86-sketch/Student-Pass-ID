@@ -76,9 +76,68 @@ export class CloudflareSyncService {
   /**
    * Ejecuta la sincronización de SUBIDA (Push) completa de la base de datos hacia Cloudflare (D1 / KV / Worker)
    */
+  
+  static async wipeCloudflareData(): Promise<boolean> {
+    const settings = AttendanceStorageService.getSettings();
+    const schoolCode = settings.schoolCode || 'INAS_2026';
+
+    // Try to delete via D1 REST API if available
+    if (settings.cloudflareAccountId && settings.cloudflareApiToken && settings.cloudflareD1DatabaseId) {
+      try {
+        const d1Endpoint = `https://api.cloudflare.com/client/v4/accounts/${settings.cloudflareAccountId}/d1/database/${settings.cloudflareD1DatabaseId}/query`;
+        
+        await fetch(d1Endpoint, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${settings.cloudflareApiToken}`
+          },
+          body: JSON.stringify({ sql: `DELETE FROM students` })
+        });
+        
+        await fetch(d1Endpoint, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${settings.cloudflareApiToken}`
+          },
+          body: JSON.stringify({ sql: `DELETE FROM attendance_records` })
+        });
+        
+        await fetch(d1Endpoint, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${settings.cloudflareApiToken}`
+          },
+          body: JSON.stringify({ sql: `DELETE FROM sync_snapshots WHERE school_code = '${schoolCode}'` })
+        });
+        
+      } catch (err) {
+        console.warn('Failed to wipe D1 via REST API:', err);
+      }
+    }
+    
+    // Fallback: just push an empty snapshot
+    try {
+      await this.performCloudflareSync();
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
   static async performCloudflareSync(): Promise<CloudflareSyncResult> {
     const settings = AttendanceStorageService.getSettings();
-    const students = AttendanceStorageService.getStudents();
+    let students = AttendanceStorageService.getStudents();
+    // Strip large photoUrls to keep payload fast and avoid D1 limits
+    students = students.map(st => {
+      if (st.photoUrl && st.photoUrl.length > 700000) {
+        const { photoUrl, ...rest } = st;
+        return rest as any;
+      }
+      return st;
+    });
     const teachers = AttendanceStorageService.getTeachers();
     const records = AttendanceStorageService.getAllAttendance();
     const assignments = AttendanceStorageService.getScheduleAssignments();
@@ -217,30 +276,68 @@ export class CloudflareSyncService {
   static async pullFromCloudflare(): Promise<{ success: boolean; message: string; data?: any }> {
     const settings = AttendanceStorageService.getSettings();
     const cleanBaseUrl = (settings.cloudflareWorkerUrl || '').trim().replace(/\/+$/, '');
+    const schoolCode = settings.schoolCode || 'INAS_2026';
 
-    if (!cleanBaseUrl) {
-      return { success: false, message: 'URL del Cloudflare Worker no configurada.' };
+    let result: any = null;
+
+    if (cleanBaseUrl) {
+      try {
+        const pullUrl = cleanBaseUrl.endsWith('/api/sync/pull') 
+          ? `${cleanBaseUrl}?schoolCode=${encodeURIComponent(schoolCode)}`
+          : `${cleanBaseUrl}/api/sync/pull?schoolCode=${encodeURIComponent(schoolCode)}`;
+
+        const res = await fetch(pullUrl, {
+          method: 'GET',
+          headers: {
+            'Content-Type': 'application/json',
+            ...(settings.cloudflareApiToken ? { Authorization: `Bearer ${settings.cloudflareApiToken.trim()}` } : {})
+          }
+        });
+
+        if (!res.ok) {
+          const errText = await res.text();
+          throw new Error(`Worker HTTP ${res.status}: ${errText}`);
+        }
+        result = await res.json();
+      } catch (err: any) {
+        console.warn('Fallo pull del Worker, intentando fallback REST:', err);
+      }
+    }
+
+    if (!result && settings.cloudflareAccountId && settings.cloudflareApiToken && settings.cloudflareD1DatabaseId) {
+       try {
+         const d1Endpoint = `https://api.cloudflare.com/client/v4/accounts/${settings.cloudflareAccountId}/d1/database/${settings.cloudflareD1DatabaseId}/query`;
+         const d1Res = await fetch(d1Endpoint, {
+            method: 'POST',
+            headers: {
+               'Content-Type': 'application/json',
+               Authorization: `Bearer ${settings.cloudflareApiToken}`
+            },
+            body: JSON.stringify({ sql: `SELECT data_json, updated_at FROM sync_snapshots WHERE school_code = '${schoolCode}' OR id = 'snapshot_${schoolCode}' LIMIT 1` })
+         });
+         if (d1Res.ok) {
+            const d1Result = await d1Res.json();
+            if (d1Result.success && d1Result.result && d1Result.result[0]?.results?.length > 0) {
+               const row = d1Result.result[0].results[0];
+               if (row && row.data_json) {
+                 result = {
+                    success: true,
+                    data: JSON.parse(row.data_json),
+                    source: 'Cloudflare D1 REST API'
+                 };
+               }
+            }
+         }
+       } catch(err: any) {
+         console.warn('Fallo al conectar con Cloudflare D1 REST API (Pull):', err);
+       }
+    }
+
+    if (!result) {
+       return { success: false, message: 'No se pudo conectar con el Worker ni con la API REST de Cloudflare. Verifica la URL o las credenciales.' };
     }
 
     try {
-      const pullUrl = cleanBaseUrl.endsWith('/api/sync/pull') 
-        ? `${cleanBaseUrl}?schoolCode=${encodeURIComponent(settings.schoolCode || 'INAS_2026')}`
-        : `${cleanBaseUrl}/api/sync/pull?schoolCode=${encodeURIComponent(settings.schoolCode || 'INAS_2026')}`;
-
-      const res = await fetch(pullUrl, {
-        method: 'GET',
-        headers: {
-          'Content-Type': 'application/json',
-          ...(settings.cloudflareApiToken ? { Authorization: `Bearer ${settings.cloudflareApiToken.trim()}` } : {})
-        }
-      });
-
-      if (!res.ok) {
-        const errText = await res.text();
-        throw new Error(`Worker HTTP ${res.status}: ${errText}`);
-      }
-
-      const result = await res.json();
       if (!result.success || !result.data) {
         throw new Error(result.error || 'No se recibieron datos del Worker');
       }

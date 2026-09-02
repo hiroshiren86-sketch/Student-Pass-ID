@@ -1,5 +1,6 @@
 import { Student, DocumentType } from '../types/attendance';
 import { normalizeDocumentOrCode } from './searchHelper';
+import { compressImageFile } from './imageCompressor';
 
 export interface ExtractedStudentDraft {
   id: string;
@@ -180,7 +181,7 @@ export async function parseDocumentFile(file: File): Promise<ExtractedStudentDra
 
   // 3. Imágenes de Matrícula o Foto Carné (JPG, PNG, WEBP)
   if (['jpg', 'jpeg', 'png', 'webp'].includes(fileExt)) {
-    const photoDataUrl = await readFileAsDataUrl(file);
+    const photoDataUrl = await compressImageFile(file);
     // Intentar inferir datos a partir del nombre del archivo si viene estructurado
     // Ej: "1025883921_Gomez_Restrepo_Carlos_10-4.jpg" o "TI 1025883921 Carlos Gomez 6-5.png"
     const parsedFromName = parseDataFromFileName(fileName, photoDataUrl);

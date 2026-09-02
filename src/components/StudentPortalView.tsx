@@ -322,7 +322,7 @@ export const StudentPortalView: React.FC<StudentPortalViewProps> = ({ onLogout, 
                 value={studentCodeInput}
                 onChange={(e) => setStudentCodeInput(e.target.value)}
                 placeholder="Ej: 1000000002"
-                className="w-full px-4 py-2.5 bg-white/90 dark:bg-slate-950/80 border border-slate-200 dark:border-slate-800 rounded-xl text-sm font-mono text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                className="w-full px-4 py-2.5 bg-white/90 dark:bg-black/80 border border-slate-200 dark:border-zinc-800/50 rounded-xl text-sm font-mono text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
               />
             </div>
 
@@ -337,7 +337,7 @@ export const StudentPortalView: React.FC<StudentPortalViewProps> = ({ onLogout, 
                 value={passwordInput}
                 onChange={(e) => setPasswordInput(e.target.value)}
                 placeholder="••••••••"
-                className="w-full px-4 py-2.5 bg-white/90 dark:bg-slate-950/80 border border-slate-200 dark:border-slate-800 rounded-xl text-sm font-mono text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                className="w-full px-4 py-2.5 bg-white/90 dark:bg-black/80 border border-slate-200 dark:border-zinc-800/50 rounded-xl text-sm font-mono text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
               />
             </div>
 
@@ -356,7 +356,7 @@ export const StudentPortalView: React.FC<StudentPortalViewProps> = ({ onLogout, 
                       className={`px-2 py-1.5 rounded-lg border text-[10px] font-mono text-left truncate transition-all ${
                         studentCodeInput === std.code
                           ? 'bg-indigo-600 text-white border-indigo-600 font-bold shadow-xs'
-                          : 'bg-slate-100 dark:bg-slate-800/80 hover:bg-slate-200 text-slate-700 dark:text-slate-300 border-slate-200 dark:border-slate-700'
+                          : 'bg-slate-100 dark:bg-slate-800/80 hover:bg-slate-200 text-slate-700 dark:text-slate-300 border-slate-200 dark:border-zinc-800'
                       }`}
                     >
                       {std.firstName.split(' ')[0]} ({std.grade}) {std.isRepresentative && '★'}
@@ -368,14 +368,14 @@ export const StudentPortalView: React.FC<StudentPortalViewProps> = ({ onLogout, 
 
             <button
               type="submit"
-              className="w-full py-3 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-xs font-bold transition-all shadow-md shadow-indigo-600/20 flex items-center justify-center gap-2"
+              className="w-full py-3 bg-indigo-600 dark:bg-white hover:bg-indigo-500 dark:hover:bg-zinc-200 text-white dark:text-black rounded-xl text-xs font-bold transition-all shadow-md shadow-indigo-600/20 flex items-center justify-center gap-2"
             >
               <KeyRound className="w-4 h-4" />
               <span>Ingresar a Mi Historial</span>
             </button>
           </form>
 
-          <div className="p-3.5 bg-slate-50 dark:bg-slate-950/50 rounded-2xl border border-slate-200/80 dark:border-slate-800/80 text-[11px] text-slate-500 space-y-1">
+          <div className="p-3.5 bg-slate-50 dark:bg-black/50 rounded-2xl border border-slate-200/80 dark:border-zinc-800/50/80 text-[11px] text-slate-500 space-y-1">
             <div className="flex items-center gap-1.5 font-bold text-slate-700 dark:text-slate-300">
               <ShieldCheck className="w-3.5 h-3.5 text-emerald-600" />
               <span>Acceso Seguro y Cifrado</span>
@@ -480,7 +480,7 @@ export const StudentPortalView: React.FC<StudentPortalViewProps> = ({ onLogout, 
 
           {/* Representative Scanner UI */}
           {repScannerOpen && (
-            <div className="p-4 rounded-2xl bg-white dark:bg-slate-900 border border-amber-200 dark:border-amber-900/60 space-y-4">
+            <div className="p-4 rounded-2xl bg-white dark:bg-zinc-950 border border-amber-200 dark:border-amber-900/60 space-y-4">
               <div className="relative rounded-2xl overflow-hidden bg-black aspect-video max-w-sm mx-auto border border-amber-400">
                 <video ref={videoRef} playsInline muted className="w-full h-full object-cover" />
                 <canvas ref={canvasRef} className="hidden" />
@@ -504,7 +504,7 @@ export const StudentPortalView: React.FC<StudentPortalViewProps> = ({ onLogout, 
                   value={repManualInput}
                   onChange={(e) => setRepManualInput(e.target.value)}
                   placeholder="Código o número de documento..."
-                  className="flex-1 px-3 py-2 bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl text-xs font-bold outline-none"
+                  className="flex-1 px-3 py-2 bg-slate-50 dark:bg-black border border-slate-200 dark:border-zinc-800/50 rounded-xl text-xs font-bold outline-none"
                 />
                 <button
                   type="submit"
@@ -565,7 +565,7 @@ export const StudentPortalView: React.FC<StudentPortalViewProps> = ({ onLogout, 
       {/* MI CARNÉ ESTUDIANTIL DIGITAL Y ESTUDIO DE PERSONALIZACIÓN */}
       <div className="glass-panel rounded-3xl p-5 sm:p-7 space-y-6 border border-indigo-200/80 dark:border-indigo-900/50 shadow-lg">
         {/* Header con Título, Segmented Controls (Tabs) y Acciones */}
-        <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-4 border-b border-slate-100 dark:border-slate-800 pb-5">
+        <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-4 border-b border-slate-100 dark:border-zinc-800/50 pb-5">
           <div className="flex items-center gap-3">
             <div className="p-2.5 rounded-2xl bg-indigo-600 text-white shadow-md shadow-indigo-600/20">
               <CreditCard className="w-5 h-5" />
@@ -587,7 +587,7 @@ export const StudentPortalView: React.FC<StudentPortalViewProps> = ({ onLogout, 
 
           {/* Segmented Control Switcher & Actions */}
           <div className="flex flex-wrap items-center gap-2 w-full md:w-auto justify-between md:justify-end">
-            <div className="inline-flex p-1 bg-slate-100 dark:bg-slate-900/80 rounded-2xl border border-slate-200/80 dark:border-slate-800">
+            <div className="inline-flex p-1 bg-slate-100 dark:bg-zinc-950/80 rounded-2xl border border-slate-200/80 dark:border-zinc-800/50">
               <button
                 type="button"
                 onClick={() => setCardSectionTab('view')}
@@ -620,7 +620,7 @@ export const StudentPortalView: React.FC<StudentPortalViewProps> = ({ onLogout, 
             {cardSectionTab === 'view' ? (
               <button
                 onClick={handleDownloadMyCardPdf}
-                className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-2xl text-xs font-bold transition-all shadow-md shadow-indigo-600/25 flex items-center gap-2 shrink-0"
+                className="px-4 py-2 bg-indigo-600 dark:bg-white hover:bg-indigo-500 dark:hover:bg-zinc-200 text-white dark:text-black rounded-2xl text-xs font-bold transition-all shadow-md shadow-indigo-600/25 flex items-center gap-2 shrink-0"
               >
                 <Download className="w-3.5 h-3.5" />
                 <span>Descargar PDF</span>
@@ -647,7 +647,7 @@ export const StudentPortalView: React.FC<StudentPortalViewProps> = ({ onLogout, 
                 <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider block">
                   Anverso (Frontal Oficial)
                 </span>
-                <div className="w-full aspect-[85.6/53.98] rounded-2xl bg-white border-2 border-slate-300 dark:border-slate-700 shadow-xl p-3.5 flex flex-col justify-between relative overflow-hidden text-slate-900">
+                <div className="w-full aspect-[85.6/53.98] rounded-2xl bg-white border-2 border-slate-300 dark:border-zinc-800 shadow-xl p-3.5 flex flex-col justify-between relative overflow-hidden text-slate-900">
                   {/* Subtle Colombia Tricolor Header */}
                   <div className="absolute top-0 left-0 right-0 h-1.5 flex">
                     <div className="w-1/2 h-full bg-amber-400" />
@@ -737,7 +737,7 @@ export const StudentPortalView: React.FC<StudentPortalViewProps> = ({ onLogout, 
                 <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider block">
                   Reverso (Acceso y Seguridad)
                 </span>
-                <div className="w-full aspect-[85.6/53.98] rounded-2xl bg-slate-50 border-2 border-slate-300 dark:border-slate-700 shadow-xl p-3.5 flex flex-col justify-between relative overflow-hidden text-slate-900">
+                <div className="w-full aspect-[85.6/53.98] rounded-2xl bg-slate-50 border-2 border-slate-300 dark:border-zinc-800 shadow-xl p-3.5 flex flex-col justify-between relative overflow-hidden text-slate-900">
                   <div className="absolute top-0 left-0 right-0 h-2 bg-slate-900" />
 
                   <div className="pt-2 space-y-2">
@@ -772,7 +772,7 @@ export const StudentPortalView: React.FC<StudentPortalViewProps> = ({ onLogout, 
             </div>
 
             {/* Barra de Acceso Rápido a Personalización y Estado de Seguridad */}
-            <div className="p-4 rounded-2xl bg-slate-50 dark:bg-slate-900/60 border border-slate-200/80 dark:border-slate-800 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
+            <div className="p-4 rounded-2xl bg-slate-50 dark:bg-zinc-950/60 border border-slate-200/80 dark:border-zinc-800/50 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
               <div className="flex items-center gap-2.5">
                 <ShieldCheck className="w-4 h-4 text-emerald-600 dark:text-emerald-400 shrink-0" />
                 <p className="text-xs text-slate-600 dark:text-slate-400">
@@ -797,7 +797,7 @@ export const StudentPortalView: React.FC<StudentPortalViewProps> = ({ onLogout, 
           <div className="space-y-5 animate-fadeIn">
             <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
               {/* Columna Izquierda: Vista Previa de la Fotografía Actual */}
-              <div className="lg:col-span-5 p-5 rounded-2xl bg-slate-50 dark:bg-slate-900/90 border border-slate-200/80 dark:border-slate-800 flex flex-col items-center justify-center text-center space-y-4">
+              <div className="lg:col-span-5 p-5 rounded-2xl bg-slate-50 dark:bg-zinc-950/90 border border-slate-200/80 dark:border-zinc-800/50 flex flex-col items-center justify-center text-center space-y-4">
                 <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider">
                   Encuadre de Fotografía
                 </span>
@@ -812,7 +812,7 @@ export const StudentPortalView: React.FC<StudentPortalViewProps> = ({ onLogout, 
                       />
                     </div>
                   ) : (
-                    <div className="w-32 h-40 rounded-2xl border-2 border-dashed border-slate-300 dark:border-slate-700 bg-slate-100 dark:bg-slate-800 flex flex-col items-center justify-center text-slate-400 gap-2 p-3">
+                    <div className="w-32 h-40 rounded-2xl border-2 border-dashed border-slate-300 dark:border-zinc-800 bg-slate-100 dark:bg-slate-800 flex flex-col items-center justify-center text-slate-400 gap-2 p-3">
                       <ImageIcon className="w-8 h-8 text-slate-400" />
                       <span className="text-[10px] font-bold text-center leading-tight">Sin fotografía personalizada</span>
                       <span className="text-[9px] text-slate-400 font-mono">Usa iniciales</span>
@@ -861,7 +861,7 @@ export const StudentPortalView: React.FC<StudentPortalViewProps> = ({ onLogout, 
               {/* Columna Derecha: Opciones de Carga y Consejos */}
               <div className="lg:col-span-7 space-y-4">
                 {/* Opción 1: Subir Archivo Local */}
-                <div className="p-4 rounded-2xl bg-slate-50 dark:bg-slate-900/90 border border-slate-200/80 dark:border-slate-800 space-y-3">
+                <div className="p-4 rounded-2xl bg-slate-50 dark:bg-zinc-950/90 border border-slate-200/80 dark:border-zinc-800/50 space-y-3">
                   <div className="flex items-center gap-2">
                     <div className="p-1.5 rounded-lg bg-indigo-100 dark:bg-indigo-900/60 text-indigo-700 dark:text-indigo-300">
                       <Upload className="w-4 h-4" />
@@ -877,7 +877,7 @@ export const StudentPortalView: React.FC<StudentPortalViewProps> = ({ onLogout, 
                   </div>
 
                   <label
-                    className={`cursor-pointer border-2 border-dashed rounded-xl p-4 flex flex-col items-center justify-center gap-2 text-center transition-all ${photoDragActive ? 'border-indigo-500 bg-indigo-100/60 dark:bg-indigo-950/60 ring-2 ring-indigo-400' : 'border-indigo-200 hover:border-indigo-500 dark:border-indigo-900/60 dark:hover:border-indigo-500/80 bg-white/50 dark:bg-slate-950/50 hover:bg-indigo-50/40 dark:hover:bg-indigo-950/30'}`}
+                    className={`cursor-pointer border-2 border-dashed rounded-xl p-4 flex flex-col items-center justify-center gap-2 text-center transition-all ${photoDragActive ? 'border-indigo-500 bg-indigo-100/60 dark:bg-indigo-950/60 ring-2 ring-indigo-400' : 'border-indigo-200 hover:border-indigo-500 dark:border-indigo-900/60 dark:hover:border-indigo-500/80 bg-white/50 dark:bg-black/50 hover:bg-indigo-50/40 dark:hover:bg-indigo-950/30'}`}
                     onDragOver={(e) => { e.preventDefault(); setPhotoDragActive(true); }}
                     onDragLeave={(e) => { e.preventDefault(); setPhotoDragActive(false); }}
                     onDrop={(e) => {
@@ -907,7 +907,7 @@ export const StudentPortalView: React.FC<StudentPortalViewProps> = ({ onLogout, 
                 </div>
 
                 {/* Opción 2: URL / Enlace Directo */}
-                <div className="p-4 rounded-2xl bg-slate-50 dark:bg-slate-900/90 border border-slate-200/80 dark:border-slate-800 space-y-3">
+                <div className="p-4 rounded-2xl bg-slate-50 dark:bg-zinc-950/90 border border-slate-200/80 dark:border-zinc-800/50 space-y-3">
                   <div className="flex items-center gap-2">
                     <div className="p-1.5 rounded-lg bg-indigo-100 dark:bg-indigo-900/60 text-indigo-700 dark:text-indigo-300">
                       <ImageIcon className="w-4 h-4" />
@@ -936,7 +936,7 @@ export const StudentPortalView: React.FC<StudentPortalViewProps> = ({ onLogout, 
                           setActiveStudent(updated);
                         }
                       }}
-                      className="flex-1 px-3.5 py-2 bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl text-xs font-mono text-slate-900 dark:text-white outline-none focus:ring-2 focus:ring-indigo-500"
+                      className="flex-1 px-3.5 py-2 bg-white dark:bg-black border border-slate-200 dark:border-zinc-800/50 rounded-xl text-xs font-mono text-slate-900 dark:text-white outline-none focus:ring-2 focus:ring-indigo-500"
                     />
                     <button
                       type="button"
@@ -948,7 +948,7 @@ export const StudentPortalView: React.FC<StudentPortalViewProps> = ({ onLogout, 
                           setActiveStudent(updated);
                         }
                       }}
-                      className="px-3.5 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-xs font-bold transition-all shrink-0"
+                      className="px-3.5 py-2 bg-indigo-600 dark:bg-white hover:bg-indigo-500 dark:hover:bg-zinc-200 text-white dark:text-black rounded-xl text-xs font-bold transition-all shrink-0"
                     >
                       Aplicar
                     </button>
@@ -972,7 +972,7 @@ export const StudentPortalView: React.FC<StudentPortalViewProps> = ({ onLogout, 
               <button
                 type="button"
                 onClick={() => setCardSectionTab('view')}
-                className="px-5 py-2.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-2xl text-xs font-bold transition-all shadow-md shadow-indigo-600/25 flex items-center gap-2"
+                className="px-5 py-2.5 bg-indigo-600 dark:bg-white hover:bg-indigo-500 dark:hover:bg-zinc-200 text-white dark:text-black rounded-2xl text-xs font-bold transition-all shadow-md shadow-indigo-600/25 flex items-center gap-2"
               >
                 <Check className="w-4 h-4" />
                 <span>Guardar y Ver Carné Digital</span>
@@ -990,7 +990,7 @@ export const StudentPortalView: React.FC<StudentPortalViewProps> = ({ onLogout, 
         const dayNames = ['', 'Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado'];
         return (
           <div className="glass-panel rounded-3xl p-5 sm:p-6 space-y-4">
-            <div className="flex items-center justify-between border-b border-slate-100 dark:border-slate-800 pb-3">
+            <div className="flex items-center justify-between border-b border-slate-100 dark:border-zinc-800/50 pb-3">
               <div className="flex items-center gap-2">
                 <Calendar className="w-5 h-5 text-fuchsia-600 dark:text-fuchsia-400" />
                 <h3 className="text-base font-black text-slate-900 dark:text-white">Mi horario (opcional)</h3>
@@ -999,7 +999,7 @@ export const StudentPortalView: React.FC<StudentPortalViewProps> = ({ onLogout, 
             </div>
 
             {templatesOnly ? (
-              <div className="p-4 rounded-2xl bg-slate-100 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 text-xs text-slate-500 dark:text-slate-400 font-bold flex items-center gap-2">
+              <div className="p-4 rounded-2xl bg-slate-100 dark:bg-zinc-950 border border-slate-200 dark:border-zinc-800/50 text-xs text-slate-500 dark:text-slate-400 font-bold flex items-center gap-2">
                 <Lock className="w-4 h-4 shrink-0" />
                 Rectoría ha deshabilitado los horarios personales para todas las cuentas (modo solo plantillas oficiales).
               </div>
@@ -1010,7 +1010,7 @@ export const StudentPortalView: React.FC<StudentPortalViewProps> = ({ onLogout, 
                     const rows = mySchedule.entries.filter(e => e.dayOfWeek === day).sort((a, b) => a.startTime.localeCompare(b.startTime));
                     if (rows.length === 0) return null;
                     return (
-                      <div key={day} className="p-3 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 space-y-1.5">
+                      <div key={day} className="p-3 rounded-2xl bg-white dark:bg-zinc-950 border border-slate-200 dark:border-zinc-800/50 space-y-1.5">
                         <h4 className="text-[11px] font-black text-fuchsia-700 dark:text-fuchsia-300 uppercase">{dayNames[day]}</h4>
                         {rows.map((r, i) => (
                           <div key={i} className="flex items-center justify-between text-[11px] font-bold text-slate-700 dark:text-slate-200">
@@ -1056,7 +1056,7 @@ export const StudentPortalView: React.FC<StudentPortalViewProps> = ({ onLogout, 
                   onChange={(e) => setScheduleCsvText(e.target.value)}
                   rows={6}
                   placeholder={'Lunes, Matemáticas, 07:00, 07:55\nLunes, Español, 08:00, 08:55\nMartes, Ciencias, 07:00'}
-                  className="w-full p-3 rounded-2xl bg-white dark:bg-slate-950 border border-slate-300 dark:border-slate-700 text-xs font-mono text-slate-900 dark:text-white outline-none focus:ring-2 focus:ring-fuchsia-500"
+                  className="w-full p-3 rounded-2xl bg-white dark:bg-black border border-slate-300 dark:border-zinc-800 text-xs font-mono text-slate-900 dark:text-white outline-none focus:ring-2 focus:ring-fuchsia-500"
                 />
                 {scheduleCsvPreview && (
                   <div className="space-y-1">
@@ -1099,7 +1099,7 @@ export const StudentPortalView: React.FC<StudentPortalViewProps> = ({ onLogout, 
       {/* Breakdown by Subject */}
       {stats.bySubject.length > 0 && (
         <div className="glass-panel rounded-3xl p-5 sm:p-6 space-y-4">
-          <div className="flex items-center justify-between border-b border-slate-100 dark:border-slate-800 pb-3">
+          <div className="flex items-center justify-between border-b border-slate-100 dark:border-zinc-800/50 pb-3">
             <div className="flex items-center gap-2">
               <BookOpen className="w-5 h-5 text-indigo-600 dark:text-indigo-400" />
               <h3 className="text-base font-black text-slate-900 dark:text-white">
@@ -1113,7 +1113,7 @@ export const StudentPortalView: React.FC<StudentPortalViewProps> = ({ onLogout, 
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
             {stats.bySubject.map((subj) => (
-              <div key={subj.subject} className="p-4 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 space-y-2">
+              <div key={subj.subject} className="p-4 rounded-2xl bg-white dark:bg-zinc-950 border border-slate-200 dark:border-zinc-800/50 space-y-2">
                 <div className="flex items-center justify-between">
                   <h4 className="font-bold text-xs text-slate-900 dark:text-white">{subj.subject}</h4>
                   <span className="px-2 py-0.5 rounded-full bg-indigo-100 dark:bg-indigo-950/70 text-indigo-700 dark:text-indigo-300 text-[10px] font-black">
@@ -1137,7 +1137,7 @@ export const StudentPortalView: React.FC<StudentPortalViewProps> = ({ onLogout, 
 
       {/* History Table */}
       <div className="glass-panel rounded-3xl p-5 sm:p-6 space-y-4">
-        <div className="flex items-center justify-between border-b border-slate-100 dark:border-slate-800 pb-3">
+        <div className="flex items-center justify-between border-b border-slate-100 dark:border-zinc-800/50 pb-3">
           <div className="flex items-center gap-2">
             <History className="w-5 h-5 text-indigo-600 dark:text-indigo-400" />
             <h3 className="text-base font-black text-slate-900 dark:text-white">
@@ -1157,7 +1157,7 @@ export const StudentPortalView: React.FC<StudentPortalViewProps> = ({ onLogout, 
           <div className="overflow-x-auto">
             <table className="w-full text-left text-xs">
               <thead>
-                <tr className="border-b border-slate-100 dark:border-slate-800 text-slate-400 font-bold uppercase text-[10px]">
+                <tr className="border-b border-slate-100 dark:border-zinc-800/50 text-slate-400 font-bold uppercase text-[10px]">
                   <th className="py-2.5 px-3">Fecha / Hora</th>
                   <th className="py-2.5 px-3">Bloque</th>
                   <th className="py-2.5 px-3">Asignatura</th>
@@ -1215,8 +1215,8 @@ export const StudentPortalView: React.FC<StudentPortalViewProps> = ({ onLogout, 
       {/* Modal para Cambiar Contraseña */}
       {showPasswordModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-md animate-fadeIn">
-          <div className="p-6 rounded-3xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-2xl max-w-md w-full space-y-4">
-            <div className="flex items-center justify-between border-b border-slate-100 dark:border-slate-800 pb-3">
+          <div className="p-6 rounded-3xl bg-white dark:bg-zinc-950 border border-slate-200 dark:border-zinc-800/50 shadow-2xl max-w-md w-full space-y-4">
+            <div className="flex items-center justify-between border-b border-slate-100 dark:border-zinc-800/50 pb-3">
               <div className="flex items-center gap-2">
                 <div className="w-8 h-8 rounded-xl bg-indigo-50 dark:bg-indigo-950/80 text-indigo-600 dark:text-indigo-400 flex items-center justify-center">
                   <Lock className="w-4 h-4" />
@@ -1253,7 +1253,7 @@ export const StudentPortalView: React.FC<StudentPortalViewProps> = ({ onLogout, 
                   value={newPassword}
                   onChange={(e) => setNewPassword(e.target.value)}
                   placeholder="Mínimo 4 caracteres..."
-                  className="w-full px-3.5 py-2.5 bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl text-xs font-mono text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                  className="w-full px-3.5 py-2.5 bg-slate-50 dark:bg-black border border-slate-200 dark:border-zinc-800/50 rounded-xl text-xs font-mono text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
                 />
               </div>
 

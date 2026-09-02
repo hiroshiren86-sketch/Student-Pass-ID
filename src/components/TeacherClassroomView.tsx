@@ -511,7 +511,7 @@ export const TeacherClassroomView: React.FC<TeacherClassroomViewProps> = ({
   return (
     <div className="space-y-6">
       {/* Header & Course Selector Banner */}
-      <div className="p-6 rounded-3xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-xl space-y-4">
+      <div className="p-6 rounded-3xl bg-white dark:bg-zinc-950 border border-slate-200 dark:border-zinc-800/50 shadow-xl space-y-4">
         <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
           <div className="space-y-1">
             <div className="flex items-center gap-2">
@@ -527,7 +527,7 @@ export const TeacherClassroomView: React.FC<TeacherClassroomViewProps> = ({
                     </span>
                   )}
                   {!currentAssignment && (
-                    <span className="px-2 py-0.5 rounded-full bg-slate-100 dark:bg-slate-800 text-slate-500 dark:text-slate-400 text-[10px] font-bold border border-slate-200 dark:border-slate-700">
+                    <span className="px-2 py-0.5 rounded-full bg-slate-100 dark:bg-slate-800 text-slate-500 dark:text-slate-400 text-[10px] font-bold border border-slate-200 dark:border-zinc-800">
                       Horario opcional · Escaneo libre
                     </span>
                   )}
@@ -579,7 +579,7 @@ export const TeacherClassroomView: React.FC<TeacherClassroomViewProps> = ({
               <select
                 value={selectedGrade}
                 onChange={(e) => setSelectedGrade(e.target.value)}
-                className="py-2 px-3 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-xs font-bold text-slate-900 dark:text-white outline-none"
+                className="py-2 px-3 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-zinc-800 rounded-xl text-xs font-bold text-slate-900 dark:text-white outline-none"
               >
                 {uniqueGrades.map(g => (
                   <option key={g} value={g}>Grado {g}</option>
@@ -593,7 +593,7 @@ export const TeacherClassroomView: React.FC<TeacherClassroomViewProps> = ({
               <select
                 value={selectedSlotId}
                 onChange={(e) => setSelectedSlotId(e.target.value)}
-                className="py-2 px-3 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-xs font-bold text-slate-900 dark:text-white outline-none"
+                className="py-2 px-3 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-zinc-800 rounded-xl text-xs font-bold text-slate-900 dark:text-white outline-none"
               >
                 {scheduleSlots.map(s => (
                   <option key={s.id} value={s.id}>{s.name} ({s.startTime} - {s.endTime})</option>
@@ -608,7 +608,7 @@ export const TeacherClassroomView: React.FC<TeacherClassroomViewProps> = ({
                 type="text"
                 value={selectedSubject}
                 onChange={(e) => setSelectedSubject(e.target.value)}
-                className="py-2 px-3 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-xs font-bold text-slate-900 dark:text-white outline-none w-36"
+                className="py-2 px-3 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-zinc-800 rounded-xl text-xs font-bold text-slate-900 dark:text-white outline-none w-36"
               />
             </div>
 
@@ -620,7 +620,7 @@ export const TeacherClassroomView: React.FC<TeacherClassroomViewProps> = ({
                 className={`py-2 px-3 rounded-xl border text-xs font-bold flex items-center gap-1.5 transition-colors ${
                   isNonComputableSlot.isNonComputable
                     ? 'bg-amber-100 text-amber-900 border-amber-300 dark:bg-amber-950/70 dark:text-amber-200 dark:border-amber-800'
-                    : 'bg-slate-100 text-slate-600 border-slate-200 hover:bg-slate-200 dark:bg-slate-800 dark:text-slate-300 dark:border-slate-700'
+                    : 'bg-slate-100 text-slate-600 border-slate-200 hover:bg-slate-200 dark:bg-slate-800 dark:text-slate-300 dark:border-zinc-800'
                 }`}
                 title="Marcar como Hora Libre o bloque no computable"
               >
@@ -637,7 +637,7 @@ export const TeacherClassroomView: React.FC<TeacherClassroomViewProps> = ({
                 className={`p-2.5 rounded-xl border transition-colors ${
                   soundEnabled 
                     ? 'bg-emerald-50 text-emerald-600 border-emerald-200 dark:bg-emerald-950/50 dark:border-emerald-800' 
-                    : 'bg-slate-100 text-slate-400 border-slate-200 dark:bg-slate-800 dark:border-slate-700'
+                    : 'bg-slate-100 text-slate-400 border-slate-200 dark:bg-slate-800 dark:border-zinc-800'
                 }`}
                 title="Sonido de escáner"
               >
@@ -668,7 +668,7 @@ export const TeacherClassroomView: React.FC<TeacherClassroomViewProps> = ({
               <button
                 type="button"
                 onClick={() => setShowDelegationModal(true)}
-                className="py-1.5 px-3 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-xs font-bold flex items-center gap-1.5 transition-all shadow-sm shrink-0"
+                className="py-1.5 px-3 bg-indigo-600 dark:bg-white hover:bg-indigo-500 dark:hover:bg-zinc-200 text-white dark:text-black rounded-xl text-xs font-bold flex items-center gap-1.5 transition-all shadow-sm shrink-0"
               >
                 <UserPlus className="w-3.5 h-3.5" />
                 <span>+ Delegar a Estudiante de Fila</span>
@@ -678,7 +678,7 @@ export const TeacherClassroomView: React.FC<TeacherClassroomViewProps> = ({
                 <button
                   type="button"
                   onClick={() => setShowRepModal(true)}
-                  className="py-1.5 px-3 bg-white dark:bg-slate-900 border border-indigo-300 dark:border-indigo-700 hover:bg-indigo-50 dark:hover:bg-indigo-950 text-indigo-700 dark:text-indigo-300 rounded-xl text-xs font-bold transition-all shadow-sm shrink-0"
+                  className="py-1.5 px-3 bg-white dark:bg-zinc-950 border border-indigo-300 dark:border-indigo-700 hover:bg-indigo-50 dark:hover:bg-indigo-950 text-indigo-700 dark:text-indigo-300 rounded-xl text-xs font-bold transition-all shadow-sm shrink-0"
                 >
                   Asignar Titular
                 </button>
@@ -688,7 +688,7 @@ export const TeacherClassroomView: React.FC<TeacherClassroomViewProps> = ({
 
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5 pt-1">
             {/* Titular */}
-            <div className="p-2.5 rounded-xl bg-white/80 dark:bg-slate-900/80 border border-indigo-100 dark:border-indigo-900/40 flex items-center justify-between text-xs">
+            <div className="p-2.5 rounded-xl bg-white/80 dark:bg-zinc-950/80 border border-indigo-100 dark:border-indigo-900/40 flex items-center justify-between text-xs">
               <div className="flex items-center gap-2">
                 <Crown className="w-4 h-4 text-amber-500" />
                 <div>
@@ -701,7 +701,7 @@ export const TeacherClassroomView: React.FC<TeacherClassroomViewProps> = ({
             </div>
 
             {/* Suplente */}
-            <div className="p-2.5 rounded-xl bg-white/80 dark:bg-slate-900/80 border border-indigo-100 dark:border-indigo-900/40 flex items-center justify-between text-xs">
+            <div className="p-2.5 rounded-xl bg-white/80 dark:bg-zinc-950/80 border border-indigo-100 dark:border-indigo-900/40 flex items-center justify-between text-xs">
               <div className="flex items-center gap-2">
                 <Award className="w-4 h-4 text-indigo-500" />
                 <div>
@@ -723,7 +723,7 @@ export const TeacherClassroomView: React.FC<TeacherClassroomViewProps> = ({
             </div>
 
             {/* Delegación Efímera Activa */}
-            <div className="p-2.5 rounded-xl bg-white/80 dark:bg-slate-900/80 border border-indigo-100 dark:border-indigo-900/40 flex items-center justify-between text-xs">
+            <div className="p-2.5 rounded-xl bg-white/80 dark:bg-zinc-950/80 border border-indigo-100 dark:border-indigo-900/40 flex items-center justify-between text-xs">
               <div className="flex items-center gap-2">
                 <Key className="w-4 h-4 text-emerald-500" />
                 <div>
@@ -787,7 +787,7 @@ export const TeacherClassroomView: React.FC<TeacherClassroomViewProps> = ({
           </div>
         </div>
       ) : (
-        <div className="p-3.5 rounded-2xl bg-slate-100 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700/60 flex items-center justify-between text-xs text-slate-600 dark:text-slate-300">
+        <div className="p-3.5 rounded-2xl bg-slate-100 dark:bg-slate-800/60 border border-slate-200 dark:border-zinc-800/60 flex items-center justify-between text-xs text-slate-600 dark:text-slate-300">
           <div className="flex items-center gap-2">
             <Clock className="w-4 h-4 text-indigo-500" />
             <span>
@@ -816,7 +816,7 @@ export const TeacherClassroomView: React.FC<TeacherClassroomViewProps> = ({
 
       {/* KPI Cards */}
       <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
-        <div className="p-4 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-sm">
+        <div className="p-4 rounded-2xl bg-white dark:bg-zinc-950 border border-slate-200 dark:border-zinc-800/50 shadow-sm">
           <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Matriculados</p>
           <p className="text-2xl font-black text-slate-900 dark:text-white mt-1">{stats.total}</p>
         </div>
@@ -843,7 +843,7 @@ export const TeacherClassroomView: React.FC<TeacherClassroomViewProps> = ({
       </div>
 
       {/* Classroom Scanner Section (Interactive) */}
-      <div className="p-6 rounded-3xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-xl space-y-4">
+      <div className="p-6 rounded-3xl bg-white dark:bg-zinc-950 border border-slate-200 dark:border-zinc-800/50 shadow-xl space-y-4">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
           <div>
             <h2 className="text-base font-black text-slate-900 dark:text-white flex items-center gap-2">
@@ -952,13 +952,13 @@ export const TeacherClassroomView: React.FC<TeacherClassroomViewProps> = ({
               value={manualCodeInput}
               onChange={(e) => setManualCodeInput(e.target.value)}
               placeholder="Escanear con lector USB o teclear código..."
-              className="w-full pl-10 pr-4 py-2.5 bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl text-xs font-bold text-slate-900 dark:text-white outline-none focus:ring-2 focus:ring-indigo-500"
+              className="w-full pl-10 pr-4 py-2.5 bg-slate-50 dark:bg-black border border-slate-200 dark:border-zinc-800/50 rounded-xl text-xs font-bold text-slate-900 dark:text-white outline-none focus:ring-2 focus:ring-indigo-500"
             />
           </div>
           <button
             type="submit"
             disabled={!manualCodeInput.trim() || isProcessing}
-            className="py-2.5 px-4 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-xs font-bold disabled:opacity-50 transition-all shrink-0"
+            className="py-2.5 px-4 bg-indigo-600 dark:bg-white hover:bg-indigo-500 dark:hover:bg-zinc-200 text-white dark:text-black rounded-xl text-xs font-bold disabled:opacity-50 transition-all shrink-0"
           >
             Registrar
           </button>
@@ -978,8 +978,8 @@ export const TeacherClassroomView: React.FC<TeacherClassroomViewProps> = ({
       </div>
 
       {/* Student List Table */}
-      <div className="rounded-3xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-xl overflow-hidden">
-        <div className="p-4 sm:p-6 border-b border-slate-100 dark:border-slate-800 flex items-center justify-between">
+      <div className="rounded-3xl bg-white dark:bg-zinc-950 border border-slate-200 dark:border-zinc-800/50 shadow-xl overflow-hidden">
+        <div className="p-4 sm:p-6 border-b border-slate-100 dark:border-zinc-800/50 flex items-center justify-between">
           <div className="flex items-center gap-2">
             <Users className="w-5 h-5 text-indigo-600" />
             <h2 className="text-base font-black text-slate-900 dark:text-white">
@@ -993,7 +993,7 @@ export const TeacherClassroomView: React.FC<TeacherClassroomViewProps> = ({
 
         <div className="overflow-x-auto">
           <table className="w-full text-left text-xs">
-            <thead className="bg-slate-50 dark:bg-slate-950/50 text-[10px] uppercase font-bold text-slate-400 tracking-wider">
+            <thead className="bg-slate-50 dark:bg-black/50 text-[10px] uppercase font-bold text-slate-400 tracking-wider">
               <tr>
                 <th className="py-3 px-4">Estudiante</th>
                 <th className="py-3 px-4">Código / Doc</th>
@@ -1011,7 +1011,7 @@ export const TeacherClassroomView: React.FC<TeacherClassroomViewProps> = ({
                 const isSubRep = std.isSubstituteRepresentative;
 
                 return (
-                  <tr key={std.code} className="hover:bg-slate-50/70 dark:hover:bg-slate-800/40 transition-colors">
+                  <tr key={std.code} className="hover:bg-slate-100 dark:hover:bg-zinc-900/50 transition-colors group border-b border-slate-100 dark:border-zinc-800/50 last:border-0 hover:shadow-sm">
                     <td className="py-3.5 px-4">
                       <div className="flex items-center gap-2.5">
                         <div className="w-8 h-8 rounded-full bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 font-black text-xs flex items-center justify-center shrink-0">
@@ -1119,7 +1119,7 @@ export const TeacherClassroomView: React.FC<TeacherClassroomViewProps> = ({
       {/* Modal: Delegar Escaneo Efímero (Nivel 2) */}
       {showDelegationModal && (
         <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="bg-white dark:bg-slate-900 rounded-3xl p-6 w-full max-w-md border border-slate-200 dark:border-slate-800 shadow-2xl space-y-4">
+          <div className="bg-white dark:bg-zinc-950 rounded-3xl p-6 w-full max-w-md border border-slate-200 dark:border-zinc-800/50 shadow-2xl space-y-4">
             <div className="flex items-center justify-between">
               <h3 className="text-base font-black text-slate-900 dark:text-white flex items-center gap-2">
                 <Key className="w-5 h-5 text-indigo-500" />
@@ -1143,7 +1143,7 @@ export const TeacherClassroomView: React.FC<TeacherClassroomViewProps> = ({
               <select
                 value={delegatedStudentCode}
                 onChange={(e) => setDelegatedStudentCode(e.target.value)}
-                className="w-full p-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-xs font-bold text-slate-900 dark:text-white outline-none"
+                className="w-full p-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-zinc-800 rounded-xl text-xs font-bold text-slate-900 dark:text-white outline-none"
               >
                 <option value="">-- Seleccionar de la lista --</option>
                 {gradeStudents.map(s => (
@@ -1176,7 +1176,7 @@ export const TeacherClassroomView: React.FC<TeacherClassroomViewProps> = ({
       {/* Modal: Cambiar Representante Titular */}
       {showRepModal && (
         <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="bg-white dark:bg-slate-900 rounded-3xl p-6 w-full max-w-md border border-slate-200 dark:border-slate-800 shadow-2xl space-y-4">
+          <div className="bg-white dark:bg-zinc-950 rounded-3xl p-6 w-full max-w-md border border-slate-200 dark:border-zinc-800/50 shadow-2xl space-y-4">
             <div className="flex items-center justify-between">
               <h3 className="text-base font-black text-slate-900 dark:text-white flex items-center gap-2">
                 <Crown className="w-5 h-5 text-amber-500" />
@@ -1207,7 +1207,7 @@ export const TeacherClassroomView: React.FC<TeacherClassroomViewProps> = ({
                   className={`w-full p-2.5 rounded-xl border text-left flex items-center justify-between text-xs transition-colors ${
                     s.isRepresentative
                       ? 'bg-amber-50 dark:bg-amber-950/50 border-amber-300 dark:border-amber-800 text-amber-900 dark:text-amber-200 font-bold'
-                      : 'hover:bg-slate-50 dark:hover:bg-slate-800 border-slate-200 dark:border-slate-800 text-slate-700 dark:text-slate-300'
+                      : 'hover:bg-slate-50 dark:hover:bg-slate-800 border-slate-200 dark:border-zinc-800/50 text-slate-700 dark:text-slate-300'
                   }`}
                 >
                   <span>{s.firstName} {s.lastName} ({s.code})</span>
@@ -1222,7 +1222,7 @@ export const TeacherClassroomView: React.FC<TeacherClassroomViewProps> = ({
       {/* Modal: Cambiar Representante Suplente */}
       {showSubRepModal && (
         <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="bg-white dark:bg-slate-900 rounded-3xl p-6 w-full max-w-md border border-slate-200 dark:border-slate-800 shadow-2xl space-y-4">
+          <div className="bg-white dark:bg-zinc-950 rounded-3xl p-6 w-full max-w-md border border-slate-200 dark:border-zinc-800/50 shadow-2xl space-y-4">
             <div className="flex items-center justify-between">
               <h3 className="text-base font-black text-slate-900 dark:text-white flex items-center gap-2">
                 <Award className="w-5 h-5 text-indigo-500" />
@@ -1253,7 +1253,7 @@ export const TeacherClassroomView: React.FC<TeacherClassroomViewProps> = ({
                   className={`w-full p-2.5 rounded-xl border text-left flex items-center justify-between text-xs transition-colors ${
                     s.isSubstituteRepresentative
                       ? 'bg-indigo-50 dark:bg-indigo-950/50 border-indigo-300 dark:border-indigo-800 text-indigo-900 dark:text-indigo-200 font-bold'
-                      : 'hover:bg-slate-50 dark:hover:bg-slate-800 border-slate-200 dark:border-slate-800 text-slate-700 dark:text-slate-300'
+                      : 'hover:bg-slate-50 dark:hover:bg-slate-800 border-slate-200 dark:border-zinc-800/50 text-slate-700 dark:text-slate-300'
                   }`}
                 >
                   <span>{s.firstName} {s.lastName} ({s.code})</span>

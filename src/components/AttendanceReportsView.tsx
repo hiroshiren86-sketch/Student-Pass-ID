@@ -76,7 +76,7 @@ export const AttendanceReportsView: React.FC = () => {
         </div>
 
         <div className="flex flex-wrap items-center gap-2.5">
-          <div className="flex items-center gap-2 bg-white/80 dark:bg-slate-950/80 px-3 py-2 border border-slate-200 dark:border-slate-800 rounded-xl">
+          <div className="flex items-center gap-2 bg-white/80 dark:bg-black/80 px-3 py-2 border border-slate-200 dark:border-zinc-800/50 rounded-xl">
             <Calendar className="w-4 h-4 text-slate-400" />
             <input
               type="date"
@@ -143,7 +143,7 @@ export const AttendanceReportsView: React.FC = () => {
               placeholder="Filtrar por nombre, código o documento..."
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              className="w-full pl-10 pr-4 py-2.5 bg-white/80 dark:bg-slate-950/70 border border-slate-200 dark:border-slate-800 rounded-xl text-xs"
+              className="w-full pl-10 pr-4 py-2.5 bg-white/80 dark:bg-black/70 border border-slate-200 dark:border-zinc-800/50 rounded-xl text-xs"
             />
           </div>
 
@@ -151,7 +151,7 @@ export const AttendanceReportsView: React.FC = () => {
             <select
               value={selectedGrade}
               onChange={(e) => setSelectedGrade(e.target.value)}
-              className="px-3 py-2.5 bg-white/80 dark:bg-slate-950/70 border border-slate-200 dark:border-slate-800 rounded-xl text-xs font-bold"
+              className="px-3 py-2.5 bg-white/80 dark:bg-black/70 border border-slate-200 dark:border-zinc-800/50 rounded-xl text-xs font-bold"
             >
               <option value="all">Todos los Cursos</option>
               {uniqueGrades.map(g => (
@@ -162,7 +162,7 @@ export const AttendanceReportsView: React.FC = () => {
             <select
               value={selectedStatus}
               onChange={(e) => setSelectedStatus(e.target.value)}
-              className="px-3 py-2.5 bg-white/80 dark:bg-slate-950/70 border border-slate-200 dark:border-slate-800 rounded-xl text-xs font-bold"
+              className="px-3 py-2.5 bg-white/80 dark:bg-black/70 border border-slate-200 dark:border-zinc-800/50 rounded-xl text-xs font-bold"
             >
               <option value="all">Todos los Estados</option>
               <option value="PUNTUAL">Puntuales</option>
@@ -178,10 +178,10 @@ export const AttendanceReportsView: React.FC = () => {
             No se encontraron registros de asistencia para los filtros seleccionados.
           </div>
         ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full text-left text-xs">
+          <div className="w-full overflow-x-auto rounded-xl border border-slate-200 dark:border-zinc-800/50">
+            <table className="w-full text-left text-xs min-w-[700px]">
               <thead>
-                <tr className="border-b border-slate-100 dark:border-slate-800 text-slate-400 font-bold uppercase">
+                <tr className="border-b border-slate-100 dark:border-zinc-800/50 text-slate-400 font-bold uppercase">
                   <th className="py-3 px-3">Hora</th>
                   <th className="py-3 px-3">Código QR/Barras</th>
                   <th className="py-3 px-3">Documento (ID)</th>
@@ -195,7 +195,7 @@ export const AttendanceReportsView: React.FC = () => {
               </thead>
               <tbody className="divide-y divide-slate-100 dark:divide-slate-800/60">
                 {filteredRecords.map((r) => (
-                  <tr key={r.id} className="hover:bg-slate-50/50 dark:hover:bg-slate-950/40">
+                  <tr key={r.id} className="hover:bg-slate-100 dark:hover:bg-zinc-900/50 transition-colors group border-b border-slate-100 dark:border-zinc-800/50 last:border-0 hover:shadow-sm">
                     <td className="py-3 px-3 font-mono font-bold text-slate-900 dark:text-white">
                       {r.time}
                     </td>

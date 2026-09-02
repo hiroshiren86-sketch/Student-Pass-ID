@@ -27,6 +27,7 @@ import { matchStudentFuzzy, normalizeDocumentOrCode } from '../utils/searchHelpe
 import { generateBarcodeDataUrl } from '../utils/barcode';
 import { DocumentUploadModal } from './DocumentUploadModal';
 import { normalizeGradeName, isValidGrade } from '../utils/documentParser';
+import { compressImageFile } from '../utils/imageCompressor';
 
 interface StudentsManagerViewProps {
   onGenerateCard?: (student: Student) => void;
@@ -129,11 +130,9 @@ export const StudentsManagerView: React.FC<StudentsManagerViewProps> = ({ onGene
   const handleSinglePhotoSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
-      const reader = new FileReader();
-      reader.onload = () => {
-        setFormData(prev => ({ ...prev, photoUrl: reader.result as string }));
-      };
-      reader.readAsDataURL(file);
+      compressImageFile(file).then(dataUrl => {
+        setFormData(prev => ({ ...prev, photoUrl: dataUrl }));
+      }).catch(err => console.error('Image compression failed:', err));
     }
   };
 
@@ -237,7 +236,7 @@ export const StudentsManagerView: React.FC<StudentsManagerViewProps> = ({ onGene
       )}
 
       {/* Top Header Card */}
-      <div className="p-6 rounded-3xl bg-white/70 dark:bg-slate-900/70 border border-slate-200/80 dark:border-slate-800 backdrop-blur-xl shadow-sm flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+      <div className="p-6 rounded-3xl bg-white/70 dark:bg-zinc-950/70 border border-slate-200/80 dark:border-zinc-800/50 backdrop-blur-xl shadow-sm flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
         <div>
           <div className="flex items-center gap-2">
             <span className="text-[11px] font-bold px-2.5 py-0.5 rounded-full bg-indigo-50 dark:bg-indigo-950/60 text-indigo-600 dark:text-indigo-400 border border-indigo-200 dark:border-indigo-800 uppercase tracking-wider">
@@ -259,7 +258,7 @@ export const StudentsManagerView: React.FC<StudentsManagerViewProps> = ({ onGene
             {/* Botón Cargar Archivo / Upload File */}
             <button
               onClick={() => setShowUploadModal(true)}
-              className="flex-1 sm:flex-initial px-4 py-2.5 bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-800 dark:text-slate-200 rounded-2xl text-xs font-bold transition-all border border-slate-200 dark:border-slate-700 shadow-xs flex items-center justify-center gap-2"
+              className="flex-1 sm:flex-initial px-4 py-2.5 bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-800 dark:text-slate-200 rounded-2xl text-xs font-bold transition-all border border-slate-200 dark:border-zinc-800 shadow-xs flex items-center justify-center gap-2"
               title="Cargar Fichas PDF, Fotos Carné, Planillas CSV o Listas de Matrícula"
             >
               <Upload className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />
@@ -269,7 +268,7 @@ export const StudentsManagerView: React.FC<StudentsManagerViewProps> = ({ onGene
             {/* Botón Nuevo Estudiante */}
             <button
               onClick={handleOpenAdd}
-              className="flex-1 sm:flex-initial px-4 py-2.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-2xl text-xs font-bold transition-all shadow-md shadow-indigo-600/20 flex items-center justify-center gap-2"
+              className="flex-1 sm:flex-initial px-4 py-2.5 bg-indigo-600 dark:bg-white hover:bg-indigo-500 dark:hover:bg-zinc-200 text-white dark:text-black rounded-2xl text-xs font-bold transition-all shadow-md shadow-indigo-600/20 flex items-center justify-center gap-2"
             >
               <UserPlus className="w-4 h-4" />
               <span>+ Nuevo Estudiante</span>
@@ -279,7 +278,7 @@ export const StudentsManagerView: React.FC<StudentsManagerViewProps> = ({ onGene
       </div>
 
       {/* Main Student Directory Table */}
-      <div className="p-5 rounded-3xl bg-white/70 dark:bg-slate-900/70 border border-slate-200/80 dark:border-slate-800 backdrop-blur-xl shadow-sm space-y-4">
+      <div className="p-5 rounded-3xl bg-white/70 dark:bg-zinc-950/70 border border-slate-200/80 dark:border-zinc-800/50 backdrop-blur-xl shadow-sm space-y-4">
         <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3">
           <div className="relative flex-1">
             <Search className="w-4 h-4 absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400" />
@@ -288,7 +287,7 @@ export const StudentsManagerView: React.FC<StudentsManagerViewProps> = ({ onGene
               placeholder="Buscar por nombre, documento (TI, CC, RC) o código..."
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              className="w-full pl-10 pr-4 py-2.5 bg-white dark:bg-slate-950/70 border border-slate-200 dark:border-slate-800 rounded-2xl text-xs focus:ring-2 focus:ring-indigo-500 focus:outline-none"
+              className="w-full pl-10 pr-4 py-2.5 bg-white dark:bg-black/70 border border-slate-200 dark:border-zinc-800/50 rounded-2xl text-xs focus:ring-2 focus:ring-indigo-500 focus:outline-none"
             />
           </div>
 
@@ -296,7 +295,7 @@ export const StudentsManagerView: React.FC<StudentsManagerViewProps> = ({ onGene
             <select
               value={selectedGrade}
               onChange={(e) => setSelectedGrade(e.target.value)}
-              className="px-3.5 py-2.5 bg-white dark:bg-slate-950/70 border border-slate-200 dark:border-slate-800 rounded-2xl text-xs font-bold focus:outline-none"
+              className="px-3.5 py-2.5 bg-white dark:bg-black/70 border border-slate-200 dark:border-zinc-800/50 rounded-2xl text-xs font-bold focus:outline-none"
             >
               <option value="all">Todos los Cursos ({students.length})</option>
               {uniqueGrades.map(g => (
@@ -307,10 +306,10 @@ export const StudentsManagerView: React.FC<StudentsManagerViewProps> = ({ onGene
         </div>
 
         {/* Responsive Table */}
-        <div className="overflow-x-auto">
-          <table className="w-full text-left text-xs">
+        <div className="w-full overflow-x-auto rounded-xl border border-slate-200 dark:border-zinc-800/50">
+          <table className="w-full text-left text-xs min-w-[700px]">
             <thead>
-              <tr className="border-b border-slate-100 dark:border-slate-800 text-slate-400 font-bold uppercase text-[10px] tracking-wider">
+              <tr className="border-b border-slate-100 dark:border-zinc-800/50 text-slate-400 font-bold uppercase text-[10px] tracking-wider">
                 <th className="py-3 px-3">Estudiante</th>
                 <th className="py-3 px-3">Grado / Curso</th>
                 <th className="py-3 px-3">Tipo / Documento</th>
@@ -321,14 +320,14 @@ export const StudentsManagerView: React.FC<StudentsManagerViewProps> = ({ onGene
             </thead>
             <tbody className="divide-y divide-slate-100 dark:divide-slate-800/60">
               {filteredStudents.map((std) => (
-                <tr key={std.code} className="hover:bg-slate-50/50 dark:hover:bg-slate-950/40 transition-colors">
+                <tr key={std.code} className="hover:bg-slate-100 dark:hover:bg-zinc-900/50 transition-colors group border-b border-slate-100 dark:border-zinc-800/50 last:border-0 hover:shadow-sm">
                   <td className="py-3 px-3 font-bold text-slate-900 dark:text-white">
                     <div className="flex items-center gap-2.5">
                       {std.photoUrl ? (
                         <img
                           src={std.photoUrl}
                           alt={`${std.firstName} ${std.lastName}`}
-                          className="w-7 h-7 rounded-lg object-cover border border-slate-300 dark:border-slate-700 shadow-xs shrink-0"
+                          className="w-7 h-7 rounded-lg object-cover border border-slate-300 dark:border-zinc-800 shadow-xs shrink-0"
                         />
                       ) : (
                         <div className="w-7 h-7 rounded-lg bg-indigo-50 dark:bg-indigo-950/60 border border-indigo-200 dark:border-indigo-800 flex items-center justify-center text-[10px] font-black text-indigo-600 dark:text-indigo-400 shrink-0">
@@ -373,7 +372,7 @@ export const StudentsManagerView: React.FC<StudentsManagerViewProps> = ({ onGene
                           AttendanceStorageService.setRepresentativeForGrade(std.grade, std.code);
                           refreshList();
                         }}
-                        className="px-2 py-0.5 rounded-md bg-slate-100 dark:bg-slate-800 hover:bg-amber-50 text-slate-500 hover:text-amber-700 text-[10px] font-medium border border-slate-200 dark:border-slate-700 flex items-center gap-1 transition-colors"
+                        className="px-2 py-0.5 rounded-md bg-slate-100 dark:bg-slate-800 hover:bg-amber-50 text-slate-500 hover:text-amber-700 text-[10px] font-medium border border-slate-200 dark:border-zinc-800 flex items-center gap-1 transition-colors"
                         title="Asignar como Representante de este curso"
                       >
                         <span>Hacer Rep</span>
@@ -426,8 +425,8 @@ export const StudentsManagerView: React.FC<StudentsManagerViewProps> = ({ onGene
       {/* Drawer: Add / Edit Single Student */}
       {showDrawer && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-slate-950/80 backdrop-blur-md animate-fadeIn">
-          <div className="p-6 sm:p-7 rounded-3xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-2xl max-w-4xl w-full max-h-[92vh] overflow-y-auto space-y-6">
-            <div className="flex items-center justify-between border-b border-slate-100 dark:border-slate-800 pb-3">
+          <div className="p-6 sm:p-7 rounded-3xl bg-white dark:bg-zinc-950 border border-slate-200 dark:border-zinc-800/50 shadow-2xl max-w-4xl w-full max-h-[92vh] overflow-y-auto space-y-6">
+            <div className="flex items-center justify-between border-b border-slate-100 dark:border-zinc-800/50 pb-3">
               <div>
                 <h3 className="text-base font-black text-slate-900 dark:text-white tracking-tight">
                   {editingStudent ? 'Editar Ficha del Estudiante' : 'Matricular Nuevo Estudiante'}
@@ -464,7 +463,7 @@ export const StudentsManagerView: React.FC<StudentsManagerViewProps> = ({ onGene
                     value={formData.firstName}
                     onChange={(e) => setFormData({ ...formData, firstName: e.target.value })}
                     placeholder="Ej: Santiago Andrés"
-                    className="w-full px-3.5 py-2.5 bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-2xl text-xs uppercase text-slate-900 dark:text-white focus:ring-2 focus:ring-indigo-500 focus:outline-none"
+                    className="w-full px-3.5 py-2.5 bg-slate-50 dark:bg-black border border-slate-200 dark:border-zinc-800/50 rounded-2xl text-xs uppercase text-slate-900 dark:text-white focus:ring-2 focus:ring-indigo-500 focus:outline-none"
                   />
                 </div>
 
@@ -478,7 +477,7 @@ export const StudentsManagerView: React.FC<StudentsManagerViewProps> = ({ onGene
                     value={formData.lastName}
                     onChange={(e) => setFormData({ ...formData, lastName: e.target.value })}
                     placeholder="Ej: Gómez Restrepo"
-                    className="w-full px-3.5 py-2.5 bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-2xl text-xs uppercase text-slate-900 dark:text-white focus:ring-2 focus:ring-indigo-500 focus:outline-none"
+                    className="w-full px-3.5 py-2.5 bg-slate-50 dark:bg-black border border-slate-200 dark:border-zinc-800/50 rounded-2xl text-xs uppercase text-slate-900 dark:text-white focus:ring-2 focus:ring-indigo-500 focus:outline-none"
                   />
                 </div>
 
@@ -491,7 +490,7 @@ export const StudentsManagerView: React.FC<StudentsManagerViewProps> = ({ onGene
                     <select
                       value={formData.documentType}
                       onChange={(e) => setFormData({ ...formData, documentType: e.target.value as DocumentType })}
-                      className="w-full px-2.5 py-2.5 bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-2xl text-xs font-bold text-slate-900 dark:text-white focus:ring-2 focus:ring-indigo-500 focus:outline-none"
+                      className="w-full px-2.5 py-2.5 bg-slate-50 dark:bg-black border border-slate-200 dark:border-zinc-800/50 rounded-2xl text-xs font-bold text-slate-900 dark:text-white focus:ring-2 focus:ring-indigo-500 focus:outline-none"
                     >
                       <option value="TI">TI (Tarjeta Identidad)</option>
                       <option value="CC">CC (Cédula Ciudadanía)</option>
@@ -514,7 +513,7 @@ export const StudentsManagerView: React.FC<StudentsManagerViewProps> = ({ onGene
                       disabled={!!editingStudent}
                       onChange={(e) => setFormData({ ...formData, documentId: e.target.value })}
                       placeholder="Ej: 1025883921"
-                      className="w-full px-3.5 py-2.5 bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-2xl text-xs font-mono font-bold text-indigo-600 dark:text-indigo-400 focus:ring-2 focus:ring-indigo-500 focus:outline-none disabled:opacity-60"
+                      className="w-full px-3.5 py-2.5 bg-slate-50 dark:bg-black border border-slate-200 dark:border-zinc-800/50 rounded-2xl text-xs font-mono font-bold text-indigo-600 dark:text-indigo-400 focus:ring-2 focus:ring-indigo-500 focus:outline-none disabled:opacity-60"
                     />
                   </div>
                 </div>
@@ -536,7 +535,7 @@ export const StudentsManagerView: React.FC<StudentsManagerViewProps> = ({ onGene
                     value={formData.grade}
                     onChange={(e) => setFormData({ ...formData, grade: e.target.value })}
                     placeholder="Ej: 6°5, 10°4, 11°3"
-                    className="w-full px-3.5 py-2.5 bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-2xl text-xs font-bold text-slate-900 dark:text-white focus:ring-2 focus:ring-indigo-500 focus:outline-none"
+                    className="w-full px-3.5 py-2.5 bg-slate-50 dark:bg-black border border-slate-200 dark:border-zinc-800/50 rounded-2xl text-xs font-bold text-slate-900 dark:text-white focus:ring-2 focus:ring-indigo-500 focus:outline-none"
                   />
                   <datalist id="grades-list-drawer">
                     {uniqueGrades.map(g => (
@@ -553,7 +552,7 @@ export const StudentsManagerView: React.FC<StudentsManagerViewProps> = ({ onGene
                 </div>
 
                 {/* 5. Fotografía del Carné (Exclusiva del Formulario Individual) */}
-                <div className="space-y-1.5 p-3 rounded-2xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800">
+                <div className="space-y-1.5 p-3 rounded-2xl bg-slate-50 dark:bg-black border border-slate-200 dark:border-zinc-800/50">
                   <div className="flex items-center justify-between">
                     <label className="text-xs font-bold text-slate-700 dark:text-slate-300 flex items-center gap-1.5">
                       <Camera className="w-3.5 h-3.5 text-indigo-500" />
@@ -580,10 +579,10 @@ export const StudentsManagerView: React.FC<StudentsManagerViewProps> = ({ onGene
                       value={formData.photoUrl}
                       onChange={(e) => setFormData({ ...formData, photoUrl: e.target.value })}
                       placeholder="https://ejemplo.com/foto.jpg"
-                      className="flex-1 px-3 py-2 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl text-xs font-mono text-slate-900 dark:text-white outline-none focus:ring-2 focus:ring-indigo-500"
+                      className="flex-1 px-3 py-2 bg-white dark:bg-zinc-950 border border-slate-200 dark:border-zinc-800/50 rounded-xl text-xs font-mono text-slate-900 dark:text-white outline-none focus:ring-2 focus:ring-indigo-500"
                     />
 
-                    <label className="cursor-pointer px-3 py-2 bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 text-slate-700 dark:text-slate-300 rounded-xl text-xs font-bold transition-all border border-slate-200 dark:border-slate-700 flex items-center gap-1.5 shrink-0">
+                    <label className="cursor-pointer px-3 py-2 bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 text-slate-700 dark:text-slate-300 rounded-xl text-xs font-bold transition-all border border-slate-200 dark:border-zinc-800 flex items-center gap-1.5 shrink-0">
                       <Upload className="w-3 h-3 text-indigo-500" />
                       <span>Subir</span>
                       <input
@@ -616,7 +615,7 @@ export const StudentsManagerView: React.FC<StudentsManagerViewProps> = ({ onGene
                   </button>
                   <button
                     type="submit"
-                    className="px-5 py-2.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-2xl text-xs font-bold transition-all shadow-md shadow-indigo-600/20 flex items-center gap-1.5"
+                    className="px-5 py-2.5 bg-indigo-600 dark:bg-white hover:bg-indigo-500 dark:hover:bg-zinc-200 text-white dark:text-black rounded-2xl text-xs font-bold transition-all shadow-md shadow-indigo-600/20 flex items-center gap-1.5"
                   >
                     <Check className="w-4 h-4" />
                     <span>{editingStudent ? 'Actualizar' : 'Guardar y Generar'}</span>
@@ -625,7 +624,7 @@ export const StudentsManagerView: React.FC<StudentsManagerViewProps> = ({ onGene
               </form>
 
               {/* Right Column: Live Dynamic Card Preview */}
-              <div className="space-y-3 p-4 bg-slate-50 dark:bg-slate-950/60 rounded-3xl border border-slate-200 dark:border-slate-800 text-slate-900">
+              <div className="space-y-3 p-4 bg-slate-50 dark:bg-black/60 rounded-3xl border border-slate-200 dark:border-zinc-800/50 text-slate-900">
                 <div className="flex items-center justify-between text-[11px] font-bold text-slate-500 dark:text-slate-400">
                   <span className="flex items-center gap-1.5">
                     <CreditCard className="w-3.5 h-3.5 text-indigo-500" />
@@ -635,7 +634,7 @@ export const StudentsManagerView: React.FC<StudentsManagerViewProps> = ({ onGene
                 </div>
 
                 {/* Simulated Physical Card */}
-                <div className="w-full aspect-[85.6/53.98] rounded-2xl bg-gradient-to-br from-slate-50 via-sky-50/40 to-indigo-50/30 border-2 border-slate-300 dark:border-slate-700 shadow-md p-3.5 flex flex-col justify-between relative overflow-hidden text-slate-900">
+                <div className="w-full aspect-[85.6/53.98] rounded-2xl bg-gradient-to-br from-slate-50 via-sky-50/40 to-indigo-50/30 border-2 border-slate-300 dark:border-zinc-800 shadow-md p-3.5 flex flex-col justify-between relative overflow-hidden text-slate-900">
                   <div className="absolute top-0 left-0 right-0 h-1.5 flex">
                     <div className="w-1/2 h-full bg-amber-400" />
                     <div className="w-1/4 h-full bg-blue-600" />
@@ -716,7 +715,7 @@ export const StudentsManagerView: React.FC<StudentsManagerViewProps> = ({ onGene
       {/* Success Notification Drawer with Instant PDF Download */}
       {justSavedStudent && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-md animate-fadeIn">
-          <div className="p-6 rounded-3xl bg-white dark:bg-slate-900 border border-indigo-500/40 shadow-2xl max-w-md w-full text-center space-y-4">
+          <div className="p-6 rounded-3xl bg-white dark:bg-zinc-950 border border-indigo-500/40 shadow-2xl max-w-md w-full text-center space-y-4">
             <div className="w-12 h-12 rounded-2xl bg-emerald-500/20 text-emerald-600 dark:text-emerald-400 flex items-center justify-center mx-auto">
               <CheckCircle className="w-6 h-6" />
             </div>
@@ -755,8 +754,8 @@ export const StudentsManagerView: React.FC<StudentsManagerViewProps> = ({ onGene
       {/* Inspect / Preview Carné Modal */}
       {inspectStudent && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-md animate-fadeIn">
-          <div className="p-6 rounded-3xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-2xl max-w-lg w-full space-y-5">
-            <div className="flex items-center justify-between border-b border-slate-100 dark:border-slate-800 pb-3">
+          <div className="p-6 rounded-3xl bg-white dark:bg-zinc-950 border border-slate-200 dark:border-zinc-800/50 shadow-2xl max-w-lg w-full space-y-5">
+            <div className="flex items-center justify-between border-b border-slate-100 dark:border-zinc-800/50 pb-3">
               <div className="flex items-center gap-2">
                 <CreditCard className="w-4 h-4 text-indigo-600" />
                 <h3 className="text-xs font-bold uppercase tracking-wider text-slate-700 dark:text-slate-300">
@@ -772,7 +771,7 @@ export const StudentsManagerView: React.FC<StudentsManagerViewProps> = ({ onGene
             </div>
 
             {/* Carné Visual Card */}
-            <div className="w-full aspect-[85.6/53.98] rounded-2xl bg-gradient-to-br from-slate-50 via-sky-50/40 to-indigo-50/30 border-2 border-slate-300 dark:border-slate-700 shadow-xl p-3.5 flex flex-col justify-between relative overflow-hidden text-slate-900">
+            <div className="w-full aspect-[85.6/53.98] rounded-2xl bg-gradient-to-br from-slate-50 via-sky-50/40 to-indigo-50/30 border-2 border-slate-300 dark:border-zinc-800 shadow-xl p-3.5 flex flex-col justify-between relative overflow-hidden text-slate-900">
               <div className="absolute top-0 left-0 right-0 h-1.5 flex">
                 <div className="w-1/2 h-full bg-amber-400" />
                 <div className="w-1/4 h-full bg-blue-600" />

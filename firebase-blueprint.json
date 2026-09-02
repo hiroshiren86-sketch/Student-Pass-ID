@@ -3,52 +3,114 @@
     "students": {
       "title": "Estudiantes",
       "description": "Directorio de estudiantes matriculados",
-      "fields": {
+      "type": "object",
+      "properties": {
         "code": { "type": "string", "description": "Código estudiantil único" },
-        "documentNumber": { "type": "string", "description": "Número de documento de identidad" },
+        "documentId": { "type": "string", "description": "Número de documento de identidad" },
         "documentType": { "type": "string", "description": "Tipo de documento (TI, CC, RC, etc.)" },
         "firstName": { "type": "string", "description": "Nombres" },
         "lastName": { "type": "string", "description": "Apellidos" },
         "grade": { "type": "string", "description": "Grado y grupo (ej: 10°1, 11°2)" },
-        "status": { "type": "string", "description": "Estado activo/inactivo" },
+        "section": { "type": "string", "description": "Sección o grupo" },
+        "active": { "type": "boolean", "description": "Estado activo/inactivo" },
         "guardianName": { "type": "string", "description": "Nombre de acudiente" },
-        "guardianPhone": { "type": "string", "description": "Teléfono de acudiente" }
-      }
+        "guardianPhone": { "type": "string", "description": "Teléfono de acudiente" },
+        "photoUrl": { "type": "string", "description": "URL de foto de carné" }
+      },
+      "required": ["code", "documentId", "firstName", "lastName", "grade"]
     },
     "teachers": {
       "title": "Docentes",
       "description": "Profesores registrados en la institución",
-      "fields": {
-        "fullName": { "type": "string", "description": "Nombre completo" },
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "ID del docente" },
+        "name": { "type": "string", "description": "Nombre completo" },
         "email": { "type": "string", "description": "Correo institucional" },
         "documentId": { "type": "string", "description": "Cédula de ciudadanía" },
-        "subjects": { "type": "array", "description": "Asignaturas que dicta" },
-        "assignedGrades": { "type": "array", "description": "Grupos asignados" }
-      }
+        "subjects": { "type": "array", "description": "Asignaturas que dicta", "items": { "type": "string" } },
+        "assignedGrades": { "type": "array", "description": "Grupos asignados", "items": { "type": "string" } }
+      },
+      "required": ["id", "name", "email"]
     },
     "attendance_records": {
-      "title": "Registros de Portería",
-      "description": "Asistencia registrada por escaneo en portería",
-      "fields": {
+      "title": "Registros de Asistencia",
+      "description": "Asistencia registrada por escaneo en aula o portería",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "ID único del registro" },
         "studentCode": { "type": "string", "description": "Código del estudiante" },
+        "studentName": { "type": "string", "description": "Nombre del estudiante" },
+        "studentGrade": { "type": "string", "description": "Grado del estudiante" },
         "date": { "type": "string", "description": "Fecha YYYY-MM-DD" },
         "time": { "type": "string", "description": "Hora HH:mm:ss" },
-        "status": { "type": "string", "description": "Puntual, Retardo, etc." },
-        "method": { "type": "string", "description": "QR_CAMARA, CODIGO_BARRAS_USB, MANUAL" }
-      }
+        "status": { "type": "string", "description": "PUNTUAL, TARDANZA, AUSENTE" },
+        "method": { "type": "string", "description": "CAMERA, USB, MANUAL" }
+      },
+      "required": ["id", "studentCode", "date", "status"]
     },
     "schedule_assignments": {
       "title": "Asignaciones de Horario",
-      "description": "Horario escolar por grado, día y bloque (incluye bloques dobles)",
-      "fields": {
+      "description": "Horario escolar por grado, día y bloque",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "ID de la asignación" },
         "grade": { "type": "string", "description": "Grado (ej: 11°2)" },
-        "dayOfWeek": { "type": "string", "description": "Lunes a Viernes" },
+        "dayOfWeek": { "type": "number", "description": "Día de la semana (1-5)" },
         "slotId": { "type": "string", "description": "ID del bloque horario" },
         "subject": { "type": "string", "description": "Materia" },
-        "teacherId": { "type": "string", "description": "ID o Nombre del Docente" },
-        "classroom": { "type": "string", "description": "Salón" },
-        "isDoubleBlock": { "type": "boolean", "description": "Indica si es un bloque doble de 2 horas seguidas" }
+        "teacherName": { "type": "string", "description": "Nombre del Docente" }
+      },
+      "required": ["id", "grade", "dayOfWeek", "slotId", "subject"]
+    },
+    "school_settings": {
+      "title": "Configuración Institucional",
+      "description": "Ajustes del colegio y parámetros del sistema",
+      "type": "object",
+      "properties": {
+        "schoolName": { "type": "string", "description": "Nombre del colegio" },
+        "schoolCode": { "type": "string", "description": "Código DANE o identificador" },
+        "academicYear": { "type": "string", "description": "Año lectivo" },
+        "cloudflareWorkerUrl": { "type": "string", "description": "URL del worker de Cloudflare" }
       }
+    },
+    "users": {
+      "title": "Perfiles de Usuario",
+      "description": "Cuentas de usuario y roles en la plataforma",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "description": "UID de Firebase Auth" },
+        "email": { "type": "string", "description": "Correo electrónico" },
+        "displayName": { "type": "string", "description": "Nombre para mostrar" },
+        "role": { "type": "string", "description": "ADMIN, DOCENTE, PORTERO, ESTUDIANTE_ACUDIENTE" }
+      },
+      "required": ["uid", "email", "role"]
+    }
+  },
+  "firestore": {
+    "students/{studentId}": {
+      "schema": "students",
+      "description": "Documentos de estudiantes matriculados"
+    },
+    "teachers/{teacherId}": {
+      "schema": "teachers",
+      "description": "Documentos de docentes"
+    },
+    "attendance_records/{recordId}": {
+      "schema": "attendance_records",
+      "description": "Registros de asistencia por bloque y día"
+    },
+    "schedule_assignments/{assignmentId}": {
+      "schema": "schedule_assignments",
+      "description": "Asignaciones de materias y profesores en el horario"
+    },
+    "school_settings/{settingId}": {
+      "schema": "school_settings",
+      "description": "Configuración institucional maestra"
+    },
+    "users/{userId}": {
+      "schema": "users",
+      "description": "Perfiles y roles de usuario"
     }
   }
 }

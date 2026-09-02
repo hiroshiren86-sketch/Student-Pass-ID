@@ -121,21 +121,21 @@ export const CardsManagerView: React.FC = () => {
           </h3>
         </div>
         <div className="grid grid-cols-1 md:grid-cols-3 gap-3 pt-1">
-          <div className="p-3 bg-white/70 dark:bg-slate-900/60 rounded-2xl border border-slate-200/70 dark:border-slate-800 flex items-start gap-3">
+          <div className="p-3 bg-white/70 dark:bg-zinc-950/60 rounded-2xl border border-slate-200/70 dark:border-zinc-800/50 flex items-start gap-3">
             <span className="w-6 h-6 rounded-full bg-indigo-600 text-white font-black text-xs flex items-center justify-center shrink-0">1</span>
             <div>
               <div className="text-xs font-bold text-slate-900 dark:text-white">Registro Manual</div>
               <p className="text-[11px] text-slate-500 dark:text-slate-400 leading-tight mt-0.5">Se ingresan nombres, documento y curso del estudiante.</p>
             </div>
           </div>
-          <div className="p-3 bg-white/70 dark:bg-slate-900/60 rounded-2xl border border-indigo-200 dark:border-indigo-500/40 flex items-start gap-3 shadow-xs">
+          <div className="p-3 bg-white/70 dark:bg-zinc-950/60 rounded-2xl border border-indigo-200 dark:border-indigo-500/40 flex items-start gap-3 shadow-xs">
             <span className="w-6 h-6 rounded-full bg-indigo-600 text-white font-black text-xs flex items-center justify-center shrink-0">2</span>
             <div>
               <div className="text-xs font-bold text-indigo-900 dark:text-indigo-200">Generar & Imprimir (PDF)</div>
               <p className="text-[11px] text-slate-500 dark:text-slate-400 leading-tight mt-0.5">Descarga el carné formato tarjeta CR80 para PVC o termo-plastificado.</p>
             </div>
           </div>
-          <div className="p-3 bg-white/70 dark:bg-slate-900/60 rounded-2xl border border-slate-200/70 dark:border-slate-800 flex items-start gap-3">
+          <div className="p-3 bg-white/70 dark:bg-zinc-950/60 rounded-2xl border border-slate-200/70 dark:border-zinc-800/50 flex items-start gap-3">
             <span className="w-6 h-6 rounded-full bg-emerald-600 text-white font-black text-xs flex items-center justify-center shrink-0">3</span>
             <div>
               <div className="text-xs font-bold text-slate-900 dark:text-white">Escaneo de Asistencia</div>
@@ -195,7 +195,7 @@ export const CardsManagerView: React.FC = () => {
                   placeholder="Buscar por nombre, código o documento..."
                   value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}
-                  className="w-full pl-9 pr-3 py-2 bg-white/80 dark:bg-slate-950/70 border border-slate-200 dark:border-slate-800 rounded-xl text-xs"
+                  className="w-full pl-9 pr-3 py-2 bg-white/80 dark:bg-black/70 border border-slate-200 dark:border-zinc-800/50 rounded-xl text-xs"
                 />
               </div>
 
@@ -203,7 +203,7 @@ export const CardsManagerView: React.FC = () => {
                 <select
                   value={selectedGrade}
                   onChange={(e) => setSelectedGrade(e.target.value)}
-                  className="px-3 py-2 bg-white/80 dark:bg-slate-950/70 border border-slate-200 dark:border-slate-800 rounded-xl text-xs font-bold"
+                  className="px-3 py-2 bg-white/80 dark:bg-black/70 border border-slate-200 dark:border-zinc-800/50 rounded-xl text-xs font-bold"
                 >
                   <option value="all">Todos los Cursos ({students.length})</option>
                   {uniqueGrades.map(g => (
@@ -237,7 +237,7 @@ export const CardsManagerView: React.FC = () => {
                 <button
                   onClick={() => handleDownloadBatchPdf()}
                   disabled={isGeneratingPdf}
-                  className="px-3.5 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-xs font-bold transition-all shadow-xs flex items-center gap-1.5"
+                  className="px-3.5 py-1.5 bg-indigo-600 dark:bg-white hover:bg-indigo-500 dark:hover:bg-zinc-200 text-white dark:text-black rounded-xl text-xs font-bold transition-all shadow-xs flex items-center gap-1.5"
                 >
                   <Printer className="w-3.5 h-3.5" />
                   <span>
@@ -341,7 +341,7 @@ export const CardsManagerView: React.FC = () => {
         {/* Right Col: Live Physical Card Preview (Front & Back) */}
         <div className="space-y-4">
           <div className="glass-panel p-5 rounded-3xl space-y-4 sticky top-6">
-            <div className="flex items-center justify-between border-b border-slate-100 dark:border-slate-800 pb-3">
+            <div className="flex items-center justify-between border-b border-slate-100 dark:border-zinc-800/50 pb-3">
               <div className="flex items-center gap-2">
                 <CreditCard className="w-4 h-4 text-indigo-600" />
                 <h3 className="text-xs font-bold uppercase tracking-wider text-slate-700 dark:text-slate-300">
@@ -361,7 +361,7 @@ export const CardsManagerView: React.FC = () => {
             {previewStudent ? (
               <div className="space-y-4">
                 {/* Visual Front Card - Colombian Digital ID Aesthetic */}
-                <div className="w-full aspect-[85.6/53.98] rounded-2xl bg-white border-2 border-slate-300 dark:border-slate-700 shadow-xl p-3 flex flex-col justify-between relative overflow-hidden text-slate-900">
+                <div className="w-full aspect-[85.6/53.98] rounded-2xl bg-white border-2 border-slate-300 dark:border-zinc-800 shadow-xl p-3 flex flex-col justify-between relative overflow-hidden text-slate-900">
                   {/* Subtle Colombia Tricolor Header */}
                   <div className="absolute top-0 left-0 right-0 h-1.5 flex">
                     <div className="w-1/2 h-full bg-amber-400" />
@@ -438,7 +438,7 @@ export const CardsManagerView: React.FC = () => {
                 </div>
 
                 {/* Visual Back Card */}
-                <div className="w-full aspect-[85.6/53.98] rounded-2xl bg-slate-50 border-2 border-slate-300 dark:border-slate-700 shadow-xl p-3 flex flex-col justify-between relative overflow-hidden text-slate-900">
+                <div className="w-full aspect-[85.6/53.98] rounded-2xl bg-slate-50 border-2 border-slate-300 dark:border-zinc-800 shadow-xl p-3 flex flex-col justify-between relative overflow-hidden text-slate-900">
                   <div className="absolute top-0 left-0 right-0 h-2 bg-slate-900" />
 
                   <div className="pt-2 space-y-1.5">

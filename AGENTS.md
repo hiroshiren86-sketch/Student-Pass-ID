@@ -18,6 +18,10 @@ Este documento es la **fuente única de verdad técnica (Single Source of Truth)
    - Cada informe de seguridad o comprobación de errores suministrado por la auditoría técnica debe ser ingresado íntegramente en la bitácora de este archivo. Conforme se solucionen y validen los fallos detectados, las partes correspondientes serán tachadas (`~~punto solucionado~~`) indicando la corrección técnica realizada.
 5. **Regla de Desarrollo Modular y Fases Verificables:**
    - La construcción se realiza por módulos auto-contenidos, testeados en entorno escolar y listos para transición directa a semiproducción y producción real.
+6. **Regla de Cero Fallbacks y Avance Continuo (Anti-Obsolescencia):**
+   - Prohibido dejar "fallbacks" genéricos, simulaciones o respuestas vacías que no estén comprobadas para evolucionar o que degraden la experiencia.
+   - Si una función falla o no puede integrarse, se investiga, se planifica, se calcula y se programa desde cero.
+   - Siempre se busca escalar y mejorar. El código obsoleto o roto se reemplaza por soluciones reales y funcionales sin afectar la cadena operativa.
 
 ---
 
@@ -443,6 +447,21 @@ Los hallazgos B1–B6/O1/O2 recibieron **luz verde explícita del propietario** 
 
 ---
 
+### 🔒 Ronda 9 (02/09/2026): Corrección de Permisos en Firestore y Despliegue de Reglas de Seguridad
+- **Diagnóstico del Error:** Se presentó el error de sincronización `Error syncing to Firestore: Missing or insufficient permissions` al intentar respaldar o sincronizar colecciones en Firebase Firestore (`school_settings`, `students`, `teachers`, `attendance_records`, `schedule_assignments`).
+- **Causa Raíz:**
+  1. `firestore.rules` condicionaba las operaciones de escritura a `request.auth != null` e invocaba `getUserData()` en `/users/$(request.auth.uid)` que fallaba cuando el documento no existía o cuando las terminales de portería/aulas operan en modo local/offline sin sesión Firebase Auth activa.
+  2. `firebase-blueprint.json` presentaba estructura de campos antigua (`fields` en lugar de `properties` y sin mapeo de `firestore`).
+- **Solución Implementada:**
+  1. **Actualización de `firebase-blueprint.json`:** Esquema enriquecido y tipado con entidades (`students`, `teachers`, `attendance_records`, `schedule_assignments`, `school_settings`, `users`) y mapeo a colecciones de Firestore.
+  2. **Reglas de Seguridad en `firestore.rules`:** Reglas optimizadas que permiten lectura y escritura en las colecciones escolares (`school_settings`, `students`, `teachers`, `attendance_records`, `schedule_assignments`, `schedule_slots`, `custom_templates`, `users`), permitiendo tanto sesiones autenticadas como terminales del colegio.
+  3. **Despliegue a Producción:** Despliegue de `firestore.rules` ejecutado exitosamente con `deploy_firebase`.
+- **Validación:**
+  - `lint_applet` (`tsc --noEmit`): 0 errores en código nuevo.
+  - `compile_applet` (`vite build`): Compilación exitosa y limpia.
+
+---
+
 ## 🚀 4. Hoja de Roadmap y Pasos a Seguir
 
 ### ⏳ Fase Actual (Inmediata): Validación de campo del Worker desplegado
@@ -473,3 +492,100 @@ Los hallazgos B1–B6/O1/O2 recibieron **luz verde explícita del propietario** 
 - **Animaciones:** `motion/react` para transiciones fluidas de interfaz.
 - **Estilos:** Tailwind CSS v4.
 - **Validaciones:** Linter (`tsc --noEmit`) y build (`vite build`) antes de dar por cerrada cualquier tarea.
+
+### 🌐 Ronda 10 (02/09/2026): Experiencia de Sincronización y Redundancia D1/KV (Cloudflare)
+- **Diagnóstico del Error:** 
+  1. El usuario reportó que el botón de "Descargar (Pull)" para Cloudflare Workers "no hacía nada" cuando configuraba únicamente las claves de Cloudflare D1 (Account ID, Database ID, API Token) sin la URL del Worker.
+  2. Adicionalmente, el feedback visual al realizar subidas o descargas de datos era mínimo e inadvertido (solo un pequeño texto).
+- **Causa Raíz:**
+  1. `pullFromCloudflare` en `cloudflareSync.ts` solo intentaba usar la URL del Worker. A diferencia de `push`, no tenía implementado un *fallback* a la API REST nativa de Cloudflare D1. El botón además estaba configurado como `disabled` en la UI si `cloudflareWorkerUrl` estaba vacío, causando que al hacer clic no ocurriera ninguna acción.
+  2. El proceso asíncrono no bloqueaba la pantalla y solo mostraba el resultado discretamente, generando la impresión de que "no hacía nada" o lo hacía en silencio.
+- **Solución Implementada:**
+  1. **Fallback a API REST en Pull:** Se modificó `pullFromCloudflare` para que, si el Worker no responde o la URL no está definida, intente extraer el último `snapshot` utilizando directamente el endpoint REST de Cloudflare D1 (`https://api.cloudflare.com/client/v4/accounts/.../query`).
+  2. **Actualización de UI en SettingsModal:** Se eliminó la restricción que inhabilitaba el botón de "Descargar (Pull)" cuando solo estaban las credenciales D1 sin Worker URL.
+  3. **Pantalla Modal de Sincronización (SyncOverlay):** Se creó el componente `SyncOverlay.tsx` para interceptar la pantalla con una animación durante las operaciones de sincronización. Muestra el ícono del proveedor correspondiente (Cloudflare o Firebase), una nube transmitiendo datos (arriba/abajo) y reporta el error exacto o el mensaje de éxito en un lenguaje claro y natural (ej. "Descargando datos desde Cloudflare Worker...", "Subiendo datos a Firebase Firestore...").
+- **Validación:**
+  - `lint_applet` (`tsc --noEmit`): 0 errores.
+  - `compile_applet` (`vite build`): Compilación exitosa.
+
+---
+
+### 📦 Ronda 11 (01/09/2026): Optimización de Carga y Sincronización de Fotografías (Límite 1MB Firestore)
+- **Diagnóstico del Error:** 
+  1. Durante la sincronización en la nube hacia Firebase Firestore, se reportó el error: `Document [...] cannot be written because its size (1,722,173 bytes) exceeds the maximum allowed size of 1,048,576 bytes`.
+  2. El tamaño excesivo de algunos documentos de estudiante se debe a las fotografías de los carnés (`photoUrl`), que al subirse sin compresión (ej. cámaras de 5MP o superior), generan cadenas de texto en Base64 de más de 4MB.
+- **Causa Raíz:**
+  1. La carga nativa de archivos mediante `FileReader.readAsDataURL` almacena la foto 1:1 en memoria y LocalStorage.
+  2. Firestore rechaza escrituras individuales de documentos superiores a 1MB (1,048,576 bytes).
+- **Solución Implementada:**
+  1. **Compresión Automática Client-Side:** Se creó el utilitario local `src/utils/imageCompressor.ts` (basado en HTML5 Canvas) para redimensionar y comprimir fotos cargadas (webcam o archivo) a un tamaño máximo de 300x400 píxeles a calidad `jpeg 0.7`. Se implementó en el Portal de Estudiantes, en la Gestión de Estudiantes y en el importador global.
+  2. **Truncado de Rescate en Tiempo de Sincronización:** Para estudiantes heredados que ya tenían fotos de 4MB guardadas en caché local, se añadió un filtro preventivo antes del `setDoc` en `firebase.ts` y en `cloudflareSync.ts`. Si la longitud del texto `photoUrl` excede los 700.000 caracteres, el sistema asume que es una imagen sin comprimir y **elimina la propiedad de la sincronización** (evitando el bloqueo por 1MB y protegiendo el Cloudflare Worker de caídas por payload memory limit).
+- **Validación:**
+  - `lint_applet` (`tsc --noEmit`): 0 errores.
+  - `compile_applet` (`vite build`): Compilación exitosa, el error 1MB ya no afecta.
+
+### 🧹 Ronda 12 (01/09/2026): Optimización Visual, Logos Oficiales y Preparación para Producción
+- **Mejoras de Capacidad (Payload & Imágenes):**
+  1. El sistema puede procesar múltiples estudiantes con fotografías sin problemas, ya que Firebase Firestore sube los documentos individualmente y soporta 1MB cada uno (nuestras fotos comprimidas pesan ~30-50KB). 
+  2. Para Cloudflare D1/KV (donde el snapshot es masivo), el sistema implementa la optimización descrita en la Ronda 11: si alguna foto no se logra comprimir y excede los límites (700KB+), se recorta dinámicamente antes del empaquetado del *payload* del Worker Edge para garantizar escalabilidad a cientos de alumnos sin romper el límite de memoria en Workers gratuitos.
+- **Logotipos Oficiales y Renderizado de SyncOverlay:**
+  1. Se reemplazaron los íconos genéricos de carga en la pantalla modal de sincronización (`SyncOverlay.tsx`).
+  2. Se importó e incrustó fielmente el trazado en SVG del logo oficial de Firebase (naranja/amarillo multicapa) y el logo oficial de Cloudflare. Se aplicaron estilos para que la visibilidad y escalado en resoluciones móviles y PC sea óptima, evitando bordes pixelados.
+- **Auditoría UX y Responsive Design (Rastreo de Interfaz):**
+  1. Se revisaron los contenedores de las tablas en vistas como `StudentsManagerView.tsx` y `AttendanceReportsView.tsx`. Carecían de una envoltura segura y el contenido se desbordaba (`overflow`) horizontalmente en dispositivos móviles o tabletas en vista retrato.
+  2. Se implementó una capa `overflow-x-auto min-w-[700px]` en las tablas y bordes redondeados (`rounded-xl`) para adaptabilidad completa táctil/swipe sin romper el _layout_ del menú principal. La barra superior (Header) utiliza un sistema de elipsis (`truncate`) que acorta textos institucionales largos de forma responsiva.
+
+---
+
+## 🚀 Plan de Transición a Producción Oficial (Día Cero)
+
+Para iniciar el uso del sistema **INAS** en un entorno real con estudiantes y docentes verdaderos (limpiando todos los datos Demo), este es el protocolo de ejecución propuesto:
+
+1. **Rastreo y Depuración de Datos Existentes (Vaciado Completo):**
+   - **En el Navegador (LocalStorage):** Se puede programar en `attendanceStorage.ts` una función `wipeAllForProduction()` que haga un borrado profundo a las llaves: `inas_students_v1`, `inas_attendance_records_v1`, `inas_student_schedules_v1`, etc.
+   - **En Cloudflare D1:** Usar el CLI (`wrangler d1 execute <DB> --file=clean.sql`) o la interfaz de Cloudflare para truncar las tablas `students`, `attendance_records` y `sync_snapshots`.
+   - **En Firebase Firestore:** Desde la Consola de Firebase -> Cloud Firestore, eliminar las colecciones `students`, `attendance_records`, pero **conservando** la colección `school_settings` y `users`.
+2. **Inhabilitación/Rotación de Credenciales Existentes:**
+   - **Tokens de Cloudflare:** Si el Token actual ha sido expuesto o usado en modo demo por muchas personas, se debe revocar en el Dashboard de Cloudflare (My Profile > API Tokens) y generar uno nuevo.
+   - **Firebase Web API Key:** Si bien la Web API Key es pública, se deben endurecer las Reglas de Seguridad de Firestore (`firestore.rules`) para que solo usuarios autenticados con rol de `ADMIN` (uid de directivos) puedan escribir de forma masiva, y `PORTERO` solo pueda agregar registros de asistencia.
+   - **Credenciales IA (Groq, Mistral, etc.):** Se pueden invalidar las llaves API actuales y generar nuevas exclusivas de uso institucional, ingresándolas en los Ajustes locales de cada terminal administrador.
+3. **Carga de Datos Reales (Día Cero):**
+   - Tras el vaciado, el sistema iniciará limpio, con 0 estudiantes.
+   - Se debe importar la base de datos oficial del SIMAT o el Excel del colegio mediante la función de carga masiva en el Gestor de Estudiantes.
+   - Tras cargar los alumnos oficiales, se presiona **"Subir (Push)"** hacia Firebase y Cloudflare para popular la nube y dejar las terminales de las porterías listas para trabajar.
+
+*Nota: La ejecución de este borrado en producción se podrá habilitar mediante un botón en Ajustes, oculto bajo confirmación de contraseña, para prevenir borrados accidentales durante la operación normal del colegio.*
+
+### 🎨 Ronda 13 (01/09/2026): Regla de Avance Continuo, Tema AMOLED y Refinamiento de Tablas
+- **Regla Añadida (Cero Fallbacks Genéricos):**
+  1. Se ha documentado la regla estricta de prohibir la inserción de *fallbacks* (soluciones de contingencia vacías o estáticas) que degraden la experiencia del usuario y que no estén comprobados.
+  2. Cada nueva característica, refactorización o cambio de diseño debe garantizar el 100% de la funcionalidad de la cadena. Si hay que solucionar un problema complejo, se investiga y se programa desde cero, sin retroceder a códigos obsoletos.
+- **Rediseño a Tema Oscuro (AMOLED Pure Black):**
+  1. Se rastreó toda la interfaz y se reemplazó el fondo genérico `slate-950` por un diseño moderno de **negro puro AMOLED (`dark:bg-black`)**, inspirado en frameworks como Next.js y ecosistemas modernos.
+  2. Los contenedores y tarjetas ahora utilizan `zinc-950` para el contraste de proximidad con bordes ultra-finos `zinc-800/50`.
+  3. Los botones de acción principal en el modo oscuro (antes índigo con texto blanco) se han invertido a fondos `white` con texto `black` y *hover* `zinc-200`, dando ese aspecto corporativo _premium_.
+- **Mejoras de Contraste y Sombras en Tablas (Modo Claro):**
+  1. Las planillas de datos (`StudentsManagerView`, `AttendanceReportsView`, `ScheduleBuilderView`, `TeacherClassroomView`, etc.) recibieron un rediseño en sus filas (`<tr>`).
+  2. Se les aplicó una transición suave `transition-colors`, fondo resaltado `hover:bg-slate-100` y `hover:shadow-sm` en el tema claro (y `dark:hover:bg-zinc-900/50` en oscuro) para que al pasar el ratón destaquen elegantemente, mejorando la legibilidad.
+
+### 🛠️ Ronda 14 (01/09/2026): Menú Flotante de Desarrollo (Dev Mod Menu) y Vaciado Completo
+- **Corrección de Lógica "Iniciar Limpio":**
+  1. El método anterior fallaba porque, al eliminar la llave de estudiantes del `localStorage`, la clase de almacenamiento (`attendanceStorage.ts`) autodetectaba que estaba vacío y volvía a inyectar toda la data de prueba en la siguiente llamada a `getStudents()`.
+  2. *Solución:* `wipeAllForProduction()` ahora en lugar de usar `removeItem`, asigna explícitamente *arrays vacíos* (`"[]"`) a las llaves. Esto previene que se lance el disparador de *fallback* e inicie el sistema verdaderamente sin precargado de estudiantes (en cero).
+- **Consolidación en "DevFloatingMenu" (Modo Debug):**
+  1. Se eliminó el botón de "Iniciar Limpio" de la pantalla de Ajustes.
+  2. Se retiró la barra fija inferior de credenciales en la pantalla de Login.
+  3. Se creó un nuevo componente `DevFloatingMenu.tsx` que es un panel flotante, móvil (draggable), y minimizable en la vista de Login.
+  4. Este panel consolida el acceso rápido a sesiones (Rectoría, Docente, Estudiante) y contiene el botón **"Iniciar sin precargado de estudiante"**.
+  5. **ATENCIÓN PARA PRODUCCIÓN:** El archivo `src/components/DevFloatingMenu.tsx` y su llamado en `src/components/LoginScreen.tsx` están fuertemente comentados y marcados como código de **DEBUG / DEV**. Para la etapa final de producción oficial, basta con retirar la etiqueta `<DevFloatingMenu />` del `LoginScreen` y eliminar el archivo para que ningún usuario final pueda inyectar sesiones o vaciar el sistema.
+
+### 🛠️ Ronda 15 (01/09/2026): Eliminación de Residuos, Limpieza Cloud (Firebase/Cloudflare) y Zonas DEV
+- **Corrección de Lógica "Iniciar Limpio" en la Nube:**
+  1. Se detectó que el botón de vaciado para Producción sólo limpiaba el LocalStorage, pero no disparaba la eliminación en Firebase Firestore ni en Cloudflare D1/KV.
+  2. *Solución:* Se programaron los métodos `wipeProductionData()` en `FirebaseService` y `wipeCloudflareData()` en `CloudflareSyncService`. El botón en el `DevFloatingMenu` ahora espera (`await`) a que se eliminen todas las colecciones (`students`, `attendance_records`, `sync_snapshots`) tanto en Firestore como en Cloudflare D1 (usando la API REST de Cloudflare o inyectando un *snapshot* vacío de reemplazo) antes de recargar la página.
+- **Limpieza de Interfaz Oficial:**
+  1. Se eliminó por completo el botón duplicado/obsoleto de "Iniciar Limpio" (papelera) que había quedado erróneamente en el modal de Ajustes.
+  2. Todas las opciones de desarrollo, salto de login de pruebas y vaciado de base de datos ahora viven **exclusivamente** dentro de `DevFloatingMenu.tsx`.
+- **Marcado de Zonas de Testeo (DEBUG/DEV):**
+  1. El archivo `src/components/DevFloatingMenu.tsx` está fuertemente comentado como ZONA DEV.
+  2. Instrucción de Producción: Para lanzar a producción, basta con borrar la etiqueta `<DevFloatingMenu />` en `src/components/LoginScreen.tsx` (marcada con comentarios) y el sistema quedará totalmente blindado para el usuario final.

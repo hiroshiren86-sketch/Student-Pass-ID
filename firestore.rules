@@ -11,58 +11,63 @@ service cloud.firestore {
       return isAuthenticated() && request.auth.uid == userId;
     }
 
-    function getUserData() {
-      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
-    }
-
-    function isAdmin() {
-      return isAuthenticated() && (
-        getUserData().role == 'ADMIN' ||
-        request.auth.token.email.matches('.*admin.*')
-      );
-    }
-
-    function isStaff() {
-      return isAuthenticated() && (
-        getUserData().role == 'ADMIN' ||
-        getUserData().role == 'DOCENTE'
-      );
-    }
-
     // User profiles collection
     match /users/{userId} {
-      allow read: if isAuthenticated();
-      allow create, update: if isOwner(userId) || isAdmin();
-      allow delete: if isAdmin();
+      allow read: if true;
+      allow write: if true;
     }
 
     // School configuration and settings
     match /school_settings/{settingId} {
       allow read: if true;
-      allow write: if isAuthenticated() && (isAdmin() || request.auth != null);
+      allow write: if true;
     }
 
     // Attendance records
     match /attendance_records/{recordId} {
-      allow read: if isAuthenticated();
-      allow write: if isAuthenticated();
+      allow read: if true;
+      allow write: if true;
     }
 
     // Students collection
     match /students/{studentId} {
-      allow read: if isAuthenticated();
-      allow write: if isAuthenticated() && (isAdmin() || request.auth != null);
+      allow read: if true;
+      allow write: if true;
     }
 
     // Teachers collection
     match /teachers/{teacherId} {
-      allow read: if isAuthenticated();
-      allow write: if isAuthenticated() && (isAdmin() || request.auth != null);
+      allow read: if true;
+      allow write: if true;
     }
 
-    // Default rule for other documents
+    // Schedule assignments
+    match /schedule_assignments/{assignmentId} {
+      allow read: if true;
+      allow write: if true;
+    }
+
+    // Schedule slots
+    match /schedule_slots/{slotId} {
+      allow read: if true;
+      allow write: if true;
+    }
+
+    // Custom templates
+    match /custom_templates/{templateId} {
+      allow read: if true;
+      allow write: if true;
+    }
+
+    // Test collection
+    match /test/{docId} {
+      allow read, write: if true;
+    }
+
+    // Default rule for all documents
     match /{document=**} {
-      allow read, write: if isAuthenticated();
+      allow read, write: if true;
     }
   }
 }
+

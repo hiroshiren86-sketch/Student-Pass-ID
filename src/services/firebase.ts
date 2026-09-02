@@ -14,7 +14,8 @@ import {
   initializeFirestore,
   collection, 
   doc, 
-  setDoc, 
+  setDoc,
+  deleteDoc, 
   getDoc, 
   getDocs, 
   query, 
@@ -295,7 +296,13 @@ export class FirebaseService {
 
       // 2. Students
       for (const st of data.students) {
-        await setDoc(doc(db, 'students', st.code), st, { merge: true });
+        // Strip large photoUrl to prevent Firestore 1MB document limit error
+        const stData = { ...st };
+        if (stData.photoUrl && stData.photoUrl.length > 700000) {
+          console.warn(`Student ${st.code} photoUrl exceeds size limit, stripping before sync.`);
+          delete stData.photoUrl;
+        }
+        await setDoc(doc(db, 'students', st.code), stData, { merge: true });
         count++;
       }
 
@@ -335,6 +342,27 @@ export class FirebaseService {
   /**
    * Save School Settings to Firestore (Cloud-backed persistence across devices and sessions)
    */
+  
+  static async wipeProductionData(): Promise<boolean> {
+    try {
+      const db = getFirebaseFirestore();
+      
+      // Delete all students
+      const studentsSnap = await getDocs(collection(db, 'students'));
+      const studentPromises = studentsSnap.docs.map(d => deleteDoc(d.ref));
+      
+      // Delete all attendance records
+      const recordsSnap = await getDocs(collection(db, 'attendance_records'));
+      const recordsPromises = recordsSnap.docs.map(d => deleteDoc(d.ref));
+      
+      await Promise.all([...studentPromises, ...recordsPromises]);
+      return true;
+    } catch (e) {
+      console.error('Firebase wipe failed:', e);
+      return false;
+    }
+  }
+
   static async saveSchoolSettings(settings: SchoolSettings): Promise<void> {
     try {
       const db = getFirebaseFirestore();

@@ -64,7 +64,7 @@ const SLOT_TYPE_CONFIG: Record<ScheduleSlotType, { label: string; icon: any; bg:
     icon: ArrowLeftRight,
     bg: 'bg-slate-100 dark:bg-slate-800/80',
     text: 'text-slate-600 dark:text-slate-300',
-    border: 'border-slate-300 dark:border-slate-700',
+    border: 'border-slate-300 dark:border-zinc-800',
     desc: '5-10 min para desplazamiento entre aulas'
   },
   BREAK: {
@@ -351,7 +351,7 @@ export const ScheduleBuilderView: React.FC = () => {
       )}
 
       {/* Header Banner */}
-      <div className="p-6 rounded-3xl bg-white/70 dark:bg-slate-900/70 border border-slate-200/80 dark:border-slate-800 backdrop-blur-xl shadow-sm flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
+      <div className="p-6 rounded-3xl bg-white/70 dark:bg-zinc-950/70 border border-slate-200/80 dark:border-zinc-800/50 backdrop-blur-xl shadow-sm flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
         <div>
           <div className="flex items-center gap-2 flex-wrap">
             <span className="text-[11px] font-bold px-2.5 py-0.5 rounded-full bg-indigo-50 dark:bg-indigo-950/60 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800 uppercase tracking-wider">
@@ -371,12 +371,12 @@ export const ScheduleBuilderView: React.FC = () => {
         </div>
 
         {/* Sub-view Switcher */}
-        <div className="flex items-center bg-slate-100 dark:bg-slate-800/80 p-1 rounded-2xl border border-slate-200 dark:border-slate-700 self-stretch md:self-auto overflow-x-auto">
+        <div className="flex items-center bg-slate-100 dark:bg-slate-800/80 p-1 rounded-2xl border border-slate-200 dark:border-zinc-800 self-stretch md:self-auto overflow-x-auto">
           <button
             onClick={() => setSubView('grid')}
             className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-1.5 shrink-0 ${
               subView === 'grid'
-                ? 'bg-white dark:bg-slate-900 text-indigo-600 dark:text-indigo-400 shadow-sm'
+                ? 'bg-white dark:bg-zinc-950 text-indigo-600 dark:text-indigo-400 shadow-sm'
                 : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
             }`}
           >
@@ -388,7 +388,7 @@ export const ScheduleBuilderView: React.FC = () => {
             onClick={() => setSubView('weekly-matrix')}
             className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-1.5 shrink-0 ${
               subView === 'weekly-matrix'
-                ? 'bg-white dark:bg-slate-900 text-indigo-600 dark:text-indigo-400 shadow-sm'
+                ? 'bg-white dark:bg-zinc-950 text-indigo-600 dark:text-indigo-400 shadow-sm'
                 : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
             }`}
           >
@@ -400,7 +400,7 @@ export const ScheduleBuilderView: React.FC = () => {
             onClick={() => setSubView('slots-editor')}
             className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-1.5 shrink-0 ${
               subView === 'slots-editor'
-                ? 'bg-white dark:bg-slate-900 text-indigo-600 dark:text-indigo-400 shadow-sm'
+                ? 'bg-white dark:bg-zinc-950 text-indigo-600 dark:text-indigo-400 shadow-sm'
                 : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
             }`}
           >
@@ -412,7 +412,7 @@ export const ScheduleBuilderView: React.FC = () => {
             onClick={() => setSubView('templates')}
             className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-1.5 shrink-0 ${
               subView === 'templates'
-                ? 'bg-white dark:bg-slate-900 text-indigo-600 dark:text-indigo-400 shadow-sm'
+                ? 'bg-white dark:bg-zinc-950 text-indigo-600 dark:text-indigo-400 shadow-sm'
                 : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
             }`}
           >
@@ -426,7 +426,7 @@ export const ScheduleBuilderView: React.FC = () => {
       {subView === 'grid' && (
         <div className="space-y-4">
           {/* Controls Bar: Grade Selector & Days Selector */}
-          <div className="p-4 rounded-3xl bg-white/70 dark:bg-slate-900/70 border border-slate-200/80 dark:border-slate-800 backdrop-blur-xl shadow-xs flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3">
+          <div className="p-4 rounded-3xl bg-white/70 dark:bg-zinc-950/70 border border-slate-200/80 dark:border-zinc-800/50 backdrop-blur-xl shadow-xs flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3">
             {/* Grade Selector & Stats */}
             <div className="flex items-center gap-3">
               <div className="flex items-center gap-2">
@@ -436,7 +436,7 @@ export const ScheduleBuilderView: React.FC = () => {
                 <select
                   value={selectedGrade}
                   onChange={(e) => setSelectedGrade(e.target.value)}
-                  className="px-3 py-1.5 bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl text-xs font-black text-indigo-600 dark:text-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                  className="px-3 py-1.5 bg-white dark:bg-black border border-slate-200 dark:border-zinc-800/50 rounded-xl text-xs font-black text-indigo-600 dark:text-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-500"
                 >
                   {grades.map(g => (
                     <option key={g} value={g}>Grado {g}</option>
@@ -486,7 +486,7 @@ export const ScheduleBuilderView: React.FC = () => {
                 return (
                   <div 
                     key={slot.id}
-                    className="p-2.5 rounded-2xl bg-slate-100/70 dark:bg-slate-900/40 border border-dashed border-slate-300 dark:border-slate-800 flex items-center justify-between text-xs text-slate-500 dark:text-slate-400"
+                    className="p-2.5 rounded-2xl bg-slate-100/70 dark:bg-zinc-950/40 border border-dashed border-slate-300 dark:border-zinc-800/50 flex items-center justify-between text-xs text-slate-500 dark:text-slate-400"
                   >
                     <div className="flex items-center gap-2 font-mono">
                       <ArrowLeftRight className="w-3.5 h-3.5 text-slate-400" />
@@ -505,7 +505,7 @@ export const ScheduleBuilderView: React.FC = () => {
                     className={`p-4 rounded-3xl border flex items-center justify-between ${cfg.bg} ${cfg.border} shadow-xs`}
                   >
                     <div className="flex items-center gap-3">
-                      <div className={`p-2.5 rounded-2xl bg-white dark:bg-slate-900 ${cfg.text} shadow-xs`}>
+                      <div className={`p-2.5 rounded-2xl bg-white dark:bg-zinc-950 ${cfg.text} shadow-xs`}>
                         <Icon className="w-5 h-5" />
                       </div>
                       <div>
@@ -513,7 +513,7 @@ export const ScheduleBuilderView: React.FC = () => {
                           <h4 className={`text-sm font-black ${cfg.text}`}>
                             {slot.name}
                           </h4>
-                          <span className="text-[10px] font-mono font-bold px-2 py-0.5 rounded-full bg-white dark:bg-slate-900 text-slate-600 dark:text-slate-300">
+                          <span className="text-[10px] font-mono font-bold px-2 py-0.5 rounded-full bg-white dark:bg-zinc-950 text-slate-600 dark:text-slate-300">
                             {slot.startTime} - {slot.endTime} ({slot.durationMinutes} min)
                           </span>
                         </div>
@@ -538,8 +538,8 @@ export const ScheduleBuilderView: React.FC = () => {
                     assign 
                       ? assign.isDoubleBlock 
                         ? 'bg-gradient-to-r from-indigo-50/70 via-white to-amber-50/40 dark:from-indigo-950/40 dark:via-slate-900 dark:to-amber-950/20 border-amber-300/80 dark:border-amber-700/60 hover:shadow-md'
-                        : 'bg-white/80 dark:bg-slate-900/80 border-slate-200/80 dark:border-slate-800 hover:border-indigo-400 dark:hover:border-indigo-600 hover:shadow-md' 
-                      : 'bg-slate-50/50 dark:bg-slate-950/40 border-dashed border-slate-300 dark:border-slate-800 hover:bg-indigo-50/30'
+                        : 'bg-white/80 dark:bg-zinc-950/80 border-slate-200/80 dark:border-zinc-800/50 hover:border-indigo-400 dark:hover:border-indigo-600 hover:shadow-md' 
+                      : 'bg-slate-50/50 dark:bg-black/40 border-dashed border-slate-300 dark:border-zinc-800/50 hover:bg-indigo-50/30'
                   }`}
                 >
                   <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
@@ -612,8 +612,8 @@ export const ScheduleBuilderView: React.FC = () => {
 
       {/* VIEW 2: FULL 5-DAY WEEKLY MATRIX */}
       {subView === 'weekly-matrix' && (
-        <div className="p-6 rounded-3xl bg-white/70 dark:bg-slate-900/70 border border-slate-200/80 dark:border-slate-800 backdrop-blur-xl shadow-sm space-y-4">
-          <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 pb-3 border-b border-slate-100 dark:border-slate-800">
+        <div className="p-6 rounded-3xl bg-white/70 dark:bg-zinc-950/70 border border-slate-200/80 dark:border-zinc-800/50 backdrop-blur-xl shadow-sm space-y-4">
+          <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 pb-3 border-b border-slate-100 dark:border-zinc-800/50">
             <div>
               <h3 className="text-base font-black text-slate-900 dark:text-white">
                 Horario Semanal Completo — Grado {selectedGrade}
@@ -628,7 +628,7 @@ export const ScheduleBuilderView: React.FC = () => {
               <select
                 value={selectedGrade}
                 onChange={(e) => setSelectedGrade(e.target.value)}
-                className="px-3 py-1.5 bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl text-xs font-black text-indigo-600 dark:text-indigo-400"
+                className="px-3 py-1.5 bg-white dark:bg-black border border-slate-200 dark:border-zinc-800/50 rounded-xl text-xs font-black text-indigo-600 dark:text-indigo-400"
               >
                 {grades.map(g => (
                   <option key={g} value={g}>Grado {g}</option>
@@ -640,7 +640,7 @@ export const ScheduleBuilderView: React.FC = () => {
           <div className="overflow-x-auto">
             <table className="w-full text-left border-collapse min-w-[700px]">
               <thead>
-                <tr className="border-b border-slate-200 dark:border-slate-800 text-[11px] uppercase tracking-wider text-slate-400">
+                <tr className="border-b border-slate-200 dark:border-zinc-800/50 text-[11px] uppercase tracking-wider text-slate-400">
                   <th className="py-2.5 px-3 font-bold">Bloque / Hora</th>
                   {DAYS_OF_WEEK.slice(0, 5).map(d => (
                     <th key={d.id} className="py-2.5 px-3 font-black text-slate-900 dark:text-white">
@@ -655,7 +655,7 @@ export const ScheduleBuilderView: React.FC = () => {
 
                   if (slot.type === 'TRANSITION') {
                     return (
-                      <tr key={slot.id} className="bg-slate-50/60 dark:bg-slate-950/40 text-[10px] text-slate-400">
+                      <tr key={slot.id} className="bg-slate-50/60 dark:bg-black/40 text-[10px] text-slate-400 hover:bg-slate-100 dark:hover:bg-zinc-900/50 transition-colors group border-b border-slate-100 dark:border-zinc-800/50 last:border-0 hover:shadow-sm">
                         <td className="py-1.5 px-3 font-mono font-bold">{slot.startTime}</td>
                         <td colSpan={5} className="py-1.5 px-3 italic">
                           🚶 {slot.name} ({slot.durationMinutes} min)
@@ -676,7 +676,7 @@ export const ScheduleBuilderView: React.FC = () => {
                   }
 
                   return (
-                    <tr key={slot.id} className="hover:bg-slate-50/40 dark:hover:bg-slate-800/40">
+                    <tr key={slot.id} className="hover:bg-slate-100 dark:hover:bg-zinc-900/50 transition-colors group border-b border-slate-100 dark:border-zinc-800/50 last:border-0 hover:shadow-sm">
                       <td className="py-2.5 px-3 font-mono text-[11px] font-bold text-slate-500">
                         <div>{slot.name.split(' ')[0]}</div>
                         <div className="text-[10px] text-slate-400">{slot.startTime}</div>
@@ -710,7 +710,7 @@ export const ScheduleBuilderView: React.FC = () => {
                                 </div>
                               </div>
                             ) : (
-                              <div className="p-2 rounded-xl border border-dashed border-slate-200 dark:border-slate-800 text-[10px] text-slate-400 text-center hover:border-indigo-400">
+                              <div className="p-2 rounded-xl border border-dashed border-slate-200 dark:border-zinc-800/50 text-[10px] text-slate-400 text-center hover:border-indigo-400">
                                 + Asignar
                               </div>
                             )}
@@ -730,7 +730,7 @@ export const ScheduleBuilderView: React.FC = () => {
       {subView === 'slots-editor' && (
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
           {/* Left / Top: Form to add or edit slot */}
-          <div className="p-6 rounded-3xl bg-white/70 dark:bg-slate-900/70 border border-slate-200/80 dark:border-slate-800 backdrop-blur-xl shadow-sm space-y-4 lg:col-span-1">
+          <div className="p-6 rounded-3xl bg-white/70 dark:bg-zinc-950/70 border border-slate-200/80 dark:border-zinc-800/50 backdrop-blur-xl shadow-sm space-y-4 lg:col-span-1">
             <div>
               <h3 className="text-base font-black text-slate-900 dark:text-white">
                 {editingSlotId ? 'Editar Bloque de Horario' : 'Crear Nuevo Bloque'}
@@ -750,7 +750,7 @@ export const ScheduleBuilderView: React.FC = () => {
                   placeholder="Ej: 1ª Hora, Cambio de Salón, Recreo..."
                   value={newSlotName}
                   onChange={(e) => setNewSlotName(e.target.value)}
-                  className="w-full px-3 py-2 bg-white dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-xl text-xs text-slate-900 dark:text-white outline-none focus:border-indigo-500 font-semibold"
+                  className="w-full px-3 py-2 bg-white dark:bg-black border border-slate-300 dark:border-zinc-800 rounded-xl text-xs text-slate-900 dark:text-white outline-none focus:border-indigo-500 font-semibold"
                   required
                 />
               </div>
@@ -762,7 +762,7 @@ export const ScheduleBuilderView: React.FC = () => {
                 <select
                   value={newSlotType}
                   onChange={(e) => setNewSlotType(e.target.value as ScheduleSlotType)}
-                  className="w-full px-3 py-2 bg-white dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-xl text-xs text-slate-900 dark:text-white outline-none focus:border-indigo-500 font-semibold"
+                  className="w-full px-3 py-2 bg-white dark:bg-black border border-slate-300 dark:border-zinc-800 rounded-xl text-xs text-slate-900 dark:text-white outline-none focus:border-indigo-500 font-semibold"
                 >
                   <option value="CLASS">📚 Clase / Cátedra Pedagógica</option>
                   <option value="TRANSITION">🚶 Cambio de Salón / Aula (5-10 min)</option>
@@ -780,7 +780,7 @@ export const ScheduleBuilderView: React.FC = () => {
                     type="time"
                     value={newSlotStart}
                     onChange={(e) => setNewSlotStart(e.target.value)}
-                    className="w-full px-3 py-2 bg-white dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-xl text-xs font-mono text-slate-900 dark:text-white outline-none"
+                    className="w-full px-3 py-2 bg-white dark:bg-black border border-slate-300 dark:border-zinc-800 rounded-xl text-xs font-mono text-slate-900 dark:text-white outline-none"
                     required
                   />
                 </div>
@@ -792,7 +792,7 @@ export const ScheduleBuilderView: React.FC = () => {
                     type="time"
                     value={newSlotEnd}
                     onChange={(e) => setNewSlotEnd(e.target.value)}
-                    className="w-full px-3 py-2 bg-white dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-xl text-xs font-mono text-slate-900 dark:text-white outline-none"
+                    className="w-full px-3 py-2 bg-white dark:bg-black border border-slate-300 dark:border-zinc-800 rounded-xl text-xs font-mono text-slate-900 dark:text-white outline-none"
                     required
                   />
                 </div>
@@ -813,7 +813,7 @@ export const ScheduleBuilderView: React.FC = () => {
                 )}
                 <button
                   type="submit"
-                  className="flex-1 py-2.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-xs font-bold shadow-md shadow-indigo-600/20 flex items-center justify-center gap-1.5 transition-all"
+                  className="flex-1 py-2.5 bg-indigo-600 dark:bg-white hover:bg-indigo-500 dark:hover:bg-zinc-200 text-white dark:text-black rounded-xl text-xs font-bold shadow-md shadow-indigo-600/20 flex items-center justify-center gap-1.5 transition-all"
                 >
                   <Save className="w-3.5 h-3.5" />
                   <span>{editingSlotId ? 'Guardar Cambios' : 'Agregar Bloque'}</span>
@@ -823,8 +823,8 @@ export const ScheduleBuilderView: React.FC = () => {
           </div>
 
           {/* Right: Current Schedule Structure Timeline */}
-          <div className="p-6 rounded-3xl bg-white/70 dark:bg-slate-900/70 border border-slate-200/80 dark:border-slate-800 backdrop-blur-xl shadow-sm space-y-3 lg:col-span-2">
-            <div className="flex items-center justify-between pb-2 border-b border-slate-100 dark:border-slate-800">
+          <div className="p-6 rounded-3xl bg-white/70 dark:bg-zinc-950/70 border border-slate-200/80 dark:border-zinc-800/50 backdrop-blur-xl shadow-sm space-y-3 lg:col-span-2">
+            <div className="flex items-center justify-between pb-2 border-b border-slate-100 dark:border-zinc-800/50">
               <h3 className="text-sm font-black text-slate-900 dark:text-white">
                 Estructura de la Jornada Escolar ({slots.length} Bloques)
               </h3>
@@ -844,7 +844,7 @@ export const ScheduleBuilderView: React.FC = () => {
                     className={`p-3 rounded-2xl border flex items-center justify-between gap-3 ${cfg.bg} ${cfg.border}`}
                   >
                     <div className="flex items-center gap-3">
-                      <div className={`p-2 rounded-xl bg-white dark:bg-slate-900 ${cfg.text}`}>
+                      <div className={`p-2 rounded-xl bg-white dark:bg-zinc-950 ${cfg.text}`}>
                         <Icon className="w-4 h-4" />
                       </div>
                       <div>
@@ -852,7 +852,7 @@ export const ScheduleBuilderView: React.FC = () => {
                           <span className="text-xs font-black text-slate-900 dark:text-white">
                             {slot.order}. {slot.name}
                           </span>
-                          <span className="text-[10px] font-mono font-bold px-1.5 py-0.5 rounded bg-white dark:bg-slate-900 text-slate-600 dark:text-slate-300">
+                          <span className="text-[10px] font-mono font-bold px-1.5 py-0.5 rounded bg-white dark:bg-zinc-950 text-slate-600 dark:text-slate-300">
                             {slot.startTime} - {slot.endTime} ({slot.durationMinutes} min)
                           </span>
                         </div>
@@ -865,14 +865,14 @@ export const ScheduleBuilderView: React.FC = () => {
                     <div className="flex items-center gap-1.5">
                       <button
                         onClick={() => handleStartEditSlot(slot)}
-                        className="p-1.5 rounded-lg bg-white dark:bg-slate-900 text-slate-600 dark:text-slate-300 hover:text-indigo-600 transition-colors"
+                        className="p-1.5 rounded-lg bg-white dark:bg-zinc-950 text-slate-600 dark:text-slate-300 hover:text-indigo-600 transition-colors"
                         title="Editar bloque"
                       >
                         <Edit3 className="w-3.5 h-3.5" />
                       </button>
                       <button
                         onClick={() => handleDeleteSlot(slot.id)}
-                        className="p-1.5 rounded-lg bg-white dark:bg-slate-900 text-rose-500 hover:text-rose-700 transition-colors"
+                        className="p-1.5 rounded-lg bg-white dark:bg-zinc-950 text-rose-500 hover:text-rose-700 transition-colors"
                         title="Eliminar bloque"
                       >
                         <Trash2 className="w-3.5 h-3.5" />
@@ -889,8 +889,8 @@ export const ScheduleBuilderView: React.FC = () => {
       {/* ASSIGNMENT MODAL (WITH DOUBLE BLOCK SUPPORT & TEACHER CONFLICT ALERTS) */}
       {editingSlot && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-md animate-fadeIn">
-          <div className="p-6 rounded-3xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-2xl max-w-md w-full space-y-5">
-            <div className="flex items-center justify-between border-b border-slate-100 dark:border-slate-800 pb-3">
+          <div className="p-6 rounded-3xl bg-white dark:bg-zinc-950 border border-slate-200 dark:border-zinc-800/50 shadow-2xl max-w-md w-full space-y-5">
+            <div className="flex items-center justify-between border-b border-slate-100 dark:border-zinc-800/50 pb-3">
               <div>
                 <span className="text-[10px] font-bold uppercase tracking-wider text-indigo-600 dark:text-indigo-400">
                   {DAYS_OF_WEEK.find(d => d.id === selectedDay)?.name} • Grado {selectedGrade}
@@ -932,7 +932,7 @@ export const ScheduleBuilderView: React.FC = () => {
                 <select
                   value={assignedSubject}
                   onChange={(e) => setAssignedSubject(e.target.value)}
-                  className="w-full px-3 py-2 bg-white dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-xl text-xs font-bold text-slate-900 dark:text-white focus:ring-2 focus:ring-indigo-500 outline-none"
+                  className="w-full px-3 py-2 bg-white dark:bg-black border border-slate-300 dark:border-zinc-800 rounded-xl text-xs font-bold text-slate-900 dark:text-white focus:ring-2 focus:ring-indigo-500 outline-none"
                 >
                   <option value="Matemáticas">Matemáticas</option>
                   <option value="Física">Física</option>
@@ -958,7 +958,7 @@ export const ScheduleBuilderView: React.FC = () => {
                 <select
                   value={assignedTeacherId}
                   onChange={(e) => setAssignedTeacherId(e.target.value)}
-                  className="w-full px-3 py-2 bg-white dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-xl text-xs font-bold text-slate-900 dark:text-white focus:ring-2 focus:ring-indigo-500 outline-none"
+                  className="w-full px-3 py-2 bg-white dark:bg-black border border-slate-300 dark:border-zinc-800 rounded-xl text-xs font-bold text-slate-900 dark:text-white focus:ring-2 focus:ring-indigo-500 outline-none"
                 >
                   <option value="">-- Seleccionar Docente --</option>
                   {teachers.map((t) => (
@@ -979,7 +979,7 @@ export const ScheduleBuilderView: React.FC = () => {
                   placeholder="Ej: Aula 204, Laboratorio de Ciencias..."
                   value={assignedClassroom}
                   onChange={(e) => setAssignedClassroom(e.target.value)}
-                  className="w-full px-3 py-2 bg-white dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-xl text-xs font-medium text-slate-900 dark:text-white focus:ring-2 focus:ring-indigo-500 outline-none"
+                  className="w-full px-3 py-2 bg-white dark:bg-black border border-slate-300 dark:border-zinc-800 rounded-xl text-xs font-medium text-slate-900 dark:text-white focus:ring-2 focus:ring-indigo-500 outline-none"
                 />
               </div>
 
@@ -1007,7 +1007,7 @@ export const ScheduleBuilderView: React.FC = () => {
               )}
             </div>
 
-            <div className="pt-3 border-t border-slate-100 dark:border-slate-800 flex items-center justify-between gap-2">
+            <div className="pt-3 border-t border-slate-100 dark:border-zinc-800/50 flex items-center justify-between gap-2">
               <button
                 type="button"
                 onClick={() => handleRemoveAssignment(editingSlot.id)}
@@ -1041,7 +1041,7 @@ export const ScheduleBuilderView: React.FC = () => {
       {subView === 'templates' && (
         <div className="space-y-4">
           {/* Política de Horarios (F2): interruptor maestro de Rectoría */}
-          <div className="p-4 rounded-3xl bg-white/70 dark:bg-slate-900/70 border border-slate-200/80 dark:border-slate-800 backdrop-blur-xl shadow-xs flex items-center justify-between gap-4">
+          <div className="p-4 rounded-3xl bg-white/70 dark:bg-zinc-950/70 border border-slate-200/80 dark:border-zinc-800/50 backdrop-blur-xl shadow-xs flex items-center justify-between gap-4">
             <div className="flex items-start gap-3">
               <div className="p-2 rounded-xl bg-purple-100 dark:bg-purple-950/60 text-purple-600 dark:text-purple-300">
                 <Power className="w-4 h-4" />
@@ -1070,7 +1070,7 @@ export const ScheduleBuilderView: React.FC = () => {
           </div>
 
           {/* Lista de plantillas + editor */}
-          <div className="p-4 rounded-3xl bg-white/70 dark:bg-slate-900/70 border border-slate-200/80 dark:border-slate-800 backdrop-blur-xl shadow-xs space-y-3">
+          <div className="p-4 rounded-3xl bg-white/70 dark:bg-zinc-950/70 border border-slate-200/80 dark:border-zinc-800/50 backdrop-blur-xl shadow-xs space-y-3">
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-2">
                 <Layers className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />
@@ -1104,7 +1104,7 @@ export const ScheduleBuilderView: React.FC = () => {
                 const isActive = AttendanceStorageService.getActiveDayTemplate().id === tpl.id;
                 const isCustom = tpl.type === 'CUSTOM';
                 return (
-                  <div key={tpl.id} className={`p-3 rounded-2xl border ${isActive ? 'border-indigo-400 dark:border-indigo-600 ring-1 ring-indigo-300 dark:ring-indigo-800' : 'border-slate-200 dark:border-slate-800'} bg-white dark:bg-slate-950 space-y-2`}>
+                  <div key={tpl.id} className={`p-3 rounded-2xl border ${isActive ? 'border-indigo-400 dark:border-indigo-600 ring-1 ring-indigo-300 dark:ring-indigo-800' : 'border-slate-200 dark:border-zinc-800/50'} bg-white dark:bg-black space-y-2`}>
                     <div className="flex items-start justify-between gap-2">
                       <div>
                         <div className="flex items-center gap-1.5">
@@ -1174,55 +1174,55 @@ export const ScheduleBuilderView: React.FC = () => {
                   <div>
                     <label className="text-[10px] font-bold text-slate-600 dark:text-slate-300 uppercase">Nombre</label>
                     <input type="text" value={editingTemplate.name} onChange={e => setEditingTemplate({ ...editingTemplate, name: e.target.value })}
-                      className="w-full mt-1 px-2.5 py-1.5 rounded-xl bg-white dark:bg-slate-950 border border-slate-300 dark:border-slate-700 text-xs font-bold text-slate-900 dark:text-white outline-none focus:ring-2 focus:ring-indigo-500" />
+                      className="w-full mt-1 px-2.5 py-1.5 rounded-xl bg-white dark:bg-black border border-slate-300 dark:border-zinc-800 text-xs font-bold text-slate-900 dark:text-white outline-none focus:ring-2 focus:ring-indigo-500" />
                   </div>
                   <div>
                     <label className="text-[10px] font-bold text-slate-600 dark:text-slate-300 uppercase">Etiqueta (badge)</label>
                     <input type="text" value={editingTemplate.badge} onChange={e => setEditingTemplate({ ...editingTemplate, badge: e.target.value })}
-                      className="w-full mt-1 px-2.5 py-1.5 rounded-xl bg-white dark:bg-slate-950 border border-slate-300 dark:border-slate-700 text-xs font-bold text-slate-900 dark:text-white outline-none focus:ring-2 focus:ring-indigo-500" />
+                      className="w-full mt-1 px-2.5 py-1.5 rounded-xl bg-white dark:bg-black border border-slate-300 dark:border-zinc-800 text-xs font-bold text-slate-900 dark:text-white outline-none focus:ring-2 focus:ring-indigo-500" />
                   </div>
                   <div className="md:col-span-2">
                     <label className="text-[10px] font-bold text-slate-600 dark:text-slate-300 uppercase">Descripción</label>
                     <input type="text" value={editingTemplate.description} onChange={e => setEditingTemplate({ ...editingTemplate, description: e.target.value })}
-                      className="w-full mt-1 px-2.5 py-1.5 rounded-xl bg-white dark:bg-slate-950 border border-slate-300 dark:border-slate-700 text-xs text-slate-900 dark:text-white outline-none focus:ring-2 focus:ring-indigo-500" />
+                      className="w-full mt-1 px-2.5 py-1.5 rounded-xl bg-white dark:bg-black border border-slate-300 dark:border-zinc-800 text-xs text-slate-900 dark:text-white outline-none focus:ring-2 focus:ring-indigo-500" />
                   </div>
                   <div className="grid grid-cols-2 md:grid-cols-4 gap-2 md:col-span-2">
                     <div>
                       <label className="text-[10px] font-bold text-slate-600 dark:text-slate-300 uppercase">Inicio jornada</label>
                       <input type="time" value={editingTemplate.dayStartTime || ''} onChange={e => setEditingTemplate({ ...editingTemplate, dayStartTime: e.target.value || undefined })}
-                        className="w-full mt-1 px-2 py-1.5 rounded-xl bg-white dark:bg-slate-950 border border-slate-300 dark:border-slate-700 text-xs font-mono text-slate-900 dark:text-white outline-none focus:ring-2 focus:ring-indigo-500" />
+                        className="w-full mt-1 px-2 py-1.5 rounded-xl bg-white dark:bg-black border border-slate-300 dark:border-zinc-800 text-xs font-mono text-slate-900 dark:text-white outline-none focus:ring-2 focus:ring-indigo-500" />
                       <span className="text-[9px] text-slate-400 block">Vacío = usa el inicio de bloques</span>
                     </div>
                     <div>
                       <label className="text-[10px] font-bold text-slate-600 dark:text-slate-300 uppercase">Fin jornada</label>
                       <input type="time" value={editingTemplate.dayEndTime || ''} onChange={e => setEditingTemplate({ ...editingTemplate, dayEndTime: e.target.value || undefined })}
-                        className="w-full mt-1 px-2 py-1.5 rounded-xl bg-white dark:bg-slate-950 border border-slate-300 dark:border-slate-700 text-xs font-mono text-slate-900 dark:text-white outline-none focus:ring-2 focus:ring-indigo-500" />
+                        className="w-full mt-1 px-2 py-1.5 rounded-xl bg-white dark:bg-black border border-slate-300 dark:border-zinc-800 text-xs font-mono text-slate-900 dark:text-white outline-none focus:ring-2 focus:ring-indigo-500" />
                       <span className="text-[9px] text-slate-400 block">Tras esta hora: jornada cerrada</span>
                     </div>
                     <div>
                       <label className="text-[10px] font-bold text-slate-600 dark:text-slate-300 uppercase">Inicio 1er bloque</label>
                       <input type="time" value={editingTemplate.baseStartTime} onChange={e => setEditingTemplate({ ...editingTemplate, baseStartTime: e.target.value })}
-                        className="w-full mt-1 px-2 py-1.5 rounded-xl bg-white dark:bg-slate-950 border border-slate-300 dark:border-slate-700 text-xs font-mono text-slate-900 dark:text-white outline-none focus:ring-2 focus:ring-indigo-500" />
+                        className="w-full mt-1 px-2 py-1.5 rounded-xl bg-white dark:bg-black border border-slate-300 dark:border-zinc-800 text-xs font-mono text-slate-900 dark:text-white outline-none focus:ring-2 focus:ring-indigo-500" />
                     </div>
                     <div>
                       <label className="text-[10px] font-bold text-slate-600 dark:text-slate-300 uppercase">Recreo (min)</label>
                       <input type="number" min={0} max={120} value={editingTemplate.recessDurationMinutes} onChange={e => setEditingTemplate({ ...editingTemplate, recessDurationMinutes: Math.max(0, Number(e.target.value) || 0) })}
-                        className="w-full mt-1 px-2 py-1.5 rounded-xl bg-white dark:bg-slate-950 border border-slate-300 dark:border-slate-700 text-xs font-mono text-slate-900 dark:text-white outline-none focus:ring-2 focus:ring-indigo-500" />
+                        className="w-full mt-1 px-2 py-1.5 rounded-xl bg-white dark:bg-black border border-slate-300 dark:border-zinc-800 text-xs font-mono text-slate-900 dark:text-white outline-none focus:ring-2 focus:ring-indigo-500" />
                     </div>
                     <div>
                       <label className="text-[10px] font-bold text-slate-600 dark:text-slate-300 uppercase">Duración bloque (min)</label>
                       <input type="number" min={5} max={120} value={editingTemplate.blockDurationMinutes} onChange={e => setEditingTemplate({ ...editingTemplate, blockDurationMinutes: Math.max(5, Number(e.target.value) || 55) })}
-                        className="w-full mt-1 px-2 py-1.5 rounded-xl bg-white dark:bg-slate-950 border border-slate-300 dark:border-slate-700 text-xs font-mono text-slate-900 dark:text-white outline-none focus:ring-2 focus:ring-indigo-500" />
+                        className="w-full mt-1 px-2 py-1.5 rounded-xl bg-white dark:bg-black border border-slate-300 dark:border-zinc-800 text-xs font-mono text-slate-900 dark:text-white outline-none focus:ring-2 focus:ring-indigo-500" />
                     </div>
                     <div>
                       <label className="text-[10px] font-bold text-slate-600 dark:text-slate-300 uppercase">Total bloques</label>
                       <input type="number" min={1} max={12} value={editingTemplate.totalBlocks} onChange={e => setEditingTemplate({ ...editingTemplate, totalBlocks: Math.max(1, Number(e.target.value) || 6) })}
-                        className="w-full mt-1 px-2 py-1.5 rounded-xl bg-white dark:bg-slate-950 border border-slate-300 dark:border-slate-700 text-xs font-mono text-slate-900 dark:text-white outline-none focus:ring-2 focus:ring-indigo-500" />
+                        className="w-full mt-1 px-2 py-1.5 rounded-xl bg-white dark:bg-black border border-slate-300 dark:border-zinc-800 text-xs font-mono text-slate-900 dark:text-white outline-none focus:ring-2 focus:ring-indigo-500" />
                     </div>
                     <div>
                       <label className="text-[10px] font-bold text-slate-600 dark:text-slate-300 uppercase">1er bloque especial</label>
                       <select value={editingTemplate.firstBlockSpecial || 'NORMAL'} onChange={e => setEditingTemplate({ ...editingTemplate, firstBlockSpecial: (e.target.value as DayTemplateConfig['firstBlockSpecial']) || undefined })}
-                        className="w-full mt-1 px-2 py-1.5 rounded-xl bg-white dark:bg-slate-950 border border-slate-300 dark:border-slate-700 text-xs font-bold text-slate-900 dark:text-white outline-none focus:ring-2 focus:ring-indigo-500">
+                        className="w-full mt-1 px-2 py-1.5 rounded-xl bg-white dark:bg-black border border-slate-300 dark:border-zinc-800 text-xs font-bold text-slate-900 dark:text-white outline-none focus:ring-2 focus:ring-indigo-500">
                         <option value="NORMAL">Ninguno</option>
                         <option value="ACTO_CIVICO">Acto Cívico (no computable)</option>
                         <option value="ASESORIA_GRUPO">Asesoría de Grupo</option>

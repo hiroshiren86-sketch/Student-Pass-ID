@@ -125,7 +125,7 @@ export const GradeAiSummaryView: React.FC = () => {
 
         {/* Grade & Timeframe Selectors */}
         <div className="flex flex-wrap items-center gap-2">
-          <div className="flex items-center bg-white/80 dark:bg-slate-950/80 border border-slate-200 dark:border-slate-800 rounded-2xl p-1 shadow-xs">
+          <div className="flex items-center bg-white/80 dark:bg-black/80 border border-slate-200 dark:border-zinc-800/50 rounded-2xl p-1 shadow-xs">
             <span className="text-xs font-bold px-2.5 text-slate-500">Curso:</span>
             <select
               value={selectedGrade}
@@ -143,7 +143,7 @@ export const GradeAiSummaryView: React.FC = () => {
           <select
             value={timeframe}
             onChange={(e) => setTimeframe(e.target.value)}
-            className="px-3 py-2 bg-white/80 dark:bg-slate-950/80 border border-slate-200 dark:border-slate-800 rounded-2xl text-xs font-bold text-slate-700 dark:text-slate-200"
+            className="px-3 py-2 bg-white/80 dark:bg-black/80 border border-slate-200 dark:border-zinc-800/50 rounded-2xl text-xs font-bold text-slate-700 dark:text-slate-200"
           >
             <option value="recent">Últimas Semanas</option>
             <option value="month">Mes Actual</option>
@@ -177,7 +177,7 @@ export const GradeAiSummaryView: React.FC = () => {
                 fetchGradeSummary(prompt);
               }}
               disabled={loading}
-              className="px-3 py-1.5 bg-slate-100/80 dark:bg-slate-900/80 hover:bg-indigo-50 dark:hover:bg-indigo-950/40 border border-slate-200 dark:border-slate-800 hover:border-indigo-300 dark:hover:border-indigo-800 rounded-xl text-xs font-medium text-slate-700 dark:text-slate-300 transition-all text-left flex items-center gap-1.5"
+              className="px-3 py-1.5 bg-slate-100/80 dark:bg-zinc-950/80 hover:bg-indigo-50 dark:hover:bg-indigo-950/40 border border-slate-200 dark:border-zinc-800/50 hover:border-indigo-300 dark:hover:border-indigo-800 rounded-xl text-xs font-medium text-slate-700 dark:text-slate-300 transition-all text-left flex items-center gap-1.5"
             >
               <span>{prompt}</span>
               <ArrowUpRight className="w-3 h-3 text-slate-400" />
@@ -197,7 +197,7 @@ export const GradeAiSummaryView: React.FC = () => {
             value={customQuestion}
             onChange={(e) => setCustomQuestion(e.target.value)}
             placeholder={`Escribe una pregunta para el Grado ${selectedGrade} (ej: ¿Cuántas inasistencias tuvo Juan David este mes?)...`}
-            className="flex-1 px-4 py-2.5 bg-white/90 dark:bg-slate-950/90 border border-slate-200 dark:border-slate-800 rounded-2xl text-xs text-slate-900 dark:text-white"
+            className="flex-1 px-4 py-2.5 bg-white/90 dark:bg-black/90 border border-slate-200 dark:border-zinc-800/50 rounded-2xl text-xs text-slate-900 dark:text-white"
           />
           <button
             type="submit"
@@ -385,7 +385,7 @@ export const GradeAiSummaryView: React.FC = () => {
                 ]).map((insight, idx) => (
                   <div 
                     key={idx} 
-                    className="p-3 bg-slate-50 dark:bg-slate-900/60 rounded-2xl border border-slate-200/70 dark:border-slate-800 text-xs flex items-start gap-2.5"
+                    className="p-3 bg-slate-50 dark:bg-zinc-950/60 rounded-2xl border border-slate-200/70 dark:border-zinc-800/50 text-xs flex items-start gap-2.5"
                   >
                     <span className="w-5 h-5 rounded-full bg-indigo-100 dark:bg-indigo-950 text-indigo-700 dark:text-indigo-300 font-bold text-[10px] flex items-center justify-center shrink-0 mt-0.5">
                       {idx + 1}
@@ -417,7 +417,7 @@ export const GradeAiSummaryView: React.FC = () => {
               <div className="overflow-x-auto">
                 <table className="w-full text-left text-xs">
                   <thead>
-                    <tr className="border-b border-slate-100 dark:border-slate-800 text-slate-400 font-bold uppercase">
+                    <tr className="border-b border-slate-100 dark:border-zinc-800/50 text-slate-400 font-bold uppercase">
                       <th className="py-2.5 px-3">Estudiante</th>
                       <th className="py-2.5 px-3">Código</th>
                       <th className="py-2.5 px-3 text-center">Faltas Acumuladas</th>
@@ -426,7 +426,7 @@ export const GradeAiSummaryView: React.FC = () => {
                   </thead>
                   <tbody className="divide-y divide-slate-100 dark:divide-slate-800/60">
                     {result.frequentAbsentees.map((abs, i) => (
-                      <tr key={i} className="hover:bg-slate-50/50 dark:hover:bg-slate-950/40">
+                      <tr key={i} className="hover:bg-slate-100 dark:hover:bg-zinc-900/50 transition-colors group border-b border-slate-100 dark:border-zinc-800/50 last:border-0 hover:shadow-sm">
                         <td className="py-2.5 px-3 font-bold text-slate-900 dark:text-white">
                           {abs?.name || 'Estudiante'}
                         </td>
