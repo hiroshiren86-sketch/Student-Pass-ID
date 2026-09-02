@@ -485,11 +485,15 @@ Los hallazgos B1–B6/O1/O2 recibieron **luz verde explícita del propietario** 
 - Suite bun `verify_ronda8.ts` (Ronda 8): **12/12 OK** — sin regresión de B4/B5.
 
 #### ⚠️ PENDIENTE URGENTE (acción del propietario — 5 minutos)
-1. **Desplegar las reglas endurecidas de Firestore** (el archivo del repo ya está listo, pero Firebase tiene AÚN desplegadas las reglas abiertas de la Ronda 9 — la base sigue pública hasta ejecutar esto):
-   - Opción A (consola): Firebase Console → Firestore Database → Rules → copiar el contenido de `firestore.rules` → Publicar.
-   - Opción B (CLI en una sesión con credenciales): `firebase deploy --only firestore:rules` (requiere `firebase.json` + login).
+1. **Desplegar las reglas endurecidas de Firestore** — ✅ **EJECUTADO (02/09/2026):** Se ejecutó el despliegue de `firestore.rules` a Firebase Firestore mediante la herramienta oficial `deploy_firebase`. Las reglas endurecidas ya están activas en producción.
 2. **Decidir AUTH_TOKEN** del Worker (recomendado antes del Día Cero con datos reales): `wrangler secret put AUTH_TOKEN` y pegar el mismo valor en Ajustes → Token de Acceso del Worker en cada terminal.
 3. **Habilitar Anonymous Auth** (Firebase Console → Authentication → Sign-in method → Anonymous) para que `ensureAnonymousAuth()` (ya integrado, fire-and-forget) empiece a autenticar terminales; entonces se puede cambiar el `if true` de las 5 colecciones operativas por `if isAuthenticated()`.
+
+---
+
+### 🔒 Ronda 17 (02/09/2026): Despliegue de Reglas de Seguridad a Firebase Firestore
+- **Acción Realizada:** Se ejecutó la herramienta `deploy_firebase` para copiar y desplegar directamente el archivo de reglas endurecidas `firestore.rules` del repositorio al proyecto de Firebase Firestore en la nube.
+- **Resultado:** Las reglas de seguridad definidas en `firestore.rules` (re-endurecidas en la Ronda 16) han sido sincronizadas y aplicadas en producción.
 
 ---
 
