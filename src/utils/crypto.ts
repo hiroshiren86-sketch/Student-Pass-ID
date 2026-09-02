@@ -122,6 +122,89 @@ export async function parseAndVerifyScan(rawInput: string, secret: string = DEFA
   };
 }
 
+// ====================================================================
+// Ronda 19 — QR DE CLASE (protocolo CLASE:v1)
+// Espejo del carné IEDSJ:v1: el contexto de la clase lo aporta el medio
+// físico (QR firmado en la pizarra), no la inferencia temporal.
+// Formato canónico: "CLASE:v1:<grade>:<slotId>:<dayOfWeek>:<expMs>:<sig16>"
+// ====================================================================
+
+export interface ParsedClassQrResult {
+  isClassToken: boolean;      // empieza por CLASE:v1: (el llamador debe rutear aquí ANTES de parseAndVerifyScan)
+  isValidFormat: boolean;
+  grade?: string;
+  slotId?: string;
+  dayOfWeek?: number;         // 1=Lunes ... 6=Sábado
+  expiresAt?: number;
+  isExpired?: boolean;
+  signature?: string;
+  isSignatureValid?: boolean; // firma válida Y no expirado (semántica IEDSJ)
+  rawInput: string;
+}
+
+/**
+ * Genera el payload firmado del QR de Clase.
+ * expiresAtMs = fin del bloque (anti-replay: tras terminar la hora el QR muere).
+ * NOTA: la materia NO viaja en el token a propósito — el sistema resuelve la
+ * asignación vigente (grade+day+slot) al activar; así una reasignación de cátedra
+ * no invalida las tarjetas impresas.
+ */
+export async function generateClassQrPayload(
+  grade: string,
+  slotId: string,
+  dayOfWeek: number,
+  expiresAtMs: number,
+  secret: string = DEFAULT_QR_SECRET
+): Promise<string> {
+  const baseData = `${grade}|${slotId}|${dayOfWeek}|${expiresAtMs}`;
+  const sig = await generateHmacSignature(baseData, secret);
+  return `CLASE:v1:${grade}:${slotId}:${dayOfWeek}:${expiresAtMs}:${sig}`;
+}
+
+/**
+ * Analiza y valida un token de QR de Clase.
+ * La comparación con el día actual y la resolución de materia viven en el servicio
+ * (attendanceStorage.setActiveClassFromToken) para mantener crypto.ts puro.
+ */
+export async function parseAndVerifyClassScan(rawInput: string, secret: string = DEFAULT_QR_SECRET): Promise<ParsedClassQrResult> {
+  const trimmed = rawInput.trim();
+  if (!trimmed.startsWith('CLASE:v1:')) {
+    return { isClassToken: false, isValidFormat: false, rawInput: trimmed };
+  }
+  const parts = trimmed.split(':');
+  // CLASE : v1 : grade : slotId : day : exp : sig  → 7 partes
+  if (parts.length < 7) {
+    return { isClassToken: true, isValidFormat: false, rawInput: trimmed };
+  }
+  const grade = parts[2];
+  const slotId = parts[3];
+  const dayOfWeek = parseInt(parts[4], 10);
+  const expiresAt = parseInt(parts[5], 10);
+  const sig = parts[6];
+
+  if (!grade || !slotId || Number.isNaN(dayOfWeek) || Number.isNaN(expiresAt)) {
+    return { isClassToken: true, isValidFormat: false, rawInput: trimmed };
+  }
+
+  const baseData = `${grade}|${slotId}|${dayOfWeek}|${expiresAt}`;
+  const expectedSig = await generateHmacSignature(baseData, secret);
+  const isSignatureValid = sig === expectedSig;
+  const isExpired = Date.now() > expiresAt;
+
+  return {
+    isClassToken: true,
+    isValidFormat: true,
+    grade,
+    slotId,
+    dayOfWeek,
+    expiresAt,
+    isExpired,
+    signature: sig,
+    isSignatureValid: isSignatureValid && !isExpired,
+    rawInput: trimmed
+  };
+}
+
 /**
  * Función PBKDF2 nativa con WebCrypto para autenticación local
  */

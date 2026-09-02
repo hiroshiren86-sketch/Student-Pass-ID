@@ -174,6 +174,11 @@ export interface AttendanceRecord {
   verifiedHmac: boolean;
   synced: boolean;
   notes?: string;
+  // Ronda 19 — QR de Clase: transparencia de la planilla. 'QR_CLASE' = la materia/bloque
+  // viene de un QR de clase firmado escaneado antes de pasar lista; 'HORA' = inferencia
+  // por reloj/plantilla (comportamiento clásico). El CSV exporta una columna "Contexto".
+  contextSource?: 'QR_CLASE' | 'HORA';
+  classQrVerified?: boolean; // la firma del token CLASE:v1 que activó el contexto era válida
 }
 
 export interface UserSession {
@@ -206,7 +211,8 @@ export interface QRPayload {
 export interface ScanResultFeedback {
   // Ronda 19: 'no_active_slot' — escaneo durante recreo/transición (BUG-1 del informe de testing:
   // antes caía al fallback 'slot-1' y se registraba TARDANZA en 1ª Hora). No registra nada.
-  type: 'success_punctual' | 'success_tardy' | 'already_scanned' | 'not_found' | 'invalid_signature' | 'rate_limited' | 'error' | 'block_closed' | 'pending_review' | 'non_computable' | 'out_of_window' | 'no_active_slot';
+  // Ronda 19: 'class_activated' — un QR de Clase (CLASE:v1) firmado activó el contexto del dispositivo.
+  type: 'success_punctual' | 'success_tardy' | 'already_scanned' | 'not_found' | 'invalid_signature' | 'rate_limited' | 'error' | 'block_closed' | 'pending_review' | 'non_computable' | 'out_of_window' | 'no_active_slot' | 'class_activated';
   title: string;
   message: string;
   timestamp: string;
@@ -287,6 +293,28 @@ export interface AttendanceSummary {
   // Ronda 19 (BUG-2 del informe): null cuando la fecha no tiene registros — antes mostraba un 95%
   // hardcodeado, dato contradictorio en una revisión (día sin escaneos = "95% de asistencia").
   attendanceRate: number | null; // 0 - 100, o null si no hay registros en la fecha
+}
+
+/**
+ * Ronda 19 — QR de Clase: contexto de "clase activa" del dispositivo.
+ * Nace cuando el representante/docente escanea un token `CLASE:v1:...` firmado (o lo activa
+ * desde el aula) y muere al expirar el bloque o al cancelarlo. Es POR DISPOSITIVO (el que
+ * escanea el QR de la pizarra es quien va a pasar lista) — no viaja por la nube.
+ */
+export interface ActiveClassContext {
+  grade: string;           // '10°1'
+  dayOfWeek: number;       // 1 = Lunes ... 6 = Sábado
+  slotId: string;          // 'slot-4'
+  slotName: string;        // '4ª Hora de Clase'
+  slotStartTime: string;   // '09:45'
+  slotEndTime: string;     // '10:40'
+  subject: string;         // Resuelto de la asignación vigente al momento de activar
+  teacherName: string;
+  classroom?: string;
+  activatedAt: string;     // ISO
+  expiresAt: number;       // epoch ms = fin del bloque del día de activación
+  activatedBy: string;     // 'QR_CLASE' | 'AULA_DOCENTE'
+  tokenSignature: string;  // firma HMAC (trazabilidad)
 }
 
 export interface OfflineQueueItem {

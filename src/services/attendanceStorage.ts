@@ -20,7 +20,8 @@ import {
   DayTemplateConfig,
   EphemeralScanDelegation,
   StudentPersonalSchedule,
-  StudentPersonalScheduleEntry
+  StudentPersonalScheduleEntry,
+  ActiveClassContext
 } from '../types/attendance';
 import { 
   INITIAL_STUDENTS, 
@@ -31,7 +32,7 @@ import {
   INITIAL_SCHEDULE_ASSIGNMENTS,
   DAY_TEMPLATES_DEFINITIONS
 } from './mockData';
-import { parseAndVerifyScan } from '../utils/crypto';
+import { parseAndVerifyScan, parseAndVerifyClassScan } from '../utils/crypto';
 import { isValidGrade } from '../utils/documentParser';
 import { FirebaseService } from './firebase';
 
@@ -48,6 +49,27 @@ const NON_COMPUTABLE_SLOTS_KEY = 'inas_non_computable_slots_v5';
 const CUSTOM_TEMPLATES_KEY = 'inas_custom_templates_v1'; // Ronda 4 (F1): plantillas creadas por Rectoría
 const DAY_CLOSED_KEY = 'inas_day_closed_v1';             // Ronda 4 (F3): flag de cierre de jornada por fecha
 const STUDENT_SCHEDULES_KEY = 'inas_student_schedules_v1'; // Ronda 4 (F4): horario opcional por estudiante
+const ACTIVE_CLASS_KEY = 'inas_active_class_v1'; // Ronda 19: QR de Clase — contexto de clase activa POR DISPOSITIVO
+
+/**
+ * Ronda 19 — QR de Clase: helper de tiempo Bogotá. Convierte "HH:mm" de hoy a epoch ms
+ * local (Date.parse sin sufijo Z usa la zona del runtime; en producción el navegador del
+ * colegio está en America/Bogota y la suite corre con la misma zona simulada).
+ */
+export function bogotaTodayTimeToEpochMs(timeStr: string, dateStr: string = getTodayDateString()): number {
+  return Date.parse(`${dateStr}T${timeStr}:00`);
+}
+
+/**
+ * Ronda 19 — QR de Clase: vigencia del TOKEN impreso (fin del año escolar, 19-dic 23:59).
+ * El anti-replay real son TRES capas: (1) firma HMAC, (2) día de la semana validado al
+ * activar, (3) la clase activa muere al fin del bloque. Así la tarjeta impresa sirve
+ * todo el período académico sin reimprimir cada semana.
+ */
+export function schoolYearEndEpochMs(): number {
+  const year = new Date().getFullYear();
+  return Date.parse(`${year}-12-19T23:59:59`);
+}
 
 export function getTodayDateString(): string {
   const d = new Date();
@@ -1454,6 +1476,130 @@ export class AttendanceStorageService {
     return this.getAllAttendance().filter(r => r.studentGrade === grade && r.slotId === slotId && r.date === dateStr);
   }
 
+  // ==================== QR DE CLASE — CONTEXTO ACTIVO (Ronda 19) ====================
+  /**
+   * Devuelve la clase activa del dispositivo, o null si no hay/expiró. NO notifica
+   * (puede llamarse durante render): la expiración se limpia perezosamente.
+   */
+  static getActiveClass(): ActiveClassContext | null {
+    try {
+      const raw = localStorage.getItem(ACTIVE_CLASS_KEY);
+      if (!raw) return null;
+      const ctx = JSON.parse(raw) as ActiveClassContext;
+      if (!ctx?.grade || !ctx?.slotId || !ctx?.expiresAt) return null;
+      if (Date.now() > ctx.expiresAt) return null; // expirada: ignorar (anti-replay por diseño)
+      return ctx;
+    } catch {
+      return null;
+    }
+  }
+
+  static clearActiveClass(): void {
+    localStorage.removeItem(ACTIVE_CLASS_KEY);
+    this.notify();
+  }
+
+  /**
+   * Activa la clase a partir de un token CLASE:v1 escaneado. Validaciones en orden:
+   * firma HMAC → vigencia (expiresAt) → día correcto → asignación vigente.
+   * Devuelve un ScanResultFeedback listo para mostrar en cualquiera de los 3 escáneres.
+   */
+  static async setActiveClassFromToken(token: string, activatedBy: string = 'QR_CLASE'): Promise<ScanResultFeedback> {
+    const settings = this.getSettings();
+    const parsed = await parseAndVerifyClassScan(token, settings.qrSecret);
+
+    if (!parsed.isClassToken) {
+      return { type: 'error', title: 'Token de clase no reconocido', message: 'El código no corresponde a un QR de Clase (CLASE:v1).', timestamp: new Date().toISOString() };
+    }
+    if (!parsed.isValidFormat || parsed.grade === undefined || parsed.slotId === undefined || parsed.dayOfWeek === undefined) {
+      return { type: 'error', title: 'QR de Clase malformado', message: 'El token CLASE:v1 está incompleto o dañado. Genera la tarjeta de nuevo en Horarios → QR de Clase.', timestamp: new Date().toISOString() };
+    }
+    if (parsed.isSignatureValid === false || parsed.signature === undefined) {
+      return { type: 'error', title: 'QR de Clase con firma inválida', message: 'La firma HMAC no coincide: el QR fue alterado o pertenece a otra institución. No se activó ninguna clase.', timestamp: new Date().toISOString() };
+    }
+    if (parsed.isExpired) {
+      const expiredTime = parsed.expiresAt ? new Date(parsed.expiresAt).toLocaleTimeString('es-CO', { hour: '2-digit', minute: '2-digit' }) : '';
+      return { type: 'error', title: 'QR de Clase expirado', message: `Este QR venció a las ${expiredTime} (fin del bloque). Imprime o proyecta el QR del bloque actual.`, timestamp: new Date().toISOString() };
+    }
+    const todayDow = new Date().getDay();
+    if (parsed.dayOfWeek !== todayDow) {
+      const dayNames: Record<number, string> = { 0: 'Domingo', 1: 'Lunes', 2: 'Martes', 3: 'Miércoles', 4: 'Jueves', 5: 'Viernes', 6: 'Sábado' };
+      return { type: 'error', title: 'QR de otro día', message: `Este QR de Clase es para ${dayNames[parsed.dayOfWeek] || 'otro día'} y hoy es ${dayNames[todayDow]}. Usa la tarjeta del día de hoy.`, timestamp: new Date().toISOString() };
+    }
+
+    const slot = this.getScheduleSlots().find(s => s.id === parsed.slotId);
+    if (!slot) {
+      return { type: 'error', title: 'Bloque inexistente', message: `El QR referencia el bloque "${parsed.slotId}" que ya no existe en la plantilla. Regenera la tarjeta.`, timestamp: new Date().toISOString() };
+    }
+
+    const assignment = this.getScheduleAssignments().find(a => a.grade === parsed.grade && a.slotId === parsed.slotId && a.dayOfWeek === parsed.dayOfWeek);
+    const ctx: ActiveClassContext = {
+      grade: parsed.grade,
+      dayOfWeek: parsed.dayOfWeek,
+      slotId: slot.id,
+      slotName: slot.name,
+      slotStartTime: slot.startTime,
+      slotEndTime: slot.endTime,
+      subject: assignment?.subject || 'Cátedra General',
+      teacherName: assignment?.teacherName || 'Docente Titular',
+      classroom: assignment?.classroom,
+      activatedAt: new Date().toISOString(),
+      expiresAt: parsed.expiresAt!,
+      activatedBy,
+      tokenSignature: parsed.signature
+    };
+
+    localStorage.setItem(ACTIVE_CLASS_KEY, JSON.stringify(ctx));
+    this.notify();
+
+    return {
+      type: 'class_activated',
+      title: 'Clase activa en este dispositivo',
+      message: `${ctx.subject} · ${ctx.grade} · ${ctx.slotName} (${ctx.slotStartTime}–${ctx.slotEndTime})${ctx.classroom ? ` · ${ctx.classroom}` : ''}. Los próximos escaneos de estudiantes de ${ctx.grade} quedarán vinculados a esta materia.`,
+      timestamp: new Date().toISOString()
+    };
+  }
+
+  /**
+   * Activación directa desde el Aula Docente ("con un toque", sección 5.3 del informe):
+   * usa la selección vigente del docente (curso/bloque) y resuelve la asignación.
+   */
+  static activateClassDirect(grade: string, slotId: string, activatedBy: string = 'AULA_DOCENTE'): ScanResultFeedback {
+    const slot = this.getScheduleSlots().find(s => s.id === slotId);
+    if (!slot || slot.type !== 'CLASS') {
+      return { type: 'error', title: 'Bloque no apto', message: 'Selecciona un bloque de CLASE para activar la clase.', timestamp: new Date().toISOString() };
+    }
+    const todayDow = new Date().getDay();
+    const expiresAt = bogotaTodayTimeToEpochMs(slot.endTime);
+    if (Date.now() > expiresAt) {
+      return { type: 'error', title: 'Bloque ya finalizado', message: `${slot.name} terminó a las ${slot.endTime}; no se puede activar una clase vencida.`, timestamp: new Date().toISOString() };
+    }
+    const assignment = this.getScheduleAssignments().find(a => a.grade === grade && a.slotId === slotId && a.dayOfWeek === (todayDow || 1));
+    const ctx: ActiveClassContext = {
+      grade,
+      dayOfWeek: todayDow || 1,
+      slotId: slot.id,
+      slotName: slot.name,
+      slotStartTime: slot.startTime,
+      slotEndTime: slot.endTime,
+      subject: assignment?.subject || 'Cátedra General',
+      teacherName: assignment?.teacherName || 'Docente Titular',
+      classroom: assignment?.classroom,
+      activatedAt: new Date().toISOString(),
+      expiresAt,
+      activatedBy,
+      tokenSignature: 'DIRECT-ACTIVATION'
+    };
+    localStorage.setItem(ACTIVE_CLASS_KEY, JSON.stringify(ctx));
+    this.notify();
+    return {
+      type: 'class_activated',
+      title: 'Clase activa en este dispositivo',
+      message: `${ctx.subject} · ${ctx.grade} · ${ctx.slotName} (${ctx.slotStartTime}–${ctx.slotEndTime}). Vence a las ${slot.endTime}.`,
+      timestamp: new Date().toISOString()
+    };
+  }
+
   // ==================== CLASSROOM SCANNER ====================
   static async registerClassScan(params: {
     scanInput: string;
@@ -1467,6 +1613,8 @@ export class AttendanceStorageService {
     scannedByCode?: string;
     customStatus?: AttendanceStatus;
     notes?: string;
+    contextSource?: 'QR_CLASE' | 'HORA'; // Ronda 19: QR de Clase → 'QR_CLASE'; inferencia por reloj → 'HORA'
+    classQrVerified?: boolean;
   }): Promise<ScanResultFeedback> {
     const settings = this.getSettings();
     const parsed = await parseAndVerifyScan(params.scanInput, settings.qrSecret);
@@ -1609,7 +1757,10 @@ export class AttendanceStorageService {
       scannedByCode: params.scannedByCode,
       notes: params.notes || (parsed.isSigned ? 'Verificado vía Carné Digital HMAC-SHA256' : 'Escaneado en Aula de Clase'),
       verifiedHmac: parsed.isSigned,
-      synced: true
+      synced: true,
+      // Ronda 19 — QR de Clase: transparencia de vinculación (planilla + CSV)
+      contextSource: params.contextSource || 'HORA',
+      classQrVerified: params.classQrVerified
     };
 
     allRecords.unshift(newRecord);
@@ -1863,6 +2014,7 @@ export class AttendanceStorageService {
       'Nombre Escaneador',
       'Método de Captura',
       'Firma HMAC Verificada',
+      'Contexto de Vinculación', // Ronda 19: QR de Clase vs inferencia por hora (transparencia del informe, sección 5.3)
       'Notas'
     ];
 
@@ -1881,6 +2033,7 @@ export class AttendanceStorageService {
       `"${r.scannedByName || ''}"`,
       `"${r.method}"`,
       `"${r.verifiedHmac ? 'Token QR Firmado (VÁLIDO)' : (r.method === 'AUTO_CIERRE' ? 'N/A (Auto-Cierre)' : 'Manual / Teclado (N/A)')}"`,
+      `"${r.contextSource === 'QR_CLASE' ? 'QR de Clase (firmado)' : 'Inferencia por hora'}"`,
       `"${r.notes || ''}"`
     ]);
 
@@ -1920,6 +2073,38 @@ export class AttendanceStorageService {
     customStatus?: any;
     notes?: string;
   }): Promise<any> {
+    // Look up student FIRST (necesario tanto para el emparejamiento del QR de Clase
+    // como para el grade del fallback clásico)
+    const settings = this.getSettings();
+    const parsed = await parseAndVerifyScan(params.scanInput, settings.qrSecret);
+    const students = this.getStudents();
+    const student = students.find(s =>
+      s.code === parsed.studentCode ||
+      s.documentId === parsed.studentCode ||
+      (parsed.documentId && s.documentId === parsed.documentId)
+    );
+
+    // Ronda 19 — QR DE CLASE: si hay una clase activa en el dispositivo y el carné pertenece
+    // a ese curso, el contexto lo aporta el QR (materia/bloque exactos), no el reloj — la
+    // misma semántica de los sistemas de control de acceso modernos. Grados distintos usan
+    // la lógica clásica (el contexto es una lente, no una puerta).
+    const activeClass = this.getActiveClass();
+    if (activeClass && student && student.grade === activeClass.grade) {
+      return this.registerClassScan({
+        scanInput: params.scanInput,
+        method: params.method || 'CAMERA',
+        slotId: activeClass.slotId,
+        grade: student.grade,
+        subject: activeClass.subject,
+        teacherName: activeClass.teacherName,
+        scannedBy: 'DOCENTE',
+        scannedByName: 'Terminal Escolar Principal',
+        notes: params.notes,
+        contextSource: 'QR_CLASE',
+        classQrVerified: true
+      });
+    }
+
     // Ronda 19 (BUG-1 del informe de testing): si el reloj NO está dentro de un bloque CLASE
     // (recreo, cambio de salón, antes de la primera hora) NO se registra nada. Antes:
     // `activeSlotInfo?.slot.id || 'slot-1'` inyectaba la 1ª Hora y el estudiante aparecía
@@ -1936,15 +2121,6 @@ export class AttendanceStorageService {
       };
     }
     const slotId = activeSlotInfo.slot.id;
-    
-    // Look up student to supply grade
-    const parsed = await parseAndVerifyScan(params.scanInput);
-    const students = this.getStudents();
-    const student = students.find(s => 
-      s.code === parsed.studentCode || 
-      s.documentId === parsed.studentCode ||
-      (parsed.documentId && s.documentId === parsed.documentId)
-    );
     const grade = student?.grade || parsed.grade || '6°1';
 
     return this.registerClassScan({
@@ -1970,6 +2146,7 @@ export class AttendanceStorageService {
     localStorage.removeItem(ATTENDANCE_KEY);
     localStorage.removeItem(OFFLINE_QUEUE_KEY);
     localStorage.removeItem(USER_SESSION_KEY);
+    localStorage.removeItem(ACTIVE_CLASS_KEY); // Ronda 19: el reset también apaga la clase activa
     localStorage.setItem(STUDENTS_KEY, JSON.stringify(INITIAL_STUDENTS));
     localStorage.setItem(TEACHERS_KEY, JSON.stringify(INITIAL_TEACHERS));
     localStorage.setItem(SCHEDULE_SLOTS_KEY, JSON.stringify(DEFAULT_SCHEDULE_SLOTS));

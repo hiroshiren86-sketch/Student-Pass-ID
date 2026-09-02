@@ -39,6 +39,7 @@ import { generateStudentCardPdf, downloadPdfBlob } from '../utils/pdfGenerator';
 import { generateBarcodeDataUrl } from '../utils/barcode';
 import { SoundService } from '../utils/sound';
 import { ConfirmDialog } from './ConfirmDialog';
+import { ActiveClassBanner } from './ActiveClassBanner';
 
 interface StudentPortalViewProps {
   onLogout?: () => void;
@@ -258,6 +259,21 @@ export const StudentPortalView: React.FC<StudentPortalViewProps> = ({ onLogout, 
 
   const handleRepRegister = async (rawCode: string, method: 'CAMERA' | 'USB' | 'MANUAL') => {
     if (!activeStudent || !rawCode.trim()) return;
+
+    // Ronda 19 — QR DE CLASE: la tarjeta de la pizarra se rutear antes del registro de
+    // estudiantes. El representante escanea el QR de clase y su dispositivo queda con el
+    // contexto exacto (materia/bloque) para todos los carnés de su curso.
+    if (rawCode.trim().startsWith('CLASE:v1:')) {
+      const activation = await AttendanceStorageService.setActiveClassFromToken(rawCode.trim());
+      if (soundEnabled) {
+        if (activation.type === 'class_activated') SoundService.playBeepSuccess();
+        else SoundService.playBeepError();
+      }
+      setRepScanFeedback({ type: activation.type === 'class_activated' ? 'success' : 'error', message: `${activation.title}: ${activation.message}` });
+      setRepManualInput('');
+      setTimeout(() => setRepScanFeedback(null), 6000);
+      return;
+    }
 
     // Ronda 19 (BUG-3 del informe): límite anti-abuso / anti-lector-defectuoso configurado en Ajustes.
     const limit = AttendanceStorageService.checkScanRateLimit();
@@ -500,6 +516,9 @@ export const StudentPortalView: React.FC<StudentPortalViewProps> = ({ onLogout, 
           {/* Representative Scanner UI */}
           {repScannerOpen && (
             <div className="p-4 rounded-2xl bg-white dark:bg-zinc-950 border border-amber-200 dark:border-amber-900/60 space-y-4">
+              {/* Ronda 19 — QR de Clase: contexto activo (el representante escanea la tarjeta de la pizarra primero) */}
+              <ActiveClassBanner />
+
               <div className="relative rounded-2xl overflow-hidden bg-black aspect-video max-w-sm mx-auto border border-amber-400">
                 <video ref={videoRef} playsInline muted className="w-full h-full object-cover" />
                 <canvas ref={canvasRef} className="hidden" />

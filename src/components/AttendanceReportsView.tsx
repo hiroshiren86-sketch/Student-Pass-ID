@@ -225,6 +225,15 @@ export const AttendanceReportsView: React.FC = () => {
                       <span className="text-[11px] font-bold text-indigo-700 dark:text-indigo-300">
                         {r.subject || '—'}
                       </span>
+                      {/* Ronda 19 — QR de Clase: transparencia del porqué de la vinculación (informe, sección 5.3) */}
+                      {r.contextSource === 'QR_CLASE' && (
+                        <span
+                          className="ml-1.5 px-1.5 py-0.5 rounded-md text-[9px] font-black uppercase tracking-wide bg-indigo-600/10 text-indigo-600 dark:text-indigo-400 border border-indigo-300/60 dark:border-indigo-700/60"
+                          title={r.classQrVerified ? 'Vinculado por QR de Clase firmado (HMAC válido)' : 'Vinculado por QR de Clase'}
+                        >
+                          QR
+                        </span>
+                      )}
                     </td>
                     <td className="py-3 px-3">
                       <span className="text-[11px] font-bold text-slate-600 dark:text-slate-400">

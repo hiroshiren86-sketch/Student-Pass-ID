@@ -15,6 +15,7 @@ import {
   UserCheck
 } from 'lucide-react';
 import { AttendanceMethod, AttendanceType, ScanResultFeedback, AttendanceRecord } from '../types/attendance';
+import { ActiveClassBanner } from './ActiveClassBanner';
 import { AttendanceStorageService, getCurrentTimeString, getTodayDateString } from '../services/attendanceStorage';
 import { SoundService } from '../utils/sound';
 import { CameraScanner } from './CameraScanner';
@@ -87,6 +88,18 @@ export const ScanHubView: React.FC<ScanHubViewProps> = ({ onScanSuccess }) => {
 
     try {
       const cleanInput = rawCode.trim();
+
+      // Ronda 19 — QR DE CLASE: se rutear ANTES del límite de tasa y del registro (no es un
+      // estudiante: es la tarjeta de la pizarra). Activa el contexto del dispositivo.
+      if (cleanInput.startsWith('CLASE:v1:')) {
+        const activation = await AttendanceStorageService.setActiveClassFromToken(cleanInput);
+        setLastFeedback(activation);
+        if (soundEnabled) {
+          if (activation.type === 'class_activated') SoundService.playBeepSuccess();
+          else SoundService.playBeepError();
+        }
+        return;
+      }
 
       // Ronda 19 (BUG-3 del informe): límite de escaneos por minuto (Ajustes → rateLimitMaxPerMin).
       // Antes la config existía pero ninguna función la leía: 32/32 escaneos en 10 s pasaron.
@@ -287,6 +300,9 @@ export const ScanHubView: React.FC<ScanHubViewProps> = ({ onScanSuccess }) => {
 
       {/* Main Scanner Section */}
       <div className="p-6 sm:p-7 rounded-3xl bg-white/80 dark:bg-zinc-950/80 border border-slate-200/80 dark:border-zinc-800/50 backdrop-blur-xl shadow-xs space-y-5">
+        {/* Ronda 19 — QR de Clase: chip de contexto activo (expira solo al fin del bloque) */}
+        <ActiveClassBanner />
+
         {scanMethod === 'USB' ? (
           <div className="space-y-4 text-center max-w-lg mx-auto py-1">
             <div className="space-y-1">
@@ -347,7 +363,7 @@ export const ScanHubView: React.FC<ScanHubViewProps> = ({ onScanSuccess }) => {
                 ? 'bg-emerald-50/90 dark:bg-emerald-950/60 border-emerald-200 dark:border-emerald-800/80 text-emerald-950 dark:text-emerald-100'
                 : lastFeedback.type === 'success_tardy' || lastFeedback.type === 'rate_limited'
                 ? 'bg-amber-50/90 dark:bg-amber-950/60 border-amber-200 dark:border-amber-800/80 text-amber-950 dark:text-amber-100'
-                : lastFeedback.type === 'already_scanned' || lastFeedback.type === 'no_active_slot'
+                : lastFeedback.type === 'already_scanned' || lastFeedback.type === 'no_active_slot' || lastFeedback.type === 'class_activated'
                 ? 'bg-indigo-50/90 dark:bg-indigo-950/60 border-indigo-200 dark:border-indigo-800/80 text-indigo-950 dark:text-indigo-100'
                 : 'bg-rose-50/90 dark:bg-rose-950/60 border-rose-200 dark:border-rose-800/80 text-rose-950 dark:text-rose-100'
             }`}

@@ -16,6 +16,11 @@
       clear: () => void store.clear()
     };
   }
+  // crypto.ts usa window.crypto.subtle (WebCrypto, correcto en navegador/Worker).
+  // En bun, window no existe: alias al propio globalThis (crypto.subtle sí está disponible).
+  if (typeof (globalThis as any).window === 'undefined') {
+    (globalThis as any).window = globalThis;
+  }
 })();
 setTimeout(() => { console.log('⏱ TIMEOUT GLOBAL DE LA SUITE LOCAL'); process.exit(2); }, 90000);
 
@@ -217,6 +222,159 @@ await section('G. Hallazgos de UI (verificación de fuente, como suite R18)', ()
 
   const shv = readFileSync('src/components/ScanHubView.tsx', 'utf8');
   check('escáner central: rate limit + estilos de los 2 nuevos estados', shv.includes('checkScanRateLimit') && shv.includes("lastFeedback.type === 'no_active_slot'"));
+});
+
+// =====================================================================
+await section('H. QR de Clase — token CLASE:v1 (cripto)', async () => {
+  const crypto = await import('../src/utils/crypto');
+  const settings = svc.getSettings();
+  const secret = settings.qrSecret;
+
+  const token = await crypto.generateClassQrPayload('10°1', 'slot-4', 4, Date.now() + 3600_000, secret);
+  check('payload con prefijo CLASE:v1', token.startsWith('CLASE:v1:'), token);
+
+  const ok = await crypto.parseAndVerifyClassScan(token, secret);
+  check('token válido: formato + firma', ok.isClassToken && ok.isValidFormat && ok.isSignatureValid === true);
+  check('campos redondean (grade/slot/day)', ok.grade === '10°1' && ok.slotId === 'slot-4' && ok.dayOfWeek === 4);
+
+  const tampered = token.replace(/.$/, token.endsWith('a') ? 'b' : 'a');
+  const bad = await crypto.parseAndVerifyClassScan(tampered, secret);
+  check('token alterado → firma inválida', bad.isClassToken && bad.isSignatureValid === false);
+
+  const expired = await crypto.generateClassQrPayload('10°1', 'slot-4', 4, Date.now() - 1000, secret);
+  const ex = await crypto.parseAndVerifyClassScan(expired, secret);
+  check('token expirado → rechazado', ex.isExpired === true && ex.isSignatureValid === false);
+
+  const carné = 'IEDSJ:v1:SJ-0001:doc:10°1:1:9999999999999:abcdef';
+  const notClass = await crypto.parseAndVerifyClassScan(carné, secret);
+  check('carné IEDSJ NO se confunde con CLASE', notClass.isClassToken === false);
+});
+
+// =====================================================================
+await section('I. QR de Clase — activación del contexto (servicio)', async () => {
+  const crypto = await import('../src/utils/crypto');
+  const settings = svc.getSettings();
+  const todayDow = new Date().getDay();
+  const slots = svc.getScheduleSlots();
+  const classSlot: any = slots.filter((s: any) => s.type === 'CLASS')[0];
+  const assignments = svc.getScheduleAssignments();
+  const asg = assignments.find((a: any) => a.grade === '10°1' && a.slotId === classSlot.id && a.dayOfWeek === (todayDow || 1));
+
+  // Token del DÍA de hoy (para pasar la validación de día) — si hoy es domingo (0), se espera rechazo por día
+  if (todayDow >= 1 && todayDow <= 6) {
+    const token = await crypto.generateClassQrPayload('10°1', classSlot.id, todayDow, Date.now() + 3600_000, settings.qrSecret);
+    svc.resetToDemo();
+    const res = await svc.setActiveClassFromToken(token);
+    check('activación OK → class_activated', res.type === 'class_activated', JSON.stringify(res));
+    const ctx = svc.getActiveClass();
+    check('contexto activo con datos correctos', !!ctx && ctx.grade === '10°1' && ctx.slotId === classSlot.id && ctx.expiresAt > Date.now());
+    check('materia resuelta de la asignación vigente', !!ctx && (asg ? ctx.subject === asg.subject : ctx.subject === 'Cátedra General'), ctx?.subject);
+    check('activación registrada como QR_CLASE', ctx?.activatedBy === 'QR_CLASE');
+
+    svc.clearActiveClass();
+    check('clearActiveClass apaga el contexto', svc.getActiveClass() === null);
+
+    // Token de OTRO día → rechazo por día incorrecto
+    const otherDay = todayDow === 5 ? 1 : 5; // 1..5 (evita domingo 0 / sábado 6 imposibles en el par)
+    const tokenOtherDay = await crypto.generateClassQrPayload('10°1', classSlot.id, otherDay === todayDow ? 1 : otherDay, Date.now() + 3600_000, settings.qrSecret);
+    const resOtherDay = await svc.setActiveClassFromToken(tokenOtherDay);
+    check('QR de otro día → rechazado con mensaje claro', resOtherDay.type === 'error' && resOtherDay.message.includes('hoy es'), resOtherDay.message);
+  } else {
+    skip('validación de día en vivo', 'hoy es domingo (0)');
+  }
+
+  // QR de otro día (fijo, sin depender de hoy): día 99 no existe; usar token con día distinto del actual
+  const wrongDayToken = await crypto.generateClassQrPayload('10°1', 'slot-1', (todayDow + 1) % 7, Date.now() + 3600_000, settings.qrSecret);
+  const resWrong = await svc.setActiveClassFromToken(wrongDayToken);
+  check('QR de día ≠ hoy SIEMPRE rechazado', resWrong.type === 'error', resWrong.title);
+});
+
+// =====================================================================
+await section('J. QR de Clase — vinculación de escaneos (contexto > reloj)', async () => {
+  const crypto = await import('../src/utils/crypto');
+  const settings = svc.getSettings();
+  const todayDow = new Date().getDay();
+  const student10 = svc.getStudents().find((s: any) => s.grade === '10°1');
+  const student6 = svc.getStudents().find((s: any) => s.grade !== '10°1');
+  const slots = svc.getScheduleSlots();
+  const classSlot: any = slots.filter((s: any) => s.type === 'CLASS')[0];
+  const assignments = svc.getScheduleAssignments();
+  const asg = assignments.find((a: any) => a.grade === '10°1' && a.slotId === classSlot.id && a.dayOfWeek === (todayDow || 1));
+
+  // Caso A: reloj FUERA de bloque (parche isWithin false) + clase activa del MISMO grado → registra con contexto del QR
+  const original = svc.getCurrentActiveSlot;
+  const origWindow = svc.isWithinSchoolDay;
+  try {
+    if (todayDow >= 1 && todayDow <= 6) {
+      svc.resetToDemo();
+      svc.saveAttendance([]);
+      const token = await crypto.generateClassQrPayload('10°1', classSlot.id, todayDow, Date.now() + 3600_000, settings.qrSecret);
+      await svc.setActiveClassFromToken(token);
+
+      svc.getCurrentActiveSlot = () => ({ slot: classSlot, isWithin: false, dayOfWeek: todayDow });
+      svc.isWithinSchoolDay = () => true;
+
+      const res = await svc.registerScan({ scanInput: student10.code, method: 'USB' });
+      const okA = (res.type === 'success_punctual' || res.type === 'success_tardy')
+        && res.record?.slotId === classSlot.id
+        && res.record?.contextSource === 'QR_CLASE'
+        && res.record?.classQrVerified === true
+        && (asg ? res.record?.subject === asg.subject : true);
+      check('mismo grado + clase activa → registro con contextSource QR_CLASE', okA, JSON.stringify({ t: res.type, slot: res.record?.slotId, ctx: res.record?.contextSource, subj: res.record?.subject }));
+
+      // Caso B: grado distinto → el contexto es una lente, no una puerta → ruta clásica (HORA)
+      svc.getCurrentActiveSlot = () => ({ slot: classSlot, isWithin: true, dayOfWeek: todayDow });
+      const resB = await svc.registerScan({ scanInput: student6.code, method: 'USB' });
+      const okB = (resB.type === 'success_punctual' || resB.type === 'success_tardy') && resB.record?.contextSource === 'HORA';
+      check('grado distinto → ruta clásica HORA (lente, no puerta)', okB, JSON.stringify({ t: resB.type, ctx: resB.record?.contextSource }));
+
+      // Caso C: sin clase activa + reloj dentro → HORA (comportamiento clásico intacto)
+      svc.clearActiveClass();
+      const studentOther = svc.getStudents().find((s: any) => s.code !== student10.code && s.code !== student6.code);
+      const resC = await svc.registerScan({ scanInput: studentOther.code, method: 'USB' });
+      const okC = (resC.type === 'success_punctual' || resC.type === 'success_tardy') && resC.record?.contextSource === 'HORA';
+      check('sin clase activa → fallback clásico intacto (HORA)', okC, JSON.stringify({ t: resC.type, ctx: resC.record?.contextSource }));
+    } else {
+      skip('vinculación en vivo', 'hoy es domingo (0)');
+    }
+  } finally {
+    svc.getCurrentActiveSlot = original;
+    svc.isWithinSchoolDay = origWindow;
+    svc.resetToDemo();
+  }
+});
+
+// =====================================================================
+await section('K. QR de Clase — transparencia en planilla/CSV (fuente)', () => {
+  const storage = readFileSync('src/services/attendanceStorage.ts', 'utf8');
+  check('CSV con columna Contexto de Vinculación', storage.includes('Contexto de Vinculación') && storage.includes("r.contextSource === 'QR_CLASE' ? 'QR de Clase (firmado)'"));
+  check('registro persiste contextSource/classQrVerified', storage.includes("contextSource: params.contextSource || 'HORA'") && storage.includes('classQrVerified: params.classQrVerified'));
+  check('registerScan aplica contexto de clase activa', storage.includes("student.grade === activeClass.grade") && storage.includes("contextSource: 'QR_CLASE'"));
+  check('resetToDemo limpia la clase activa', storage.includes('localStorage.removeItem(ACTIVE_CLASS_KEY)'));
+
+  const types = readFileSync('src/types/attendance.ts', 'utf8');
+  check('AttendanceRecord con contextSource', types.includes("contextSource?: 'QR_CLASE' | 'HORA'"));
+  check('ActiveClassContext tipado', types.includes('interface ActiveClassContext'));
+
+  const arv = readFileSync('src/components/AttendanceReportsView.tsx', 'utf8');
+  check('planilla: badge QR en Asignatura', arv.includes("r.contextSource === 'QR_CLASE'"));
+
+  const shv = readFileSync('src/components/ScanHubView.tsx', 'utf8');
+  check('terminal: ruta CLASE:v1 antes del límite de tasa', shv.includes("startsWith('CLASE:v1:')") && shv.includes('setActiveClassFromToken'));
+  check('terminal: ActiveClassBanner montado', shv.includes('<ActiveClassBanner />'));
+
+  const spv = readFileSync('src/components/StudentPortalView.tsx', 'utf8');
+  check('representante: ruta CLASE:v1 + banner', spv.includes("startsWith('CLASE:v1:')") && spv.includes('<ActiveClassBanner />'));
+
+  const tcv = readFileSync('src/components/TeacherClassroomView.tsx', 'utf8');
+  check('aula: botón Activar en este dispositivo + banner', tcv.includes('activateClassDirect') && tcv.includes('<ActiveClassBanner />'));
+
+  const sbv = readFileSync('src/components/ScheduleBuilderView.tsx', 'utf8');
+  check('horarios: pestaña QR de Clase con tarjeta descargable', sbv.includes("'class-qr'") && sbv.includes('generateClassQrPayload') && sbv.includes('Descargar PNG'));
+  check('horarios: tarjeta QR cierra con Escape', sbv.includes('setClassQrModal(null)') && sbv.includes("e.key === 'Escape'"));
+
+  const crypto = readFileSync('src/utils/crypto.ts', 'utf8');
+  check('crypto: protocolo CLASE:v1 completo', crypto.includes('generateClassQrPayload') && crypto.includes('parseAndVerifyClassScan') && crypto.includes('CLASE:v1:'));
 });
 
 // =====================================================================

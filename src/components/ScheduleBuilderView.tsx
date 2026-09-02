@@ -28,7 +28,9 @@ import {
   LayoutTemplate,
   Lock,
   Copy,
-  Power
+  Power,
+  QrCode,
+  Download
 } from 'lucide-react';
 import { 
   ScheduleSlot, 
@@ -37,7 +39,9 @@ import {
   Teacher,
   DayTemplateConfig
 } from '../types/attendance';
-import { AttendanceStorageService } from '../services/attendanceStorage';
+import { AttendanceStorageService, schoolYearEndEpochMs } from '../services/attendanceStorage';
+import QRCode from 'qrcode';
+import { generateClassQrPayload } from '../utils/crypto';
 import { ToggleSwitch } from './ToggleSwitch';
 import { ConfirmDialog } from './ConfirmDialog';
 
@@ -107,8 +111,25 @@ export const ScheduleBuilderView: React.FC = () => {
   const [teachers, setTeachers] = useState<Teacher[]>(AttendanceStorageService.getTeachers());
   const grades = AttendanceStorageService.getUniqueGrades();
 
-  // Mode: 'grid' (Timetable matrix) vs 'weekly-matrix' (Full 5-day week) vs 'slots-editor' (Design structure of hours) vs 'templates' (Plantillas + política)
-  const [subView, setSubView] = useState<'grid' | 'weekly-matrix' | 'slots-editor' | 'templates'>('grid');
+  // Mode: 'grid' (Timetable matrix) vs 'weekly-matrix' (Full 5-day week) vs 'slots-editor' (Design structure of hours) vs 'templates' (Plantillas + política) vs 'class-qr' (QR de Clase — Ronda 19)
+  const [subView, setSubView] = useState<'grid' | 'weekly-matrix' | 'slots-editor' | 'templates' | 'class-qr'>('grid');
+
+  // Ronda 19 — QR de Clase: modal de generación/descarga de la tarjeta A6 firmada
+  const [classQrModal, setClassQrModal] = useState<{ grade: string; dayOfWeek: number; slotId: string; slotName: string; slotStartTime: string; slotEndTime: string; subject: string; teacherName: string; classroom?: string } | null>(null);
+  const [classQrDataUrl, setClassQrDataUrl] = useState<string>('');
+
+  // Ronda 19 (Regla E10): Escape cierra la tarjeta QR de Clase
+  useEffect(() => {
+    if (!classQrModal) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.stopPropagation();
+        setClassQrModal(null);
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [classQrModal]);
 
   // Ronda 4 (F1): editor de plantillas propias de Rectoría
   const [editingTemplate, setEditingTemplate] = useState<DayTemplateConfig | null>(null);
@@ -418,6 +439,20 @@ export const ScheduleBuilderView: React.FC = () => {
           >
             <LayoutTemplate className="w-3.5 h-3.5" />
             <span>Plantillas</span>
+          </button>
+
+          {/* Ronda 19 — QR de Clase (informe de testing, sección 5.3): la vía que vincula la
+              materia sin depender del reloj ni del horario completo */}
+          <button
+            onClick={() => setSubView('class-qr')}
+            className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-1.5 shrink-0 ${
+              subView === 'class-qr'
+                ? 'bg-white dark:bg-zinc-950 text-indigo-600 dark:text-indigo-400 shadow-sm'
+                : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
+            }`}
+          >
+            <QrCode className="w-3.5 h-3.5" />
+            <span>QR de Clase</span>
           </button>
         </div>
       </div>
@@ -1269,6 +1304,142 @@ export const ScheduleBuilderView: React.FC = () => {
                 </div>
               </div>
             )}
+          </div>
+        </div>
+      )}
+
+      {/* VIEW 5: QR DE CLASE (Ronda 19 — informe de testing, sección 5.3) */}
+      {subView === 'class-qr' && (
+        <div className="space-y-4">
+          {/* Controls Bar: Curso + Día */}
+          <div className="p-4 rounded-3xl bg-white/70 dark:bg-zinc-950/70 border border-slate-200/80 dark:border-zinc-800/50 backdrop-blur-xl shadow-xs flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3">
+            <div className="flex items-center gap-2">
+              <label className="text-xs font-bold text-slate-500 dark:text-slate-400 shrink-0">Curso / Grado:</label>
+              <select
+                value={selectedGrade}
+                onChange={(e) => setSelectedGrade(e.target.value)}
+                className="px-3 py-1.5 bg-white dark:bg-black border border-slate-200 dark:border-zinc-800/50 rounded-xl text-xs font-black text-indigo-600 dark:text-indigo-400"
+              >
+                {grades.map(g => <option key={g} value={g}>{g}</option>)}
+              </select>
+            </div>
+            <div className="flex items-center gap-1.5 flex-wrap">
+              {DAYS_OF_WEEK.map(d => (
+                <button
+                  key={d.id}
+                  type="button"
+                  onClick={() => setSelectedDay(d.id)}
+                  className={`px-2.5 py-1.5 rounded-xl text-[11px] font-bold border transition-all ${
+                    selectedDay === d.id
+                      ? 'bg-indigo-600 text-white border-indigo-600 shadow-sm'
+                      : 'bg-white dark:bg-black text-slate-600 dark:text-slate-300 border-slate-200 dark:border-zinc-800 hover:border-indigo-300'
+                  }`}
+                >
+                  {d.short}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* Cómo funciona (transparencia de la estrategia del informe) */}
+          <div className="p-4 rounded-2xl bg-indigo-50/70 dark:bg-indigo-950/40 border border-indigo-200 dark:border-indigo-800 text-xs text-slate-600 dark:text-slate-300 space-y-1.5 leading-relaxed">
+            <p className="font-black text-indigo-700 dark:text-indigo-300 uppercase tracking-wide text-[11px]">Cómo funciona el QR de Clase</p>
+            <p>1. Imprime (o proyecta) la tarjeta QR de cada cátedra y pégala en la pizarra del aula. La tarjeta sirve <b>todo el año escolar</b>: la materia no viaja en el QR — el sistema la resuelve de la asignación vigente al momento de activar, así que si la cátedra cambia no hay que reimprimir.</p>
+            <p>2. Antes de pasar lista, el representante o el docente <b>escanea el QR de clase</b> con el escáner de asistencia: el dispositivo queda con la clase activa (chip visible, vence al fin del bloque).</p>
+            <p>3. Todos los carnés escaneados después quedan vinculados a la <b>materia exacta</b> (contexto <b>QR de Clase (firmado)</b> en la planilla y el CSV). Sin escanear el QR, el sistema sigue funcionando por hora como siempre.</p>
+          </div>
+
+          {/* Tarjetas por bloque */}
+          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
+            {slots.filter(s => s.type === 'CLASS').sort((a, b) => a.order - b.order).map(slot => {
+              const asg = assignments.find(a => a.grade === selectedGrade && a.dayOfWeek === selectedDay && a.slotId === slot.id);
+              return (
+                <div key={slot.id} className={`p-4 rounded-2xl border space-y-2 ${asg ? 'bg-white dark:bg-zinc-950 border-slate-200 dark:border-zinc-800/60 shadow-sm' : 'bg-slate-50 dark:bg-zinc-950/50 border-slate-100 dark:border-zinc-900 opacity-70'}`}>
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-xs font-black text-slate-900 dark:text-white">{slot.name}</span>
+                    <span className="text-[10px] font-mono font-bold text-slate-400">{slot.startTime}–{slot.endTime}</span>
+                  </div>
+                  {asg ? (
+                    <>
+                      <div className="text-xs font-bold text-indigo-700 dark:text-indigo-300">{asg.subject}</div>
+                      <div className="text-[11px] text-slate-500 dark:text-slate-400">{asg.teacherName}{asg.classroom ? ` · ${asg.classroom}` : ''}</div>
+                      <button
+                        type="button"
+                        onClick={async () => {
+                          const settings = AttendanceStorageService.getSettings();
+                          const payload = await generateClassQrPayload(selectedGrade, slot.id, selectedDay, schoolYearEndEpochMs(), settings.qrSecret);
+                          const url = await QRCode.toDataURL(payload, { width: 512, margin: 2 });
+                          setClassQrDataUrl(url);
+                          setClassQrModal({
+                            grade: selectedGrade, dayOfWeek: selectedDay, slotId: slot.id,
+                            slotName: slot.name, slotStartTime: slot.startTime, slotEndTime: slot.endTime,
+                            subject: asg.subject, teacherName: asg.teacherName, classroom: asg.classroom
+                          });
+                        }}
+                        className="w-full py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-[11px] font-bold transition-all flex items-center justify-center gap-1.5 shadow-md shadow-indigo-600/25"
+                        aria-label={`Generar tarjeta QR de ${asg.subject} en ${slot.name}`}
+                      >
+                        <QrCode className="w-3.5 h-3.5" /> Ver tarjeta QR
+                      </button>
+                    </>
+                  ) : (
+                    <div className="text-[11px] text-slate-400 font-bold">Sin cátedra asignada este día — el escaneo de este bloque queda como "Cátedra General"</div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {/* Ronda 19 — Modal: tarjeta A6 del QR de Clase (descargable PNG para imprimir) */}
+      {classQrModal && (
+        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4" role="dialog" aria-modal="true" aria-label="Tarjeta QR de Clase">
+          <div className="bg-white dark:bg-zinc-950 rounded-3xl p-6 w-full max-w-sm border border-slate-200 dark:border-zinc-800/50 shadow-2xl space-y-4">
+            <div className="flex items-center justify-between">
+              <h3 className="text-base font-black text-slate-900 dark:text-white flex items-center gap-2">
+                <QrCode className="w-5 h-5 text-indigo-500" />
+                <span>Tarjeta QR de Clase</span>
+              </h3>
+              <button
+                type="button"
+                onClick={() => setClassQrModal(null)}
+                className="p-1.5 text-slate-400 hover:text-slate-600 dark:hover:text-white rounded-xl hover:bg-slate-100 dark:hover:bg-slate-800"
+                aria-label="Cerrar tarjeta QR"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            {classQrDataUrl && (
+              <img src={classQrDataUrl} alt={`QR de Clase: ${classQrModal.subject}, ${classQrModal.grade}, ${classQrModal.slotName}`} className="w-full rounded-2xl border border-slate-200 dark:border-zinc-800" />
+            )}
+
+            <div className="text-center space-y-1">
+              <p className="text-sm font-black text-slate-900 dark:text-white">{classQrModal.subject}</p>
+              <p className="text-xs font-bold text-slate-600 dark:text-slate-300">
+                {classQrModal.grade} · {DAYS_OF_WEEK.find(d => d.id === classQrModal.dayOfWeek)?.name} · {classQrModal.slotName} ({classQrModal.slotStartTime}–{classQrModal.slotEndTime})
+              </p>
+              {classQrModal.classroom && <p className="text-[11px] text-slate-500">{classQrModal.classroom}</p>}
+              <p className="text-[10px] text-slate-400 font-mono break-all">CLASE:v1 · Firmado HMAC-SHA256 · Vence el 19-dic</p>
+            </div>
+
+            <div className="flex items-center justify-end gap-2 pt-1">
+              <button
+                type="button"
+                onClick={() => setClassQrModal(null)}
+                className="py-2 px-3 text-xs font-bold text-slate-500 hover:text-slate-700 dark:text-slate-400"
+              >
+                Cerrar
+              </button>
+              <a
+                href={classQrDataUrl}
+                download={`qr_clase_${classQrModal.grade}_${classQrModal.slotId}_${classQrModal.dayOfWeek}.png`}
+                className="py-2 px-4 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-xs font-bold transition-all shadow-md shadow-indigo-600/30 flex items-center gap-1.5"
+              >
+                <Download className="w-3.5 h-3.5" /> Descargar PNG
+              </a>
+            </div>
           </div>
         </div>
       )}
