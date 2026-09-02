@@ -587,6 +587,46 @@ El proveedor **Email/Password NO está habilitado** en Firebase Console (`accoun
 
 ---
 
+### 🧩 Ronda 19 (03/09/2026): Implementación del Informe de Testing Externo del 02/09/2026 — 5 etapas consolidadas, 111+48 pruebas verdes, tsc 0, build limpio
+
+**Origen:** informe de testing independiente (`informe-testing-inas.md`, Playwright desktop/tablet/móvil con reloj simulado en America/Bogota) que halló 2 bugs de datos (ALTA), 3 de seguridad (MEDIA) y 14 hallazgos UX/infra. El propietario avaló expresamente la estrategia de horarios del informe (sección 5-6) y ordenó implementarla **por etapas, sin salir de una etapa hasta consolidarla**. Ejecución por etapas (cada una con suite+tsc+build verdes y push antes de la siguiente):
+
+- **E1 — Bugs de datos (commit `d94d1ae`):**
+  - **BUG-1 (recreo→1ª Hora TARDANZA):** `registerScan()` ya NO aplica `|| 'slot-1'`. Si el reloj no cae en un bloque CLASE devuelve feedback `no_active_slot` con mensaje útil ("El próximo bloque es X a las Y") vía `buildNoActiveSlotMessage()`/`getNextUpcomingClassSlot()` (una sola fuente de verdad para terminal, representante y aula). El guard también cubre el escáner del representante (`StudentPortalView`). La ruta del aula docente sigue explícita por diseño (el docente ve y elige el bloque).
+  - **BUG-2 (KPI 95% hardcode + presentes por registros):** `getSummary()` → `attendanceRate: number | null` (null = "Sin registros en esta fecha" / "Matrícula activa vacía" en UI) y `totalPresent` = **estudiantes únicos** (Set por studentCode). Tasa = presentes únicos / matrícula activa (consistente con el KPI; clamp 100).
+  - **BUG-3 (`rateLimitMaxPerMin` no implementado):** `checkScanRateLimit()` (cola de timestamps en memoria, lee settings) aplicada en los 3 puntos de escaneo; feedback `rate_limited` con reintentos.
+  - **Hallazgo 6:** columna **Asignatura** en la planilla en pantalla (la data ya existía; el CSV ya la traía).
+  - **Hallazgo 10:** Escape cierra los modales del aula (Delegación era el único sordo; Regla E10).
+- **E2 — QR de Clase (commit `f58773d`, la estrategia estrella del informe sección 5.3):**
+  - Protocolo `CLASE:v1:{grade}:{slotId}:{day}:{expiresAt}:{sig16}` en `crypto.ts` (espejo de IEDSJ:v1, HMAC-SHA256, 16 hex). La materia NO viaja en el token: se resuelve de la asignación vigente al activar → reasignar cátedra no invalida tarjetas impresas.
+  - Anti-replay en 3 capas: (1) firma HMAC, (2) día de la semana validado al activar, (3) la clase activa **muere al fin del bloque** (`ActiveClassContext.expiresAt`); vigencia del token impreso = fin del año escolar (19-dic) → imprimir una vez por período.
+  - Contexto **por dispositivo** (`inas_active_class_v1`, no viaja por la nube): banner compartido `ActiveClassBanner.tsx` en terminal/representante/aula; activación con un toque en el aula (`activateClassDirect`) o escaneando la tarjeta (`setActiveClassFromToken`).
+  - Vinculación: `registerScan` aplica el contexto si el carné es del MISMO grado (contexto = lente, no puerta; grados distintos → ruta clásica). Todo registro lleva `contextSource: 'QR_CLASE'|'HORA'` + `classQrVerified` → badge "QR" en la planilla y columna **"Contexto de Vinculación"** en el CSV (transparencia del informe).
+  - Nueva pestaña **"QR de Clase"** en Horarios: tarjeta A6 por cátedra con QR descargable (PNG) + instrucciones; Escape en el modal.
+- **E3 — Importación masiva de horarios (commit `4dec379`, roadmap #3 del informe):**
+  - `parseScheduleImport()` + `applyScheduleImport()` reemplazan al importador legado `importMasterScheduleCsvOrJson` (código muerto desde su creación, con fallbacks silenciosos peligrosos: bloque no reconocido → primer bloque CLASE; día no reconocido → lunes; grados sin validar). **Nada se adivina**: cada ambigüedad es error de línea con mensaje concreto.
+  - Tolerante: sniff de delimitador (`,` `;` tab), encabezado opcional mapeado por nombre, días con/sin tildes o 1-6, grados normalizados (`10-1`→`10°1`) y validados contra matrícula, bloque por id/nombre/ordinal, docente emparejado (o texto libre), aula opcional.
+  - Flujo Validar → previsualización (tabla con nº de línea) → Aplicar (upsert) con **borrado escopado opcional** (solo los cursos incluidos, jamás global). Modal con Escape.
+- **E4 — Autogestión docente (commit `f883d7b`, roadmap #3.2):**
+  - Botón **"Mis Cátedras"** en el aula: el docente ve/administra SOLO sus cátedras (`getTeacherOwnAssignments`), crea/actualiza (`upsertTeacherOwnAssignment`) y borra las propias (`removeTeacherOwnAssignment` con ConfirmDialog).
+  - Guardas de negocio: celda ajena intocable; cruce de horario bloqueado **solo al ocupar celdas nuevas** (actualizar materia/aula de una celda propia no cambia la ocupación y no debe bloquearse por conflictos heredados del dato — lección de la suite, que lo cazó con las semillas del demo que duplican a prof-1 lunes 1ª hora).
+- **E5 — Seguridad/UX (commit `e4280ba`):**
+  - **BUG-5:** `qrSecret` **aleatorio por colegio en el primer arranque** (`generateRandomSecret()`, persistido inmediatamente; `resetToDemo` NO rota para no romper carnés impresos). En Ajustes queda enmascarado (password) con **ojo** para copiarlo al siguiente dispositivo (los secrets no viajan en el sync, por diseño). El secreto hardcodeado del repo deja de usarse en instalaciones nuevas.
+  - **Hallazgo 7:** validación nativa HTML5 en **español** vía handler global en `main.tsx` (evento `invalid` en captura + reset en `input`/`change`) — cubre todos los formularios presentes y futuros.
+
+**Validación de la ronda completa:** suite local nueva `scripts/verify_ronda19.ts` (111 OK / 0 fallos, secciones A-Q: bugs, token CLASE, activación, vinculación, transparencia, importación, autogestión, secrets), suite Ronda 18 48 OK, `tsc --noEmit` 0 errores, `vite build` limpio. Commits: `d94d1ae` → `f58773d` → `4dec379` → `f883d7b` → `e4280ba` (push a main; Pages redeploya solo; worker NO tocado).
+
+**Pendiente del informe (no implementado, decisión/roadmap):** ítems 5 (AUTH_TOKEN — lo hace el propietario, UI lista), 6 (verificación HMAC server-side en el Worker), 7 (consentimiento Ley 1581 del acudiente), 8 (code splitting — bundle sigue en 2.4 MB), 9 (aria-label masivo: los 100 botones icono-only; los añadidos en Ronda 19 SÍ lo llevan), 12 (Firebase legacy opt-in), 14 (PWA), 15 (reporte semanal al acudiente), 16 (NFC). Tampoco se tocaron los heurísticos de `aiService` (92% de reserva en métricas de IA) por alcance.
+
+**Guía para el siguiente agente (QR de Clase + importación + autogestión):**
+1. Probar QR de Clase en producción: Horarios → QR de Clase → elegir curso/día → "Ver tarjeta QR" → Descargar PNG → escanearla desde el Escáner (o Portal Estudiante → Abrir Escáner de Aula) → debe aparecer el chip "Clase activa" y los escaneos siguientes de ese curso quedan con badge QR en Planilla y con "QR de Clase (firmado)" en el CSV.
+2. Probar importación: Por Día → "Importar CSV" → pegar/adjuntar → Validar → revisar errores línea a línea → Aplicar (con o sin reemplazo escopado).
+3. Probar autogestión: entrar como Docente → Aula → "Mis Cátedras" → añadir/actualizar/quitar; intentar pisar una celda ajena (debe rechazar) y crear un cruce (debe rechazar).
+4. NO introducir fallbacks silenciosos en el importador ni en el parser de tokens: cada ambigüedad es error explícito (Regla 6 del proyecto).
+5. Si se añaden campos de settings sensibles, seguir el patrón password+ojo de SettingsModal y NUNCA enviarlos por `safeSettingsCopy`.
+
+---
+
 ## 🚀 4. Hoja de Roadmap y Pasos a Seguir
 
 ### ⏳ Fase Actual (Inmediata): Validación de campo del Worker desplegado
@@ -596,7 +636,7 @@ El proveedor **Email/Password NO está habilitado** en Firebase Console (`accoun
 4. Validar sincronización bidireccional entre 2 dispositivos simultáneos (PC + Móvil docente).
 5. ~~Decidir si se configura `AUTH_TOKEN`~~ **DECIDIDO (Ronda 18): el propietario lo activará en 1–2 días** — `wrangler secret put AUTH_TOKEN` + mismo valor en Ajustes de cada terminal. Mientras tanto: acceso abierto (riesgo temporal aceptado). Las reglas Firestore endurecidas de Ronda 18 quedaron en el repo **pendientes de deploy** (ver orden de despliegue en Ronda 18 → H2).
 6. ~~Implementar F1→F3→F2→F4→F5~~ **HECHO (Ronda 4)** y verificado en producción (Ronda 7); hallazgos de QA arreglados (Ronda 8).
-7. **Siguiente frente sugerido (decisión del propietario):** (a) prueba de sincronización bidireccional con 2 dispositivos físicos (PC + móvil docente) — único ítem de esta fase que no es automatizable desde el QA; (b) activar `AUTH_TOKEN` del worker (1–2 días, decisión tomada); (c) desplegar reglas Ronda 18 (`deploy_firebase`); (d) activar App Check reCAPTCHA v3 (pasos en Ronda 18) cuando el despliegue esté estable; (e) módulo de Excusas Médicas / Buzón (Fase Futura, tabla `student_excuses` ya prevista en D1); (f) usar la **guía de vaciado de bases de Ronda 18** para la entrega limpia del proyecto.
+7. **Siguiente frente sugerido (decisión del propietario):** (a) prueba de sincronización bidireccional con 2 dispositivos físicos (PC + móvil docente) — único ítem de esta fase que no es automatizable desde el QA; (b) activar `AUTH_TOKEN` del worker (1–2 días, decisión tomada); (c) desplegar reglas Ronda 18 (`deploy_firebase`); (d) activar App Check reCAPTCHA v3 (pasos en Ronda 18) cuando el despliegue esté estable; (e) módulo de Excusas Médicas / Buzón (Fase Futura, tabla `student_excuses` ya prevista en D1 — **el propietario tiene otro encargado gestionando este módulo**); (f) usar la **guía de vaciado de bases de Ronda 18** para la entrega limpia del proyecto; (g) probar en producción el **QR de Clase**, la **Importación CSV** y **Mis Cátedras** implementados en Ronda 19 (guía en 3.Bitácora → Ronda 19); (h) del informe de testing quedan pendientes: verificación HMAC server-side (informe #6), consentimiento Ley 1581 (#7), code splitting (#8), aria-labels masivos (#9), PWA (#14) — priorizarlos tras la validación de campo de Ronda 19.
 
 ### ⏳ Fase Futura Planificada: Módulo de Excusas Médicas / Permisos Anticipados y Buzón Escolar
 - **Propósito:** Permitir a los estudiantes/acudientes reportar inasistencias programadas (citas médicas, incapacidades, calamidades) fuera del horario lectivo (después de la 1:00 p.m. o fines de semana) para proteger su registro de asistencia.
