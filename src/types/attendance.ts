@@ -238,9 +238,10 @@ export interface SchoolSettings {
   openrouterApiKey?: string;
   geminiApiKey?: string;
   aiPrivacyOptOut: boolean; // Cumplimiento de no almacenamiento de datos de estudiantes
-  cloudflareAccountId?: string;
-  cloudflareApiToken?: string;
-  cloudflareD1DatabaseId?: string;
+  // Ronda 16: cloudflareAccountId/cloudflareD1DatabaseId ELIMINADOS del modelo —
+  // el navegador no habla con la API de Cloudflare; D1/KV son exclusivos del Worker
+  // (su configuración vive en cloudflare-worker/wrangler.toml).
+  cloudflareApiToken?: string; // AUTH_TOKEN opcional del Worker (Bearer)
   cloudflareKvNamespaceId?: string;
   cloudflareWorkerUrl?: string;
   cloudflareAutoSync?: boolean;

@@ -375,7 +375,7 @@ export const StudentPortalView: React.FC<StudentPortalViewProps> = ({ onLogout, 
             </button>
           </form>
 
-          <div className="p-3.5 bg-slate-50 dark:bg-black/50 rounded-2xl border border-slate-200/80 dark:border-zinc-800/50/80 text-[11px] text-slate-500 space-y-1">
+          <div className="p-3.5 bg-slate-50 dark:bg-black/50 rounded-2xl border border-slate-200/80 dark:border-zinc-800/50 text-[11px] text-slate-500 space-y-1">
             <div className="flex items-center gap-1.5 font-bold text-slate-700 dark:text-slate-300">
               <ShieldCheck className="w-3.5 h-3.5 text-emerald-600" />
               <span>Acceso Seguro y Cifrado</span>

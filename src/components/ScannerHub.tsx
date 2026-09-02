@@ -132,8 +132,8 @@ export const ScannerHub: React.FC<ScannerHubProps> = ({
       <div className="absolute bottom-0 left-0 w-80 h-80 bg-cyan-500/10 rounded-full blur-3xl pointer-events-none -ml-20 -mb-20" />
 
       {/* Tab Navigation */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-6 pb-4 border-b border-slate-100 dark:border-zinc-800/50/80 relative z-10">
-        <div className="grid grid-cols-3 sm:flex items-center gap-1.5 p-1.5 bg-slate-100/90 dark:bg-black/80 rounded-2xl border border-slate-200/80 dark:border-zinc-800/50/80 w-full sm:w-auto shadow-inner">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-6 pb-4 border-b border-slate-100 dark:border-zinc-800/50 relative z-10">
+        <div className="grid grid-cols-3 sm:flex items-center gap-1.5 p-1.5 bg-slate-100/90 dark:bg-black/80 rounded-2xl border border-slate-200/80 dark:border-zinc-800/50 w-full sm:w-auto shadow-inner">
           <button
             onClick={() => setActiveTab('usb')}
             id="tab-usb-scanner"
@@ -175,7 +175,7 @@ export const ScannerHub: React.FC<ScannerHubProps> = ({
         </div>
 
         {/* Live Status indicator & Device Pill */}
-        <div className="flex items-center justify-between sm:justify-start gap-2 text-xs font-mono text-slate-600 dark:text-slate-400 bg-slate-100/90 dark:bg-black/80 px-3.5 py-1.5 rounded-full border border-slate-200/80 dark:border-zinc-800/50/80 self-stretch sm:self-auto shadow-xs">
+        <div className="flex items-center justify-between sm:justify-start gap-2 text-xs font-mono text-slate-600 dark:text-slate-400 bg-slate-100/90 dark:bg-black/80 px-3.5 py-1.5 rounded-full border border-slate-200/80 dark:border-zinc-800/50 self-stretch sm:self-auto shadow-xs">
           <div className="flex items-center gap-2">
             <span className="w-2 h-2 rounded-full bg-emerald-500 animate-ping" />
             <span className="font-semibold text-emerald-700 dark:text-emerald-400">LISTO PARA ESCANEO</span>
@@ -233,7 +233,7 @@ export const ScannerHub: React.FC<ScannerHubProps> = ({
                 </div>
 
                 {/* Modern Toggles Row */}
-                <div className="bg-slate-100/80 dark:bg-black/80 p-3 rounded-xl border border-slate-200 dark:border-zinc-800/50/80 space-y-2.5">
+                <div className="bg-slate-100/80 dark:bg-black/80 p-3 rounded-xl border border-slate-200 dark:border-zinc-800/50 space-y-2.5">
                   <ToggleSwitch
                     checked={isUsbModeActive}
                     onChange={setIsUsbModeActive}

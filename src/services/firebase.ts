@@ -5,6 +5,7 @@ import {
   signInWithPopup, 
   signInWithEmailAndPassword, 
   createUserWithEmailAndPassword, 
+  signInAnonymously,
   signOut, 
   onAuthStateChanged,
   User as FirebaseUser
@@ -140,6 +141,26 @@ export interface FirebaseUserProfile {
 }
 
 export class FirebaseService {
+  /**
+   * Ronda 16 (auditoría): intenta autenticar el terminal de forma ANÓNIMA ante
+   * Firebase. Hoy el proyecto NO tiene el proveedor Anonymous habilitado (verificado
+   * por REST: accounts:signUp → ADMIN_ONLY_OPERATION), así que esto falla en silencio
+   * y la app sigue funcionando sin sesión (las reglas operativas lo permiten). Cuando
+   * el propietario habilite Anonymous en Firebase Console, este método empezará a
+   * funcionar sin cambios de código y permitirá endurecer firestore.rules a
+   * `request.auth != null`. Fire-and-forget: JAMÁS bloquea el arranque ni el sync.
+   */
+  static async ensureAnonymousAuth(): Promise<void> {
+    try {
+      const auth = getFirebaseAuth();
+      if (auth?.currentUser) return; // ya hay sesión (Google/email/anónima)
+      await signInAnonymously(auth);
+      console.info('[Firebase] Sesión anónima del terminal establecida.');
+    } catch {
+      // Proveedor Anonymous no habilitado aún — comportamiento esperado hoy.
+    }
+  }
+
   /**
    * Sign in with Google Popup
    */
@@ -287,9 +308,16 @@ export class FirebaseService {
       const db = getFirebaseFirestore();
       let count = 0;
 
-      // 1. Settings
+      // 1. Settings (sin secretos — ver saveSchoolSettings)
+      const {
+        qrSecret: _qrSecret,
+        sessionSecret: _sessionSecret,
+        cloudflareApiToken: _cfToken,
+        customAiApiKey: _aiKey,
+        ...safeSettings
+      } = data.settings;
       await setDoc(doc(db, 'school_settings', 'main'), {
-        ...data.settings,
+        ...safeSettings,
         lastCloudSync: new Date().toISOString()
       }, { merge: true });
       count++;
@@ -342,33 +370,24 @@ export class FirebaseService {
   /**
    * Save School Settings to Firestore (Cloud-backed persistence across devices and sessions)
    */
-  
-  static async wipeProductionData(): Promise<boolean> {
-    try {
-      const db = getFirebaseFirestore();
-      
-      // Delete all students
-      const studentsSnap = await getDocs(collection(db, 'students'));
-      const studentPromises = studentsSnap.docs.map(d => deleteDoc(d.ref));
-      
-      // Delete all attendance records
-      const recordsSnap = await getDocs(collection(db, 'attendance_records'));
-      const recordsPromises = recordsSnap.docs.map(d => deleteDoc(d.ref));
-      
-      await Promise.all([...studentPromises, ...recordsPromises]);
-      return true;
-    } catch (e) {
-      console.error('Firebase wipe failed:', e);
-      return false;
-    }
-  }
 
   static async saveSchoolSettings(settings: SchoolSettings): Promise<void> {
     try {
       const db = getFirebaseFirestore();
       const docRef = doc(db, 'school_settings', 'main');
+      // Ronda 16 (auditoría): NUNCA subir secretos a Firestore. Antes se subían
+      // qrSecret, sessionSecret, tokens de Cloudflare y la clave IA personal del admin.
+      // La nube solo necesita valores de ruta/configuración; los secretos viven y
+      // permanecen en el localStorage del dispositivo que los generó.
+      const {
+        qrSecret: _qrSecret,
+        sessionSecret: _sessionSecret,
+        cloudflareApiToken: _cfToken,
+        customAiApiKey: _aiKey,
+        ...safeSettings
+      } = settings;
       await setDoc(docRef, {
-        ...settings,
+        ...safeSettings,
         updatedAt: serverTimestamp(),
         lastCloudSync: new Date().toISOString()
       }, { merge: true });
@@ -380,15 +399,12 @@ export class FirebaseService {
         const userDocRef = doc(db, 'users', currentUser.uid);
         await setDoc(userDocRef, {
           savedSettings: {
+            // Ronda 16: solo valores de ruta — sin tokens ni claves personales
             cloudflareWorkerUrl: settings.cloudflareWorkerUrl,
-            cloudflareApiToken: settings.cloudflareApiToken,
-            cloudflareD1DatabaseId: settings.cloudflareD1DatabaseId,
-            cloudflareKvNamespaceId: settings.cloudflareKvNamespaceId,
             schoolCode: settings.schoolCode,
             schoolName: settings.schoolName,
             aiProvider: settings.aiProvider,
-            aiModel: settings.aiModel,
-            customAiApiKey: settings.customAiApiKey
+            aiModel: settings.aiModel
           },
           lastActive: serverTimestamp()
         }, { merge: true });

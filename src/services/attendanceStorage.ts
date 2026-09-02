@@ -1860,24 +1860,6 @@ export class AttendanceStorageService {
     });
   }
 
-  static wipeAllForProduction(): void {
-    // Completely wipe all student, teacher, schedule, and attendance data
-    // Retain only institutional settings. We set them to '[]' to prevent auto-seeding mock data on next read.
-    try {
-      localStorage.setItem(STUDENTS_KEY, '[]');
-      localStorage.setItem(ATTENDANCE_KEY, '[]');
-      localStorage.setItem(OFFLINE_QUEUE_KEY, '[]');
-      localStorage.setItem('inas_teachers_v1', '[]');
-      localStorage.setItem('inas_schedule_assignments_v1', '[]');
-      localStorage.setItem('inas_schedule_slots_v1', '[]');
-      localStorage.setItem('inas_custom_templates_v1', '[]');
-      localStorage.setItem('inas_student_schedules_v1', '{}');
-      localStorage.setItem('inas_day_closed_v1', '{}');
-    } catch (e) {
-      console.error('Failed to wipe storage:', e);
-    }
-  }
-
   static resetToDemo(): void {
     // Backup before resetting
     try {

@@ -41,6 +41,7 @@ import { useTheme } from './context/ThemeContext';
 import { SchoolSettings, Student, Teacher, UserRole } from './types/attendance';
 import { AttendanceStorageService } from './services/attendanceStorage';
 import { CloudflareSyncService } from './services/cloudflareSync';
+import { FirebaseService } from './services/firebase';
 
 export type ActiveTab = 'scan' | 'students' | 'teachers' | 'schedules' | 'cards' | 'attendance' | 'ai-grades' | 'teacher' | 'portal';
 
@@ -64,6 +65,7 @@ export default function App() {
 
   useEffect(() => {
     AttendanceStorageService.ensureActiveTemplateConsistency(); // Ronda 8 (B4): realinea plantilla activa vs slots
+    FirebaseService.ensureAnonymousAuth().catch(() => {}); // Ronda 16: fire-and-forget, nunca bloquea
     AttendanceStorageService.initCloudSettingsSync();
     CloudflareSyncService.initAutoSync();
     const unsubscribe = AttendanceStorageService.subscribe(() => {
@@ -530,7 +532,7 @@ export default function App() {
       )}
 
       {/* Modern Compact Footer */}
-      <footer className="border-t border-slate-200 dark:border-zinc-800/50/80 py-4 bg-white/50 dark:bg-black/50 text-[11px] text-slate-500">
+      <footer className="border-t border-slate-200 dark:border-zinc-800/50 py-4 bg-white/50 dark:bg-black/50 text-[11px] text-slate-500">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 flex flex-col sm:flex-row items-center justify-between gap-2">
           <div>
             <strong>{settings.schoolName}:</strong> Terminal de asistencia por lector óptico y carné escolar CR80 con firma HMAC-SHA256.

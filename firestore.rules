@@ -1,73 +1,81 @@
 rules_version = '2';
+
+/**
+ * Ronda 16 (auditoría integral, 02/09/2026) — Reglas de Firestore RE-endurecidas.
+ *
+ * La Ronda 9 del agente anterior abrió TODA la base de datos con
+ * `allow read, write: if true` (incluida la catch-all `/{document=**}` y una
+ * colección /test pública), dejando estudiantes, docentes y asistencias del INAS
+ * legibles/escritibles por CUALQUIER persona de internet. Esto se revierte aquí.
+ *
+ * ESTADO ACTUAL (sin regresión funcional):
+ *  - La app sincroniza sin sesión Firebase (terminales offline-first) y el proyecto
+ *    aún NO tiene Firebase Authentication → Anonymous habilitado (verificado por REST:
+ *    accounts:signUp responde ADMIN_ONLY_OPERATION).
+ *  - Por eso las 5 colecciones operativas siguen accesibles, pero LIMITADAS a
+ *    exactamente las colecciones que usa la app (auditado en src/services/firebase.ts).
+ *  - `users` vuelve a ser owner-only (solo se escribe en flujos autenticados).
+ *  - Todo lo demás queda DENEGADO por defecto (catch-all explícito en deny).
+ *
+ * ENDURECIMIENTO DEFINITIVO (cuando el propietario habilite "Anonymous" en
+ * Firebase Console → Authentication → Sign-in method):
+ *  1. El frontend ya llama FirebaseService.ensureAnonymousAuth() al arrancar (Ronda 16).
+ *  2. Reemplazar el `if true` de las 5 colecciones operativas por
+ *     `if isAuthenticated()` y borrar la nota. Sin consola, NO aplicar (rompería sync).
+ */
 service cloud.firestore {
   match /databases/{database}/documents {
 
-    // Helper functions for user role validation
     function isAuthenticated() {
       return request.auth != null;
     }
 
-    function isOwner(userId) {
-      return isAuthenticated() && request.auth.uid == userId;
-    }
-
-    // User profiles collection
+    // Perfiles de usuario: SOLO el dueño autenticado. (Antes: público total.)
     match /users/{userId} {
-      allow read: if true;
-      allow write: if true;
+      allow read, create, update: if isAuthenticated() && request.auth.uid == userId;
+      allow delete: if false;
     }
 
-    // School configuration and settings
+    // ===== Colecciones operativas del colegio (las únicas que usa la app) =====
+    // Abiertas POR NECESIDAD OPERATIVA actual (sync sin sesión); cerradas a
+    // colecciones inexistentes. Ver encabezado para el endurecimiento definitivo.
+
+    // Configuración institucional (doc 'main'; los secretos YA NO se suben — Ronda 16)
     match /school_settings/{settingId} {
       allow read: if true;
       allow write: if true;
     }
 
-    // Attendance records
-    match /attendance_records/{recordId} {
-      allow read: if true;
-      allow write: if true;
-    }
-
-    // Students collection
+    // Estudiantes (carnés, fotos ya comprimidas client-side)
     match /students/{studentId} {
       allow read: if true;
       allow write: if true;
     }
 
-    // Teachers collection
+    // Docentes
     match /teachers/{teacherId} {
       allow read: if true;
       allow write: if true;
     }
 
-    // Schedule assignments
+    // Registros de asistencia
+    match /attendance_records/{recordId} {
+      allow read: if true;
+      allow write: if true;
+    }
+
+    // Asignaciones docente-materia-bloque
     match /schedule_assignments/{assignmentId} {
       allow read: if true;
       allow write: if true;
     }
 
-    // Schedule slots
-    match /schedule_slots/{slotId} {
-      allow read: if true;
-      allow write: if true;
-    }
-
-    // Custom templates
-    match /custom_templates/{templateId} {
-      allow read: if true;
-      allow write: if true;
-    }
-
-    // Test collection
-    match /test/{docId} {
-      allow read, write: if true;
-    }
-
-    // Default rule for all documents
+    // ===== TODO LO DEMÁS: DENEGADO =====
+    // Antes la catch-all permitía read/write público sobre cualquier colección
+    // nueva o interna (y existía una /test pública). Firestore ya niega por
+    // defecto; se declara explícito como política de mínima superficie.
     match /{document=**} {
-      allow read, write: if true;
+      allow read, write: if false;
     }
   }
 }
-

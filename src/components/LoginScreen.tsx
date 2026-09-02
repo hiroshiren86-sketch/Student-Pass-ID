@@ -19,7 +19,6 @@ import {
 import { UserRole, Teacher, Student } from '../types/attendance';
 import { AttendanceStorageService } from '../services/attendanceStorage';
 import { FirebaseService } from '../services/firebase';
-import { DevFloatingMenu } from './DevFloatingMenu';
 
 interface LoginScreenProps {
   onLoginSuccess: (role: UserRole, userPayload?: { teacher?: Teacher; student?: Student; username: string; email?: string; photoURL?: string }) => void;
@@ -309,7 +308,7 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onLoginSuccess }) => {
                     className={`w-full p-4 rounded-2xl border text-left transition-all flex items-center justify-between group ${
                       isSelected
                         ? r.activeBorder
-                        : 'border-slate-200 dark:border-zinc-800/50/80 bg-white dark:bg-zinc-950 hover:border-slate-300 dark:hover:border-slate-700'
+                        : 'border-slate-200 dark:border-zinc-800/50 bg-white dark:bg-zinc-950 hover:border-slate-300 dark:hover:border-slate-700'
                     }`}
                   >
                     <div className="flex items-center gap-3.5">
@@ -620,9 +619,6 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onLoginSuccess }) => {
           </div>
         </div>
       </div>
-
-      {/* ZONA DEBUG: DevFloatingMenu Inyectado */} 
-      <DevFloatingMenu onLoginSuccess={onLoginSuccess} />
     </div>
   );
 };

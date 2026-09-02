@@ -377,7 +377,7 @@ export const ScanHubView: React.FC<ScanHubViewProps> = ({ onScanSuccess }) => {
 
       {/* Recent Scans Strip */}
       <div className="p-5 sm:p-6 rounded-3xl bg-white/80 dark:bg-zinc-950/80 border border-slate-200/80 dark:border-zinc-800/50 backdrop-blur-xl shadow-xs space-y-3.5">
-        <div className="flex items-center justify-between border-b border-slate-100 dark:border-zinc-800/50/80 pb-3">
+        <div className="flex items-center justify-between border-b border-slate-100 dark:border-zinc-800/50 pb-3">
           <div className="flex items-center gap-2">
             <UserCheck className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />
             <h3 className="text-xs font-bold uppercase tracking-wider text-slate-800 dark:text-slate-200">
@@ -394,7 +394,7 @@ export const ScanHubView: React.FC<ScanHubViewProps> = ({ onScanSuccess }) => {
             {recentScans.map((record) => (
               <div 
                 key={record.id} 
-                className="p-3 rounded-2xl bg-slate-50 dark:bg-black/70 border border-slate-200/80 dark:border-zinc-800/50/80 flex items-center justify-between gap-3 shadow-xs"
+                className="p-3 rounded-2xl bg-slate-50 dark:bg-black/70 border border-slate-200/80 dark:border-zinc-800/50 flex items-center justify-between gap-3 shadow-xs"
               >
                 <div className="min-w-0">
                   <p className="font-bold text-xs text-slate-900 dark:text-white truncate">

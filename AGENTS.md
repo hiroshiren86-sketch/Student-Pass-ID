@@ -447,7 +447,53 @@ Los hallazgos B1–B6/O1/O2 recibieron **luz verde explícita del propietario** 
 
 ---
 
-### 🔒 Ronda 9 (02/09/2026): Corrección de Permisos en Firestore y Despliegue de Reglas de Seguridad
+### 🛡️ Ronda 16 (02/09/2026): AUDITORÍA INTEGRAL de las Rondas 9–15 — limpieza, seguridad y re-arquitectura de sync
+
+**Mandato del propietario:** "haz un pull… revisa el agent.md, todo lo que el agente ese estuvo haciendo… me parece que hizo una embarrada… no siguió las reglas… implementó fallbacks que nunca le dije… puso funciones que no hacen nada… quiero una revisión integral y exhaustiva… investiga en internet para mejorar lo que él hizo o reemplazarlo por una solución más profesional, limpia… verifica esos fallbacks y elimínalos… ejecución continua, automejorativa, hasta estándares de 2026."
+
+**Dictamen de la auditoría (commit `f5c48fd`, Rondas 9–15 del otro agente):** mezcló 2 aciertos reales (SyncOverlay, compresión de imágenes al subir) con graves regresiones de seguridad, fallbacks con éxito falso, código muerto/DEV en producción y ~27 scripts residuales cometidos a la raíz del repo. Se corrigió de raíz.
+
+#### 🔴 Críticos corregidos
+1. **Éxito falso en Push ("Local Cloudflare Cache"):** si el Worker fallaba, el push guardaba el payload en `localStorage` y reportaba **"Sincronización completada"** → el propietario creía que los datos estaban en la nube cuando solo estaban en el dispositivo. **ELIMINADO** (investigación: el anti-patrón "fallar en silencio / reportar éxito falso" viola las guías de manejo de errores y de confianza de datos; el fallo debe ser visible y accionable). Ahora: push/pull SOLO vía Worker; si falla, el SyncOverlay muestra el error exacto.
+2. **API REST de D1 desde el navegador con token D1:Edit** (push, pull y wipe usaban `api.cloudflare.com` desde el cliente con SQL por interpolación `'${schoolCode}'`): las credenciales de una API NUNCA deben vivir en el frontend (Cloudflare Community/docs y OWASP: "anyone with the token can perform the authorized actions"; el patrón correcto es un proxy backend — aquí, el propio Worker). **ELIMINADOS los 3 fallbacks REST**; el Worker (desplegado y sincronizado con GitHub vía wrangler.toml) es la **única ruta** a D1/KV. Campos "Account ID" y "API Token D1:Edit" retirados de Ajustes.
+3. **`firestore.rules` con `allow read, write: if true` GLOBAL** (Ronda 9 desplegada a producción): toda la base (estudiantes, docentes, asistencias, perfiles de usuario, y cualquier colección futura por la catch-all `/{document=**}`) quedó pública en internet, más una colección `/test` pública. **Re-endurecidas:** `users` owner-only; las 5 colecciones operativas explícitas (auditadas contra `firebase.ts`: `school_settings`, `students`, `teachers`, `attendance_records`, `schedule_assignments`); catch-all en **DENY** explícito; `/test`, `schedule_slots` y `custom_templates` fuera de las reglas (no se sincronizan por Firestore). ⚠️ **PENDIENTE URGENTE — desplegar las reglas** (ver abajo).
+4. **Borrado destructivo de la nube desde un menú DEV flotante** en la pantalla de Login (`DevFloatingMenu` → `wipeProductionData()` en Firestore + `wipeCloudflareData()` con `DELETE FROM students/attendance_records/sync_snapshots` en D1): riesgo de pérdida total de datos en producción por 2 clics. **ELIMINADO TODO** (componente, import, métodos de servicio y `wipeAllForProduction()`). Queda `resetToDemo()` existente para el ciclo demo.
+5. **Secretos viajando a la nube** (deuda de Ronda 4 cerrada): el snapshot push subía `qrSecret`, `sessionSecret`, `cloudflareApiToken` y la clave IA personal a D1/KV, y `saveSchoolSettings`/`backupAllToFirestore` los subían a Firestore. Ahora se **expurgan siempre** del payload (los secretos viven solo en el localStorage del dispositivo que los generó).
+
+#### 🟡 Medios corregidos
+6. **Truncado silencioso de fotos (700 000 chars)** en sync (se descartaba la foto sin avisar): reemplazado por **saneo explícito** — las fotos heredadas sin comprimir se **comprimen on-the-fly** antes de viajar (y se persisten comprimidas: auto-sanación del dispositivo); si una foto es irrecuperable se omite y el resultado del push lo **dice textualmente** ("⚠ N foto(s) omitidas…").
+7. **`imageCompressor.ts` modernizado a estándar 2025-2026 (MDN):** `createImageBitmap(blob, { imageOrientation: 'from-image' })` corrige la orientación EXIF (fotos de celular giradas), `OffscreenCanvas` cuando existe, fallback `<img>` legacy; nuevo `compressDataUrl()` para fotos legacy; `compressImageFile()` conserva su firma (los 3 llamadores existentes no cambian).
+8. **~27 scripts residuales eliminados del repo** (`fix_*.cjs`, `patch_*.cjs/js`, `dummy.cjs`, `wait.cjs`, `update_theme.cjs`) — eran codemods de una sola ejecución del otro agente; jamás deben commitearse (usar y borrar fuera del repo).
+9. **Clases Tailwind inválidas** `dark:border-zinc-800/50/80` (doble opacidad — no renderizan el borde) corregidas a `/50` en 6 archivos.
+10. **Campos muertos del modelo** (`cloudflareAccountId`, `cloudflareD1DatabaseId`) eliminados de `SchoolSettings` y defaults; el botón Pull/Push ya no se deshabilita por combinaciones de credenciales (si falta la URL del Worker, el overlay explica qué configurar).
+
+#### ✅ Conservado (auditado y aprobado)
+- `SyncOverlay.tsx` (feedback visual de sync con logos oficiales) — bien construido; se integra como única superficie de resultado de sync.
+- Compresión de fotos al subir (Portal, Gestión de Estudiantes, importador) — idea correcta frente al límite de 1 MB/doc de Firestore; solo se modernizó el util.
+- Tema AMOLED/zinc de Ronda 13 y ajustes responsive de tablas — consistentes; se corrigieron solo las clases rotas.
+
+#### 🔬 Investigación aplicada (fuentes 2025-2026)
+- Firebase docs "Get started with Cloud Firestore Security Rules" (auth + rules obligatorios; jamás confiar en el cliente).
+- Cloudflare Fundamentals "Create API token" + Cloudflare Community "Locking API calls from frontend" (el token en JS de navegador es visible por diseño; patrón correcto: proxy Worker).
+- Cloudflare Worker `AUTH_TOKEN` (Bearer) — el worker YA lo implementa (`verifyAuth`); el cliente ahora envía `Authorization: Bearer <token>` de forma uniforme en health/push/pull. **La doc oficial de Cloudflare NO exige token para este caso**; es decisión del propietario (recomendado para producción: `wrangler secret put AUTH_TOKEN` en el Worker y el mismo valor en Ajustes → "Token de Acceso del Worker").
+- MDN `createImageBitmap` (imageOrientation/from-image por defecto en implementaciones modernas) y guía Cloudinary 2026 de compresión canvas (normalizar EXIF antes de dibujar).
+
+#### ✔️ Validación (cero regresiones)
+- `tsc --noEmit`: **27 errores = los mismos 27 pre-existentes** (diff ordenado contra baseline; solo desplazamiento de 3 líneas en `ScheduleBuilderView`).
+- `vite build`: limpio (8.1 s).
+- Suite bun `verify_ronda16_sync.ts`: **18/18 OK** (fallo honesto sin URL/red caída; sin shadow-sync; sin api.cloudflare.com; foto gigante omitida con aviso explícito; secretos fuera del payload; Bearer AUTH_TOKEN uniforme; token no persistido en settings del snapshot).
+- Suite bun `verify_ronda8.ts` (Ronda 8): **12/12 OK** — sin regresión de B4/B5.
+
+#### ⚠️ PENDIENTE URGENTE (acción del propietario — 5 minutos)
+1. **Desplegar las reglas endurecidas de Firestore** (el archivo del repo ya está listo, pero Firebase tiene AÚN desplegadas las reglas abiertas de la Ronda 9 — la base sigue pública hasta ejecutar esto):
+   - Opción A (consola): Firebase Console → Firestore Database → Rules → copiar el contenido de `firestore.rules` → Publicar.
+   - Opción B (CLI en una sesión con credenciales): `firebase deploy --only firestore:rules` (requiere `firebase.json` + login).
+2. **Decidir AUTH_TOKEN** del Worker (recomendado antes del Día Cero con datos reales): `wrangler secret put AUTH_TOKEN` y pegar el mismo valor en Ajustes → Token de Acceso del Worker en cada terminal.
+3. **Habilitar Anonymous Auth** (Firebase Console → Authentication → Sign-in method → Anonymous) para que `ensureAnonymousAuth()` (ya integrado, fire-and-forget) empiece a autenticar terminales; entonces se puede cambiar el `if true` de las 5 colecciones operativas por `if isAuthenticated()`.
+
+---
+
+### 🔒 Ronda 9 (02/09/2026): Corrección de Permisos en Firestore y Despliegue de Reglas de Seguridad — ⚠️ REGISTRO HISTÓRICO del otro agente: sus reglas abiertas fueron REVERTIDAS en Ronda 16
 - **Diagnóstico del Error:** Se presentó el error de sincronización `Error syncing to Firestore: Missing or insufficient permissions` al intentar respaldar o sincronizar colecciones en Firebase Firestore (`school_settings`, `students`, `teachers`, `attendance_records`, `schedule_assignments`).
 - **Causa Raíz:**
   1. `firestore.rules` condicionaba las operaciones de escritura a `request.auth != null` e invocaba `getUserData()` en `/users/$(request.auth.uid)` que fallaba cuando el documento no existía o cuando las terminales de portería/aulas operan en modo local/offline sin sesión Firebase Auth activa.

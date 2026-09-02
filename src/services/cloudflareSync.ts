@@ -1,5 +1,6 @@
 import { Student, Teacher, AttendanceRecord, ClassScheduleAssignment, SchoolSettings } from '../types/attendance';
 import { AttendanceStorageService } from './attendanceStorage';
+import { compressDataUrl, PHOTO_DATAURL_SOFT_LIMIT } from '../utils/imageCompressor';
 
 export interface CloudflareSyncResult {
   success: boolean;
@@ -7,10 +8,32 @@ export interface CloudflareSyncResult {
   syncedRecordsCount: number;
   syncedStudentsCount: number;
   message: string;
-  target: 'Cloudflare D1' | 'Cloudflare KV' | 'Cloudflare Worker' | 'Local Cloudflare Cache';
+  target: 'Cloudflare Worker';
   details?: any;
 }
 
+/**
+ * Ronda 16 (auditoría integral): arquitectura de sincronización SIMPLIFICADA y SEGURA.
+ *
+ * ANTES (Rondas 10-15 del agente anterior — eliminado):
+ *  - Push/pull con FALLBACK a la API REST de D1 desde el navegador (token D1:Edit
+ *    expuesto en el cliente + SQL por interpolación) — anti-patrón documentado:
+ *    las credenciales de API NUNCA deben vivir en el frontend; el backend (Worker)
+ *    es el único que habla con la base de datos.
+ *  - Fallback "Local Cloudflare Cache" que reportaba ÉXITO guardando en localStorage
+ *    sin haber salido del dispositivo (éxito falso).
+ *  - `wipeCloudflareData()` con DELETE FROM ... ejecutado desde el navegador.
+ *  - Truncado SILENCIOSO de fotos grandes.
+ *
+ * AHORA (única ruta canónica):
+ *  Cliente → Cloudflare Worker (URL configurable, Authorization: Bearer AUTH_TOKEN opcional)
+ *  El Worker (sincronizado con GitHub vía wrangler.toml) es el ÚNICO con acceso a D1/KV.
+ *  Sin token configurado en el Worker, el acceso queda abierto (decisión pendiente del
+ *  propietario; ver AGENTS.md). Las fotos grandes se COMPRIMEN on-the-fly antes de
+ *  viajar; si una foto es irrecuperable se omite con AVISO EXPLÍCITO en el resultado
+ *  (nunca en silencio). Los secretos locales (qrSecret, sessionSecret, tokens, clave IA)
+ *  NUNCA viajan en el payload.
+ */
 export class CloudflareSyncService {
   private static autoSyncTimer: any = null;
 
@@ -31,6 +54,22 @@ export class CloudflareSyncService {
         });
       }, intervalMs);
     }
+  }
+
+  /** URL base del Worker ya normalizada (sin espacios ni slashes finales) */
+  private static getWorkerBaseUrl(): string {
+    const settings = AttendanceStorageService.getSettings();
+    return (settings.cloudflareWorkerUrl || '').trim().replace(/\/+$/, '');
+  }
+
+  /** Headers comunes para el Worker (Bearer AUTH_TOKEN opcional) */
+  private static workerHeaders(): Record<string, string> {
+    const settings = AttendanceStorageService.getSettings();
+    const token = (settings.cloudflareApiToken || '').trim();
+    return {
+      'Content-Type': 'application/json',
+      ...(token ? { Authorization: `Bearer ${token}` } : {})
+    };
   }
 
   /**
@@ -74,270 +113,169 @@ export class CloudflareSyncService {
   }
 
   /**
-   * Ejecuta la sincronización de SUBIDA (Push) completa de la base de datos hacia Cloudflare (D1 / KV / Worker)
+   * Ronda 16: sanea las fotos de estudiantes ANTES del push. Las fotos heredadas sin
+   * comprimir (>500 KB de dataURL) se comprimen on-the-fly y se PERSISTEN comprimidas
+   * (auto-sanación del dispositivo). Si una foto es irrecuperable se omite y se informa
+   * en el mensaje del resultado — jamás en silencio.
    */
-  
-  static async wipeCloudflareData(): Promise<boolean> {
-    const settings = AttendanceStorageService.getSettings();
-    const schoolCode = settings.schoolCode || 'INAS_2026';
+  private static async sanitizeStudentsForSync(students: Student[]): Promise<{ clean: Student[]; omitted: string[] }> {
+    const omitted: string[] = [];
+    const clean: Student[] = [];
 
-    // Try to delete via D1 REST API if available
-    if (settings.cloudflareAccountId && settings.cloudflareApiToken && settings.cloudflareD1DatabaseId) {
-      try {
-        const d1Endpoint = `https://api.cloudflare.com/client/v4/accounts/${settings.cloudflareAccountId}/d1/database/${settings.cloudflareD1DatabaseId}/query`;
-        
-        await fetch(d1Endpoint, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            Authorization: `Bearer ${settings.cloudflareApiToken}`
-          },
-          body: JSON.stringify({ sql: `DELETE FROM students` })
-        });
-        
-        await fetch(d1Endpoint, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            Authorization: `Bearer ${settings.cloudflareApiToken}`
-          },
-          body: JSON.stringify({ sql: `DELETE FROM attendance_records` })
-        });
-        
-        await fetch(d1Endpoint, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            Authorization: `Bearer ${settings.cloudflareApiToken}`
-          },
-          body: JSON.stringify({ sql: `DELETE FROM sync_snapshots WHERE school_code = '${schoolCode}'` })
-        });
-        
-      } catch (err) {
-        console.warn('Failed to wipe D1 via REST API:', err);
+    for (const st of students) {
+      const photo = st.photoUrl || '';
+      if (!photo || photo.length <= PHOTO_DATAURL_SOFT_LIMIT) {
+        clean.push(st);
+        continue;
+      }
+      // Foto heredada sin comprimir: comprimir, persistir y usar la versión liviana
+      const compressed = await compressDataUrl(photo);
+      if (compressed) {
+        const fixed = { ...st, photoUrl: compressed };
+        AttendanceStorageService.updateStudent(st.code, { photoUrl: compressed });
+        clean.push(fixed);
+      } else {
+        const { photoUrl: _drop, ...rest } = st;
+        clean.push(rest as Student);
+        omitted.push(`${st.firstName} ${st.lastName} (${st.code})`);
       }
     }
-    
-    // Fallback: just push an empty snapshot
-    try {
-      await this.performCloudflareSync();
-      return true;
-    } catch {
-      return false;
-    }
+
+    return { clean, omitted };
   }
 
+  /** Copia de settings SIN secretos para el snapshot (deuda de seguridad de Ronda 4 cerrada) */
+  private static safeSettingsCopy(settings: SchoolSettings): SchoolSettings {
+    const {
+      qrSecret: _qr,
+      sessionSecret: _ss,
+      cloudflareApiToken: _tok,
+      customAiApiKey: _key,
+      ...safe
+    } = settings;
+    return safe as SchoolSettings;
+  }
+
+  /**
+   * Ejecuta la sincronización de SUBIDA (Push) completa hacia el Cloudflare Worker (D1 / KV)
+   */
   static async performCloudflareSync(): Promise<CloudflareSyncResult> {
     const settings = AttendanceStorageService.getSettings();
-    let students = AttendanceStorageService.getStudents();
-    // Strip large photoUrls to keep payload fast and avoid D1 limits
-    students = students.map(st => {
-      if (st.photoUrl && st.photoUrl.length > 700000) {
-        const { photoUrl, ...rest } = st;
-        return rest as any;
-      }
-      return st;
-    });
-    const teachers = AttendanceStorageService.getTeachers();
-    const records = AttendanceStorageService.getAllAttendance();
-    const assignments = AttendanceStorageService.getScheduleAssignments();
-    const slots = AttendanceStorageService.getScheduleSlots();
-
-    const payload = {
-      schoolCode: settings.schoolCode || 'INAS_2026',
-      schoolName: settings.schoolName || 'Institución Educativa Antonia Santos',
-      syncedAt: new Date().toISOString(),
-      studentsCount: students.length,
-      recordsCount: records.length,
-      data: {
-        settings,
-        students,
-        teachers,
-        records: records.slice(0, 500), // Últimos 500 registros
-        assignments,
-        slots,
-        // Ronda 4 (F1/F5): plantillas CUSTOM de Rectoría + horarios personales opcionales.
-        // El worker guarda data verbatim y el pull destructura de forma tolerante →
-        // clientes viejos ignoran estos campos sin romperse.
-        customTemplates: AttendanceStorageService.getCustomTemplates(),
-        studentSchedules: AttendanceStorageService.getAllStudentSchedules()
-      }
-    };
-
+    const baseUrl = this.getWorkerBaseUrl();
     const timestamp = new Date().toLocaleTimeString('es-CO', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
 
-    // 1. Si el usuario configuró una URL de Cloudflare Worker
-    if (settings.cloudflareWorkerUrl && settings.cloudflareWorkerUrl.trim()) {
-      try {
-        const cleanBaseUrl = settings.cloudflareWorkerUrl.trim().replace(/\/+$/, '');
-        const pushUrl = cleanBaseUrl.endsWith('/api/sync/push') ? cleanBaseUrl : `${cleanBaseUrl}/api/sync/push`;
-
-        const response = await fetch(pushUrl, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            ...(settings.cloudflareApiToken ? { Authorization: `Bearer ${settings.cloudflareApiToken.trim()}` } : {})
-          },
-          body: JSON.stringify(payload)
-        });
-
-        if (!response.ok) {
-          const errText = await response.text();
-          throw new Error(`Worker HTTP ${response.status}: ${errText}`);
-        }
-
-        const data = await response.json();
-        this.updateLastSync(timestamp);
-        return {
-          success: true,
-          timestamp,
-          syncedRecordsCount: records.length,
-          syncedStudentsCount: students.length,
-          message: data.message || `Sincronización en vivo con Cloudflare D1 & KV completada a las ${timestamp}.`,
-          target: 'Cloudflare Worker',
-          details: data
-        };
-      } catch (err: any) {
-        console.warn('Fallo de conexión con Cloudflare Worker URL:', err);
-        return {
-          success: false,
-          timestamp,
-          syncedRecordsCount: 0,
-          syncedStudentsCount: 0,
-          message: `Error al sincronizar con Cloudflare Worker: ${err.message || err}`,
-          target: 'Cloudflare Worker'
-        };
-      }
-    }
-
-    // 2. Si el usuario configuró API Token y D1 Database ID directo de Cloudflare REST API
-    if (settings.cloudflareAccountId && settings.cloudflareApiToken && settings.cloudflareD1DatabaseId) {
-      try {
-        const d1Endpoint = `https://api.cloudflare.com/client/v4/accounts/${settings.cloudflareAccountId}/d1/database/${settings.cloudflareD1DatabaseId}/query`;
-        
-        const sqlStatements = [
-          `CREATE TABLE IF NOT EXISTS sync_snapshots (id TEXT PRIMARY KEY, school_code TEXT, school_name TEXT, data_json TEXT, students_count INTEGER, records_count INTEGER, updated_at TEXT);`,
-          `INSERT OR REPLACE INTO sync_snapshots (id, school_code, school_name, data_json, students_count, records_count, updated_at) VALUES ('snapshot_${settings.schoolCode}', '${settings.schoolCode}', '${settings.schoolName}', '${JSON.stringify(payload).replace(/'/g, "''")}', ${students.length}, ${records.length}, datetime('now'));`
-        ];
-
-        const d1Res = await fetch(d1Endpoint, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            Authorization: `Bearer ${settings.cloudflareApiToken}`
-          },
-          body: JSON.stringify({ sql: sqlStatements.join(' ') })
-        });
-
-        if (d1Res.ok) {
-          this.updateLastSync(timestamp);
-          return {
-            success: true,
-            timestamp,
-            syncedRecordsCount: records.length,
-            syncedStudentsCount: students.length,
-            message: `Base de datos Cloudflare D1 actualizada vía REST API (${records.length} asistencias, ${students.length} estudiantes).`,
-            target: 'Cloudflare D1'
-          };
-        }
-      } catch (err: any) {
-        console.warn('Fallo al conectar con Cloudflare D1 REST API:', err);
-      }
-    }
-
-    // 3. Fallback Cloudflare Edge Cache Local (Resiliente de Cero Costo)
-    try {
-      localStorage.setItem('inas_cloudflare_d1_shadow_sync', JSON.stringify(payload));
-      this.updateLastSync(timestamp);
-
-      return {
-        success: true,
-        timestamp,
-        syncedRecordsCount: records.length,
-        syncedStudentsCount: students.length,
-        message: `Almacenamiento estructurado para Cloudflare D1/KV listo en caché local (Sincronizado a las ${timestamp}).`,
-        target: 'Local Cloudflare Cache'
-      };
-    } catch (e: any) {
+    if (!baseUrl) {
       return {
         success: false,
         timestamp,
         syncedRecordsCount: 0,
         syncedStudentsCount: 0,
-        message: `Error en sincronización: ${e.message || e}`,
-        target: 'Cloudflare D1'
+        message: 'URL del Cloudflare Worker no configurada. Ingrésala en Ajustes → Sincronización en la Nube.',
+        target: 'Cloudflare Worker'
+      };
+    }
+
+    try {
+      const students = AttendanceStorageService.getStudents();
+      const records = AttendanceStorageService.getAllAttendance();
+      const { clean: safeStudents, omitted } = await this.sanitizeStudentsForSync(students);
+
+      const payload = {
+        schoolCode: settings.schoolCode || 'INAS_2026',
+        schoolName: settings.schoolName || 'Institución Educativa Antonia Santos',
+        syncedAt: new Date().toISOString(),
+        studentsCount: safeStudents.length,
+        recordsCount: records.length,
+        data: {
+          settings: this.safeSettingsCopy(settings),
+          students: safeStudents,
+          teachers: AttendanceStorageService.getTeachers(),
+          records: records.slice(0, 500), // Últimos 500 registros
+          assignments: AttendanceStorageService.getScheduleAssignments(),
+          slots: AttendanceStorageService.getScheduleSlots(),
+          // Ronda 4 (F1/F5): plantillas CUSTOM de Rectoría + horarios personales opcionales.
+          // El worker guarda data verbatim y el pull destructura de forma tolerante →
+          // clientes viejos ignoran estos campos sin romperse.
+          customTemplates: AttendanceStorageService.getCustomTemplates(),
+          studentSchedules: AttendanceStorageService.getAllStudentSchedules()
+        }
+      };
+
+      const pushUrl = baseUrl.endsWith('/api/sync/push')
+        ? baseUrl
+        : `${baseUrl}/api/sync/push`;
+
+      const response = await fetch(pushUrl, {
+        method: 'POST',
+        headers: this.workerHeaders(),
+        body: JSON.stringify(payload)
+      });
+
+      if (!response.ok) {
+        const errText = await response.text();
+        throw new Error(`Worker HTTP ${response.status}: ${errText}`);
+      }
+
+      const data = await response.json();
+      this.updateLastSync(timestamp);
+
+      const warn = omitted.length > 0
+        ? ` ⚠ ${omitted.length} foto(s) omitidas por ser irrecuperables (${omitted.slice(0, 3).join(', ')}${omitted.length > 3 ? '…' : ''}); vuelve a subirlas desde el carné.`
+        : '';
+      return {
+        success: true,
+        timestamp,
+        syncedRecordsCount: records.length,
+        syncedStudentsCount: safeStudents.length,
+        message: (data.message || `Sincronización en vivo con Cloudflare D1 & KV completada a las ${timestamp}.`) + warn,
+        target: 'Cloudflare Worker',
+        details: data
+      };
+    } catch (err: any) {
+      console.warn('Fallo de sincronización con Cloudflare Worker:', err);
+      return {
+        success: false,
+        timestamp,
+        syncedRecordsCount: 0,
+        syncedStudentsCount: 0,
+        message: `Error al sincronizar con Cloudflare Worker: ${err.message || err}`,
+        target: 'Cloudflare Worker'
       };
     }
   }
 
   /**
-   * Ejecuta la sincronización de BAJADA (Pull) desde Cloudflare Worker hacia el almacenamiento local
+   * Ejecuta la sincronización de BAJADA (Pull) desde el Cloudflare Worker hacia el almacenamiento local
    */
   static async pullFromCloudflare(): Promise<{ success: boolean; message: string; data?: any }> {
     const settings = AttendanceStorageService.getSettings();
-    const cleanBaseUrl = (settings.cloudflareWorkerUrl || '').trim().replace(/\/+$/, '');
+    const cleanBaseUrl = this.getWorkerBaseUrl();
     const schoolCode = settings.schoolCode || 'INAS_2026';
 
-    let result: any = null;
-
-    if (cleanBaseUrl) {
-      try {
-        const pullUrl = cleanBaseUrl.endsWith('/api/sync/pull') 
-          ? `${cleanBaseUrl}?schoolCode=${encodeURIComponent(schoolCode)}`
-          : `${cleanBaseUrl}/api/sync/pull?schoolCode=${encodeURIComponent(schoolCode)}`;
-
-        const res = await fetch(pullUrl, {
-          method: 'GET',
-          headers: {
-            'Content-Type': 'application/json',
-            ...(settings.cloudflareApiToken ? { Authorization: `Bearer ${settings.cloudflareApiToken.trim()}` } : {})
-          }
-        });
-
-        if (!res.ok) {
-          const errText = await res.text();
-          throw new Error(`Worker HTTP ${res.status}: ${errText}`);
-        }
-        result = await res.json();
-      } catch (err: any) {
-        console.warn('Fallo pull del Worker, intentando fallback REST:', err);
-      }
-    }
-
-    if (!result && settings.cloudflareAccountId && settings.cloudflareApiToken && settings.cloudflareD1DatabaseId) {
-       try {
-         const d1Endpoint = `https://api.cloudflare.com/client/v4/accounts/${settings.cloudflareAccountId}/d1/database/${settings.cloudflareD1DatabaseId}/query`;
-         const d1Res = await fetch(d1Endpoint, {
-            method: 'POST',
-            headers: {
-               'Content-Type': 'application/json',
-               Authorization: `Bearer ${settings.cloudflareApiToken}`
-            },
-            body: JSON.stringify({ sql: `SELECT data_json, updated_at FROM sync_snapshots WHERE school_code = '${schoolCode}' OR id = 'snapshot_${schoolCode}' LIMIT 1` })
-         });
-         if (d1Res.ok) {
-            const d1Result = await d1Res.json();
-            if (d1Result.success && d1Result.result && d1Result.result[0]?.results?.length > 0) {
-               const row = d1Result.result[0].results[0];
-               if (row && row.data_json) {
-                 result = {
-                    success: true,
-                    data: JSON.parse(row.data_json),
-                    source: 'Cloudflare D1 REST API'
-                 };
-               }
-            }
-         }
-       } catch(err: any) {
-         console.warn('Fallo al conectar con Cloudflare D1 REST API (Pull):', err);
-       }
-    }
-
-    if (!result) {
-       return { success: false, message: 'No se pudo conectar con el Worker ni con la API REST de Cloudflare. Verifica la URL o las credenciales.' };
+    if (!cleanBaseUrl) {
+      return {
+        success: false,
+        message: 'URL del Cloudflare Worker no configurada. Ingrésala en Ajustes → Sincronización en la Nube.'
+      };
     }
 
     try {
+      const pullUrl = cleanBaseUrl.endsWith('/api/sync/pull')
+        ? `${cleanBaseUrl}?schoolCode=${encodeURIComponent(schoolCode)}`
+        : `${cleanBaseUrl}/api/sync/pull?schoolCode=${encodeURIComponent(schoolCode)}`;
+
+      const res = await fetch(pullUrl, {
+        method: 'GET',
+        headers: this.workerHeaders()
+      });
+
+      if (!res.ok) {
+        const errText = await res.text();
+        throw new Error(`Worker HTTP ${res.status}: ${errText}`);
+      }
+
+      const result = await res.json();
+
       if (!result.success || !result.data) {
         throw new Error(result.error || 'No se recibieron datos del Worker');
       }
@@ -375,9 +313,6 @@ export class CloudflareSyncService {
       }
 
       // Ronda 4 (F5): plantillas CUSTOM y horarios personales viajan en el snapshot.
-      // NOTA de adopción: los dispositivos deben actualizarse todos primero; un push de
-      // un cliente viejo NO incluye estos campos (los borrará del snapshot hasta el
-      // próximo push de un cliente nuevo) — ver AGENTS.md Ronda 4.
       if (Array.isArray(customTemplates)) {
         AttendanceStorageService.saveCustomTemplates(customTemplates);
       }
@@ -387,13 +322,13 @@ export class CloudflareSyncService {
 
       return {
         success: true,
-        message: `✓ Datos descargados de ${result.source || 'Cloudflare'}: ${importedStudents} estudiantes actualizados y ${importedRecords} nuevas asistencias integradas.`,
+        message: `✓ Datos descargados del Cloudflare Worker: ${importedStudents} estudiantes actualizados y ${importedRecords} nuevas asistencias integradas.`,
         data: result.data
       };
     } catch (err: any) {
       return {
         success: false,
-        message: `Error al descargar datos de Cloudflare: ${err.message || err}`
+        message: `Error al descargar datos del Cloudflare Worker: ${err.message || err}`
       };
     }
   }

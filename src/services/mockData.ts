@@ -18,7 +18,6 @@ export const DEFAULT_SCHOOL_SETTINGS: SchoolSettings = {
   aiModel: 'openai/gpt-oss-120b',
   aiPrivacyOptOut: true,
   cloudflareWorkerUrl: 'https://inas-attendance-worker.hiroshiren86.workers.dev',
-  cloudflareD1DatabaseId: 'c577c8b3-6f07-4a63-8671-f447871325d6',
   cloudflareKvNamespaceId: '3b249fb9b0014f918680646a5ae869f6',
   cloudflareAutoSync: true,
   cloudflareSyncIntervalMinutes: 5

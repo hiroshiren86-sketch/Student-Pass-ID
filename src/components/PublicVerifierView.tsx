@@ -200,14 +200,14 @@ export const PublicVerifierView: React.FC = () => {
 
               {/* Minimal Public Data Payload (Minimización de datos) */}
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                <div className="p-3.5 bg-slate-50/80 dark:bg-black/60 rounded-2xl border border-slate-200/80 dark:border-zinc-800/50/80 space-y-1">
+                <div className="p-3.5 bg-slate-50/80 dark:bg-black/60 rounded-2xl border border-slate-200/80 dark:border-zinc-800/50 space-y-1">
                   <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Código Institucional</span>
                   <div className="text-sm font-mono font-bold text-slate-900 dark:text-white">
                     {result.parsed?.studentCode}
                   </div>
                 </div>
 
-                <div className="p-3.5 bg-slate-50/80 dark:bg-black/60 rounded-2xl border border-slate-200/80 dark:border-zinc-800/50/80 space-y-1">
+                <div className="p-3.5 bg-slate-50/80 dark:bg-black/60 rounded-2xl border border-slate-200/80 dark:border-zinc-800/50 space-y-1">
                   <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Estado en Base de Datos</span>
                   <div className="text-sm font-bold text-emerald-600 dark:text-emerald-400 flex items-center gap-1.5">
                     {result.student ? 'ESTUDIANTE ACTIVO' : 'NO REGISTRADO EN D1 (404)'}
@@ -216,14 +216,14 @@ export const PublicVerifierView: React.FC = () => {
 
                 {result.student && (
                   <>
-                    <div className="p-3.5 bg-slate-50/80 dark:bg-black/60 rounded-2xl border border-slate-200/80 dark:border-zinc-800/50/80 space-y-1">
+                    <div className="p-3.5 bg-slate-50/80 dark:bg-black/60 rounded-2xl border border-slate-200/80 dark:border-zinc-800/50 space-y-1">
                       <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Nombre del Alumno</span>
                       <div className="text-sm font-bold text-slate-900 dark:text-white">
                         {result.student.firstName} {result.student.lastName}
                       </div>
                     </div>
 
-                    <div className="p-3.5 bg-slate-50/80 dark:bg-black/60 rounded-2xl border border-slate-200/80 dark:border-zinc-800/50/80 space-y-1">
+                    <div className="p-3.5 bg-slate-50/80 dark:bg-black/60 rounded-2xl border border-slate-200/80 dark:border-zinc-800/50 space-y-1">
                       <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Grado y Sección</span>
                       <div className="text-sm font-bold text-indigo-600 dark:text-indigo-400">
                         {result.student.grade} - {result.student.section}
