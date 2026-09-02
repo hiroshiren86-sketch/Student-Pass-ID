@@ -317,6 +317,29 @@ export interface ActiveClassContext {
   tokenSignature: string;  // firma HMAC (trazabilidad)
 }
 
+/**
+ * Ronda 19 — Importación masiva de horarios (informe, roadmap #3): elimina los ~360
+ * clics de rectoría. Una fila del CSV = una cátedra (grado + día + bloque).
+ */
+export interface ParsedScheduleRow {
+  lineNo: number;          // número de línea en el archivo (trazabilidad de errores)
+  dayOfWeek: number;       // 1 = Lunes ... 6 = Sábado
+  grade: string;           // normalizado al formato del sistema ('10°1')
+  slotId: string;
+  subject: string;
+  teacherId?: string;      // si el nombre coincidió con un docente registrado
+  teacherName?: string;
+  classroom?: string;
+}
+
+export interface ScheduleImportResult {
+  rows: ParsedScheduleRow[];
+  errors: string[];        // "Línea 3: ..." — estilo de la validación del horario personal
+  totalLines: number;
+  detectedHeader: boolean;
+  delimiter: string;       // ',' | ';' | '\t' (sniff automático)
+}
+
 export interface OfflineQueueItem {
   id: string;
   studentCode: string;
@@ -359,17 +382,6 @@ export interface GradeAiSummaryResult {
   provider?: string;
   model?: string;
 }
-
-export interface ScheduleImportResult {
-  success: boolean;
-  totalRowsProcessed: number;
-  importedAssignmentsCount: number;
-  conflictsCount: number;
-  ignoredRowsCount: number;
-  conflicts: Array<{ row: number; reason: string; detail: string }>;
-  ignoredRows: Array<{ row: number; line: string; reason: string }>;
-}
-
 
 // ==================== Ronda 4 (F4): Horario opcional del estudiante ====================
 // Informativo: NO interfiere con la asistencia (el escaneo registra fecha y hora).

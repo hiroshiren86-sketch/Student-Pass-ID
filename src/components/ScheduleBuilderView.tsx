@@ -30,14 +30,16 @@ import {
   Copy,
   Power,
   QrCode,
-  Download
+  Download,
+  Upload
 } from 'lucide-react';
-import { 
-  ScheduleSlot, 
-  ScheduleSlotType, 
-  ClassScheduleAssignment, 
+import {
+  ScheduleSlot,
+  ScheduleSlotType,
+  ClassScheduleAssignment,
   Teacher,
-  DayTemplateConfig
+  DayTemplateConfig,
+  ScheduleImportResult
 } from '../types/attendance';
 import { AttendanceStorageService, schoolYearEndEpochMs } from '../services/attendanceStorage';
 import QRCode from 'qrcode';
@@ -130,6 +132,26 @@ export const ScheduleBuilderView: React.FC = () => {
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [classQrModal]);
+
+  // Ronda 19 — Importación masiva de horarios (roadmap #3 del informe): modal de rectoría
+  const [showImportModal, setShowImportModal] = useState<boolean>(false);
+  const [importText, setImportText] = useState<string>('');
+  const [importPreview, setImportPreview] = useState<ScheduleImportResult | null>(null);
+  const [importWipe, setImportWipe] = useState<boolean>(false);
+  const [importFileName, setImportFileName] = useState<string>('');
+
+  // Ronda 19 (Regla E10): Escape cierra también el modal de importación
+  useEffect(() => {
+    if (!showImportModal) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.stopPropagation();
+        setShowImportModal(false);
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [showImportModal]);
 
   // Ronda 4 (F1): editor de plantillas propias de Rectoría
   const [editingTemplate, setEditingTemplate] = useState<DayTemplateConfig | null>(null);
@@ -492,21 +514,33 @@ export const ScheduleBuilderView: React.FC = () => {
               </div>
             </div>
 
-            {/* Day of Week Tabs */}
-            <div className="flex items-center gap-1 overflow-x-auto pb-1 sm:pb-0">
-              {DAYS_OF_WEEK.map((d) => (
-                <button
-                  key={d.id}
-                  onClick={() => setSelectedDay(d.id)}
-                  className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all shrink-0 ${
-                    selectedDay === d.id
-                      ? 'bg-indigo-600 text-white shadow-sm'
-                      : 'bg-slate-100 dark:bg-slate-800/60 text-slate-600 dark:text-slate-400 hover:bg-slate-200 dark:hover:bg-slate-800'
-                  }`}
-                >
-                  <span>{d.name}</span>
-                </button>
-              ))}
+            {/* Day of Week Tabs + Importación (Ronda 19) */}
+            <div className="flex items-center gap-2 flex-wrap sm:flex-nowrap">
+              <div className="flex items-center gap-1 overflow-x-auto pb-1 sm:pb-0">
+                {DAYS_OF_WEEK.map((d) => (
+                  <button
+                    key={d.id}
+                    onClick={() => setSelectedDay(d.id)}
+                    className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all shrink-0 ${
+                      selectedDay === d.id
+                        ? 'bg-indigo-600 text-white shadow-sm'
+                        : 'bg-slate-100 dark:bg-slate-800/60 text-slate-600 dark:text-slate-400 hover:bg-slate-200 dark:hover:bg-slate-800'
+                    }`}
+                  >
+                    <span>{d.name}</span>
+                  </button>
+                ))}
+              </div>
+              <button
+                type="button"
+                onClick={() => { setShowImportModal(true); setImportPreview(null); }}
+                className="px-3 py-1.5 rounded-xl text-[11px] font-bold bg-emerald-50 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800 hover:bg-emerald-100 dark:hover:bg-emerald-900/60 transition-all flex items-center gap-1.5 shrink-0"
+                title="Carga el horario del término desde un archivo CSV/Excel delimitado — sin clics uno a uno"
+                aria-label="Importar horario masivo por CSV"
+              >
+                <Upload className="w-3.5 h-3.5" />
+                Importar CSV
+              </button>
             </div>
           </div>
 
@@ -1440,6 +1474,153 @@ export const ScheduleBuilderView: React.FC = () => {
                 <Download className="w-3.5 h-3.5" /> Descargar PNG
               </a>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* Ronda 19 — Modal: Importación masiva de horarios (CSV delimitado, validación línea a línea) */}
+      {showImportModal && (
+        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4" role="dialog" aria-modal="true" aria-label="Importar horario masivo">
+          <div className="bg-white dark:bg-zinc-950 rounded-3xl p-6 w-full max-w-2xl border border-slate-200 dark:border-zinc-800/50 shadow-2xl space-y-4 max-h-[90vh] overflow-y-auto">
+            <div className="flex items-center justify-between">
+              <h3 className="text-base font-black text-slate-900 dark:text-white flex items-center gap-2">
+                <Upload className="w-5 h-5 text-emerald-500" />
+                <span>Importar Horario del Término (CSV)</span>
+              </h3>
+              <button
+                type="button"
+                onClick={() => setShowImportModal(false)}
+                className="p-1.5 text-slate-400 hover:text-slate-600 dark:hover:text-white rounded-xl hover:bg-slate-100 dark:hover:bg-slate-800"
+                aria-label="Cerrar importación"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <p className="text-xs text-slate-500 dark:text-slate-400 leading-relaxed">
+              Una fila = una cátedra. Columnas: <b>día, grado, bloque, materia, docente (opcional), aula (opcional)</b>. El delimitador (coma, punto y coma o tabulación) se detecta solo y
+              los encabezados son opcionales. Ejemplos de formatos aceptados: <span className="font-mono">lunes, 10-1, 1ª Hora de Clase, Matemáticas, Juan Pérez, 204</span> o <span className="font-mono">1;10°1;1;Matemáticas</span>.
+            </p>
+
+            {/* Carga de archivo o pegado manual */}
+            <div className="flex flex-col sm:flex-row items-stretch gap-2">
+              <label className="flex-1 flex items-center justify-center gap-2 px-4 py-3 rounded-2xl border-2 border-dashed border-emerald-300 dark:border-emerald-800 text-xs font-bold text-emerald-700 dark:text-emerald-300 cursor-pointer hover:bg-emerald-50 dark:hover:bg-emerald-950/40 transition-all">
+                <Upload className="w-4 h-4" />
+                {importFileName ? importFileName : 'Seleccionar archivo .csv / .txt'}
+                <input
+                  type="file"
+                  accept=".csv,.txt,.tsv"
+                  className="hidden"
+                  onChange={(e) => {
+                    const file = e.target.files?.[0];
+                    if (!file) return;
+                    setImportFileName(file.name);
+                    const reader = new FileReader();
+                    reader.onload = () => { setImportText(String(reader.result || '')); setImportPreview(null); };
+                    reader.readAsText(file, 'utf-8');
+                    e.target.value = '';
+                  }}
+                />
+              </label>
+            </div>
+            <textarea
+              value={importText}
+              onChange={(e) => { setImportText(e.target.value); setImportPreview(null); }}
+              placeholder={"…o pega aquí el contenido:\ndía,grado,bloque,materia,docente,aula\nLunes,10°1,1,Matemáticas,Juan Pablo Pérez,Aula 204"}
+              rows={6}
+              className="w-full px-3 py-2.5 bg-slate-50 dark:bg-black border border-slate-200 dark:border-zinc-800 rounded-xl text-xs font-mono outline-none focus:ring-2 focus:ring-emerald-500/40"
+            />
+
+            <div className="flex items-center justify-between gap-3 flex-wrap">
+              <button
+                type="button"
+                disabled={!importText.trim()}
+                onClick={() => setImportPreview(AttendanceStorageService.parseScheduleImport(importText))}
+                className="px-4 py-2 rounded-xl bg-slate-900 dark:bg-white text-white dark:text-slate-900 text-xs font-bold disabled:opacity-40"
+              >
+                Validar
+              </button>
+              <label className="flex items-center gap-2 text-[11px] font-bold text-slate-600 dark:text-slate-300 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={importWipe}
+                  onChange={(e) => setImportWipe(e.target.checked)}
+                  className="w-4 h-4 accent-rose-600"
+                />
+                Reemplazar las asignaciones actuales de los cursos incluidos
+              </label>
+            </div>
+
+            {/* Resultado de la validación */}
+            {importPreview && (
+              <div className="space-y-3">
+                {importPreview.errors.length > 0 && (
+                  <div className="p-3 rounded-xl bg-rose-50 dark:bg-rose-950/50 border border-rose-200 dark:border-rose-800 space-y-1 max-h-36 overflow-y-auto">
+                    <p className="text-[11px] font-black text-rose-700 dark:text-rose-300 uppercase">{importPreview.errors.length} línea(s) con errores</p>
+                    {importPreview.errors.map((err, i) => (
+                      <p key={i} className="text-[11px] text-rose-700 dark:text-rose-300">{err}</p>
+                    ))}
+                  </div>
+                )}
+
+                {importPreview.rows.length > 0 && (
+                  <div className="p-3 rounded-xl bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800">
+                    <p className="text-[11px] font-black text-emerald-700 dark:text-emerald-300 uppercase mb-2">
+                      {importPreview.rows.length} cátedra(s) válida(s) detectada(s) · delimitador "{importPreview.delimiter === '\t' ? 'tabulación' : importPreview.delimiter}"{importPreview.detectedHeader ? ' · encabezado detectado' : ''}
+                    </p>
+                    <div className="max-h-44 overflow-y-auto rounded-lg border border-emerald-200/60 dark:border-emerald-800/60">
+                      <table className="w-full text-left text-[10px]">
+                        <thead className="bg-emerald-100/60 dark:bg-emerald-900/40 text-emerald-800 dark:text-emerald-300 font-black uppercase">
+                          <tr>
+                            <th className="py-1.5 px-2">Lín</th>
+                            <th className="py-1.5 px-2">Día</th>
+                            <th className="py-1.5 px-2">Curso</th>
+                            <th className="py-1.5 px-2">Bloque</th>
+                            <th className="py-1.5 px-2">Materia</th>
+                            <th className="py-1.5 px-2">Docente</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-emerald-100 dark:divide-emerald-900/60">
+                          {importPreview.rows.slice(0, 50).map((r) => (
+                            <tr key={`${r.lineNo}-${r.grade}-${r.slotId}`}>
+                              <td className="py-1 px-2 font-mono text-slate-400">{r.lineNo}</td>
+                              <td className="py-1 px-2 font-bold">{DAYS_OF_WEEK.find(d => d.id === r.dayOfWeek)?.short}</td>
+                              <td className="py-1 px-2 font-bold">{r.grade}</td>
+                              <td className="py-1 px-2">{AttendanceStorageService.getScheduleSlots().find(s => s.id === r.slotId)?.name || r.slotId}</td>
+                              <td className="py-1 px-2 font-bold text-indigo-700 dark:text-indigo-300">{r.subject}</td>
+                              <td className="py-1 px-2">{r.teacherName}{r.teacherId ? ' ✓' : ''}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                )}
+
+                <div className="flex items-center justify-end gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setShowImportModal(false)}
+                    className="py-2 px-3 text-xs font-bold text-slate-500 hover:text-slate-700 dark:text-slate-400"
+                  >
+                    Cancelar
+                  </button>
+                  <button
+                    type="button"
+                    disabled={importPreview.rows.length === 0}
+                    onClick={() => {
+                      const res = AttendanceStorageService.applyScheduleImport(importPreview.rows, { wipeIncludedGrades: importWipe });
+                      setAssignments(AttendanceStorageService.getScheduleAssignments());
+                      setShowImportModal(false);
+                      showToast(`Horario importado: ${res.applied} cátedra(s) aplicada(s)${res.removed > 0 ? `, ${res.removed} anterior(es) reemplazada(s)` : ''}.${importPreview.errors.length > 0 ? ` ${importPreview.errors.length} línea(s) con errores quedaron fuera.` : ''}`);
+                    }}
+                    className="py-2 px-4 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-40 text-white rounded-xl text-xs font-bold transition-all shadow-md shadow-emerald-600/30"
+                  >
+                    Aplicar {importPreview.rows.length > 0 ? `(${importPreview.rows.length})` : ''}
+                  </button>
+                </div>
+              </div>
+            )}
           </div>
         </div>
       )}

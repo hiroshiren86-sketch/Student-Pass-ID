@@ -378,6 +378,66 @@ await section('K. QR de Clase — transparencia en planilla/CSV (fuente)', () =>
 });
 
 // =====================================================================
+await section('L. Importación masiva de horarios (CSV tolerante, sin fallbacks silenciosos)', () => {
+  svc.resetToDemo();
+  const baseAssignments = svc.getScheduleAssignments().length;
+
+  // Con encabezado + coma + nombres de día con tilde + grado con guion + bloque por nombre
+  const csvHeader = 'día,grado,bloque,materia,docente,aula\nLunes,10-1,1ª Hora de Clase,Álgebra,Juan Pablo Pérez Gómez,204\nMARTES,10°1,2,Ciencias,,,';
+  const r1 = svc.parseScheduleImport(csvHeader);
+  check('encabezado detectado + 2 filas válidas', r1.detectedHeader && r1.rows.length === 2, JSON.stringify(r1.errors));
+  check('grado normalizado 10-1 → 10°1', r1.rows[0]?.grade === '10°1');
+  check('bloque por nombre → slot-1', r1.rows[0]?.slotId === 'slot-1');
+  check('bloque por ordinal 2 → slot-2', r1.rows[1]?.slotId === 'slot-2');
+  check('docente emparejado por nombre (insensible a mayúsculas)', r1.rows[0]?.teacherId !== undefined, r1.rows[0]?.teacherName);
+  check('docente vacío → Docente Titular', r1.rows[1]?.teacherName === 'Docente Titular');
+
+  // Con punto y coma (Excel colombiano) y sin encabezado
+  const r2 = svc.parseScheduleImport('miércoles;6-1;1;Lengua;María Camila Restrepo Henao');
+  check('delimitador ";" sin encabezado', !r2.detectedHeader && r2.delimiter === ';' && r2.rows.length === 1, JSON.stringify(r2.errors));
+  check('día "MIÉRCOLES" con tilde → 3', r2.rows[0]?.dayOfWeek === 3);
+
+  // Errores de línea (nada se adivina): día malo, grado inexistente, bloque malo, materia vacía
+  const r3 = svc.parseScheduleImport('domingo,10°1,1,X\nLunes,99-9,1,X\nLunes,10°1,99,X\nLunes,10°1,1,\nLunes,10°1,1,Química');
+  check('4 errores y 1 fila válida', r3.errors.length === 4 && r3.rows.length === 1, JSON.stringify(r3.errors));
+  check('errores con número de línea y mensaje concreto', r3.errors.every(e => e.startsWith('Línea ')) && r3.errors[0].includes('día no reconocido'));
+  check('fila válida sobrevive entre errores (Química)', r3.rows[0]?.subject === 'Química');
+
+  // Apply sin wipe: upsert, no duplica
+  const before = svc.getScheduleAssignments().length;
+  const app1 = svc.applyScheduleImport(r1.rows);
+  const after = svc.getScheduleAssignments().length;
+  check('aplica 2 cátedras', app1.applied === 2);
+  check('upsert: sin duplicados para la misma celda', after - before <= 2, `delta=${after - before}`);
+
+  // Apply con wipe escopado: SOLO borra los cursos incluidos
+  const csvMore = 'día,grado,bloque,materia\nLunes,10°1,1,Álgebra\nLunes,6°1,1,Lectura';
+  const r4 = svc.parseScheduleImport(csvMore);
+  const app2 = svc.applyScheduleImport(r4.rows, { wipeIncludedGrades: true });
+  const now10 = svc.getScheduleAssignments().filter(a => a.grade === '10°1');
+  const now11 = svc.getScheduleAssignments().filter(a => a.grade === '11°1');
+  check('wipe escopado: 10°1 solo tiene lo importado', app2.removed > 0 && now10.length === 1, `removed=${app2.removed} now10=${now10.length}`);
+  check('wipe escopado NO toca cursos no incluidos (11°1)', now11.length > 0);
+  check('cátedra importada con materia correcta', now10[0]?.subject === 'Álgebra');
+
+  svc.resetToDemo();
+  const restored = svc.getScheduleAssignments().length;
+  check('resetToDemo restaura el estado (independencia de pruebas)', restored === baseAssignments, `base=${baseAssignments} now=${restored}`);
+});
+
+// =====================================================================
+await section('M. Importación — integración UI (fuente, como suite R18)', () => {
+  const sbv = readFileSync('src/components/ScheduleBuilderView.tsx', 'utf8');
+  check('botón Importar CSV en la vista Por Día', sbv.includes('Importar CSV') && sbv.includes('parseScheduleImport'));
+  check('flujo Validar → previsualización → Aplicar (con borrado escopado opcional)', sbv.includes('applyScheduleImport') && sbv.includes('wipeIncludedGrades'));
+  check('modal de importación cierra con Escape', sbv.includes('setShowImportModal(false)') && sbv.includes("e.key === 'Escape'"));
+
+  const storage = readFileSync('src/services/attendanceStorage.ts', 'utf8');
+  check('importador legado con fallback silencioso ELIMINADO', !storage.includes('importMasterScheduleCsvOrJson'));
+  check('sin fallback a "primer bloque CLASE" en el importador', !storage.includes('matchedSlot = slots.find(s => s.type'));
+});
+
+// =====================================================================
 console.log('\n════════════════════════════════════════');
 console.log(`RESULTADO: ${passed} OK · ${failed} FALLOS · ${skipped} SKIP`);
 if (failures.length) {

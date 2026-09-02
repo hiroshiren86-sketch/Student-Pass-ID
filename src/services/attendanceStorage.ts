@@ -21,7 +21,8 @@ import {
   EphemeralScanDelegation,
   StudentPersonalSchedule,
   StudentPersonalScheduleEntry,
-  ActiveClassContext
+  ActiveClassContext,
+  ParsedScheduleRow
 } from '../types/attendance';
 import { 
   INITIAL_STUDENTS, 
@@ -1221,225 +1222,171 @@ export class AttendanceStorageService {
     this.saveScheduleAssignments(filtered);
   }
 
-  // Multi-Course Master Schedule Importer (CSV / JSON)
-  static importMasterScheduleCsvOrJson(rawText: string): ScheduleImportResult {
-    const result: ScheduleImportResult = {
-      success: true,
-      totalRowsProcessed: 0,
-      importedAssignmentsCount: 0,
-      conflictsCount: 0,
-      ignoredRowsCount: 0,
-      conflicts: [],
-      ignoredRows: []
-    };
+  // ==================== IMPORTACIÓN MASIVA DE HORARIOS (Ronda 19 — informe, roadmap #3) ====================
+  // Reemplaza al importador legado (código muerto desde su creación, con fallbacks silenciosos:
+  // bloque no reconocido → primer bloque CLASE; día no reconocido → lunes). Aquí NADA se
+  // adivina: cada ambigüedad es un error de línea con mensaje concreto, estilo del parser del
+  // horario personal. Parse (previsualización) y Apply (con borrado escopado opcional) son
+  // pasos separados — la rectoría ve qué va a pasar ANTES de aplicar.
 
-    const trimmed = rawText.trim();
-    if (!trimmed) {
-      return { ...result, success: false, ignoredRows: [{ row: 0, line: '', reason: 'Texto de horario vacío.' }] };
+  private static normalizeTextForMatch(s: string): string {
+    return s.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().trim();
+  }
+
+  static parseScheduleImport(text: string): ScheduleImportResult {
+    const errors: string[] = [];
+    const rows: ParsedScheduleRow[] = [];
+    const lines = text.split(/\r?\n/).map(l => l.trim()).filter(l => l.length > 0);
+
+    if (lines.length === 0) {
+      return { rows, errors: ['El archivo o el texto está vacío.'], totalLines: 0, detectedHeader: false, delimiter: ',' };
     }
 
-    const slots = this.getScheduleSlots();
+    // Sniff del delimitador en todo el archivo (Excel en Colombia suele usar ';' o ',')
+    const counts: Record<string, number> = { ',': 0, ';': 0, '\t': 0 };
+    for (const ch of text) if (ch in counts) counts[ch]++;
+    const delimiter = (Object.entries(counts).sort((a, b) => b[1] - a[1])[0][1] > 0)
+      ? Object.entries(counts).sort((a, b) => b[1] - a[1])[0][0]
+      : ',';
+
+    const splitLine = (l: string): string[] => l.split(delimiter).map(c => c.trim().replace(/^["']|["']$/g, ''));
+    const norm = this.normalizeTextForMatch;
+
+    // Días: nombre (con/sin tildes, mayúsculas) o número 1-6. Prefijo de 3 letras aceptado.
+    const dayByName: Record<string, number> = { lunes: 1, martes: 2, miercoles: 3, jueves: 4, viernes: 5, sabado: 6 };
+    const parseDay = (raw: string): number | null => {
+      const n = Number(raw);
+      if (Number.isInteger(n) && n >= 1 && n <= 6) return n;
+      const key = norm(raw);
+      if (!key) return null;
+      for (const [name, dow] of Object.entries(dayByName)) {
+        if (key.startsWith(name.slice(0, 3))) return dow;
+      }
+      return null;
+    };
+
+    // Grado: normaliza '10-1' / '10.1' / '10 1' → '10°1' y valida contra la matrícula real
+    const knownGrades = new Set<string>([...SCHOOL_GRADES_LIST, ...this.getStudents().map(s => s.grade)]);
+    const normalizeGrade = (raw: string): string | null => {
+      const cleaned = raw.trim().toUpperCase().replace(/\s*[-.\s]\s*/g, '°');
+      const m = cleaned.match(/^(\d{1,2})°?([A-Z0-9]{1,3})$/);
+      return m ? `${m[1]}°${m[2]}` : null;
+    };
+
+    // Bloque: por id exacto → nombre (sin tildes) → ordinal entre los bloques CLASE (1..N)
+    const classSlots = this.getScheduleSlots().filter(s => s.type === 'CLASS').sort((a, b) => a.order - b.order);
+    const resolveSlot = (raw: string): ScheduleSlot | null => {
+      const byId = classSlots.find(s => s.id === raw.trim());
+      if (byId) return byId;
+      const target = norm(raw);
+      const byName = classSlots.find(s => norm(s.name) === target);
+      if (byName) return byName;
+      const n = Number(raw);
+      if (Number.isInteger(n) && n >= 1 && n <= classSlots.length) return classSlots[n - 1];
+      return null;
+    };
+
+    // Docente: coincidencia exacta o por contención (siempre insensible a tildes/mayúsculas)
     const teachers = this.getTeachers();
-    const newAssignments = [...this.getScheduleAssignments()];
-
-    // Helper map day names
-    const dayMap: Record<string, number> = {
-      'lunes': 1, 'lun': 1, '1': 1,
-      'martes': 2, 'mar': 2, '2': 2,
-      'miercoles': 3, 'miércoles': 3, 'mie': 3, 'mié': 3, '3': 3,
-      'jueves': 4, 'jue': 4, '4': 4,
-      'viernes': 5, 'vie': 5, '5': 5,
-      'sabado': 6, 'sábado': 6, 'sab': 6, '6': 6
+    const resolveTeacher = (raw: string): { teacherId?: string; teacherName: string } => {
+      const target = norm(raw);
+      if (!target) return { teacherName: 'Docente Titular' };
+      const exact = teachers.find(t => norm(t.fullName) === target || norm(t.username || '') === target);
+      if (exact) return { teacherId: exact.id, teacherName: exact.fullName };
+      if (target.length >= 4) {
+        const partial = teachers.find(t => norm(t.fullName).includes(target) || target.includes(norm(t.fullName)));
+        if (partial) return { teacherId: partial.id, teacherName: partial.fullName };
+      }
+      return { teacherName: raw.trim() };
     };
 
-    // Try parsing as JSON first
-    if (trimmed.startsWith('[') || trimmed.startsWith('{')) {
-      try {
-        const parsed = JSON.parse(trimmed);
-        const list = Array.isArray(parsed) ? parsed : (parsed.assignments || parsed.horarios || []);
-        result.totalRowsProcessed = list.length;
-
-        list.forEach((item: any, idx: number) => {
-          const rowNum = idx + 1;
-          const grade = String(item.grade || item.curso || item.grado || '').trim();
-          const dayRaw = String(item.day || item.dia || item.diaSemana || '1').toLowerCase().trim();
-          const dayOfWeek = dayMap[dayRaw] || Number(dayRaw) || 1;
-          const subject = String(item.subject || item.materia || item.asignatura || '').trim();
-          const teacherNameRaw = String(item.teacher || item.profesor || item.docente || '').trim();
-          const classroom = String(item.classroom || item.aula || item.salon || 'Aula Regular').trim();
-          const slotIdentifier = String(item.slotId || item.slot || item.hora || item.bloque || '').trim();
-
-          if (!grade || !subject) {
-            result.ignoredRowsCount++;
-            result.ignoredRows.push({ row: rowNum, line: JSON.stringify(item), reason: 'Falta grado o asignatura requerida.' });
-            return;
-          }
-
-          // Match slot
-          let matchedSlot = slots.find(s => s.id === slotIdentifier || s.name.toLowerCase().includes(slotIdentifier.toLowerCase()) || s.startTime === slotIdentifier);
-          if (!matchedSlot) {
-            matchedSlot = slots.find(s => s.type === 'CLASS');
-          }
-
-          if (!matchedSlot) {
-            result.ignoredRowsCount++;
-            result.ignoredRows.push({ row: rowNum, line: JSON.stringify(item), reason: 'Bloque horario no reconocido.' });
-            return;
-          }
-
-          // Match teacher
-          const teacher = teachers.find(t => 
-            t.fullName.toLowerCase().includes(teacherNameRaw.toLowerCase()) || 
-            t.username.toLowerCase() === teacherNameRaw.toLowerCase()
-          );
-
-          // Check conflict
-          const conflict = newAssignments.find(a => 
-            a.slotId === matchedSlot!.id && 
-            a.dayOfWeek === dayOfWeek && 
-            a.teacherId && 
-            teacher && 
-            a.teacherId === teacher.id && 
-            a.grade !== grade
-          );
-
-          if (conflict) {
-            result.conflictsCount++;
-            result.conflicts.push({
-              row: rowNum,
-              reason: `Conflicto de docente solapado`,
-              detail: `El docente ${teacher?.fullName} ya está asignado al grado ${conflict.grade} en el bloque ${matchedSlot.name} el día ${dayOfWeek}.`
-            });
-          }
-
-          // Upsert
-          const existIdx = newAssignments.findIndex(a => a.grade === grade && a.slotId === matchedSlot!.id && a.dayOfWeek === dayOfWeek);
-          const assignmentObj: ClassScheduleAssignment = {
-            id: `as-imp-${Date.now()}-${idx}`,
-            grade,
-            dayOfWeek,
-            slotId: matchedSlot.id,
-            subject,
-            teacherId: teacher?.id,
-            teacherName: teacher?.fullName || teacherNameRaw || 'Docente Asignado',
-            classroom
-          };
-
-          if (existIdx >= 0) {
-            newAssignments[existIdx] = assignmentObj;
-          } else {
-            newAssignments.push(assignmentObj);
-          }
-          result.importedAssignmentsCount++;
-        });
-
-        this.saveScheduleAssignments(newAssignments);
-        return result;
-      } catch (err: any) {
-        // Fallback to CSV
-      }
+    // Encabezado: primera celda == 'dia' (norm quita tildes). Si hay, mapea columnas por nombre.
+    const headerCells = splitLine(lines[0]).map(norm);
+    const detectedHeader = headerCells[0] === 'dia';
+    const colIdx = { day: 0, grade: 1, slot: 2, subject: 3, teacher: 4, classroom: 5 };
+    if (detectedHeader) {
+      const find = (...names: string[]) => headerCells.findIndex(c => names.includes(c));
+      colIdx.day = find('dia');
+      colIdx.grade = find('grado', 'curso');
+      colIdx.slot = find('bloque', 'hora', 'slot');
+      colIdx.subject = find('materia', 'asignatura');
+      colIdx.teacher = find('docente', 'profesor');
+      colIdx.classroom = find('aula', 'salon');
     }
 
-    // CSV Parsing
-    const lines = trimmed.split(/\r?\n/).filter(l => l.trim().length > 0);
-    result.totalRowsProcessed = lines.length;
+    const dataLines = lines.slice(detectedHeader ? 1 : 0);
+    dataLines.forEach((line, idx) => {
+      const lineNo = idx + (detectedHeader ? 2 : 1); // numeración humana: encabezado = línea 1
+      const cells = splitLine(line);
+      const cell = (i: number) => (i >= 0 && i < cells.length ? cells[i] : '');
 
-    let startIndex = 0;
-    const firstLineLower = lines[0].toLowerCase();
-    if (firstLineLower.includes('curso') || firstLineLower.includes('grado') || firstLineLower.includes('dia') || firstLineLower.includes('asignatura') || firstLineLower.includes('grade')) {
-      startIndex = 1; // Skip header
+      const day = parseDay(cell(colIdx.day));
+      if (day === null) {
+        errors.push(`Línea ${lineNo}: día no reconocido ("${cell(colIdx.day)}"). Usa Lunes…Sábado o 1-6.`);
+        return;
+      }
+
+      const grade = normalizeGrade(cell(colIdx.grade));
+      if (!grade) {
+        errors.push(`Línea ${lineNo}: grado no reconocido ("${cell(colIdx.grade)}"). Usa el formato del sistema, ej: 10°1.`);
+        return;
+      }
+      if (!knownGrades.has(grade)) {
+        errors.push(`Línea ${lineNo}: el grado "${grade}" no existe en la matrícula. Regístralo primero o corrige el CSV.`);
+        return;
+      }
+
+      const slotRaw = cell(colIdx.slot);
+      const slot = resolveSlot(slotRaw);
+      if (!slot) {
+        errors.push(`Línea ${lineNo}: bloque no reconocido ("${slotRaw}"). Usa el nombre del bloque (ej: "${classSlots[0]?.name || '1ª Hora'}"), su número 1-${classSlots.length} o el id (slot-N).`);
+        return;
+      }
+
+      const subject = cell(colIdx.subject);
+      if (!subject) {
+        errors.push(`Línea ${lineNo}: la materia está vacía.`);
+        return;
+      }
+
+      const teacher = resolveTeacher(cell(colIdx.teacher));
+      const classroom = cell(colIdx.classroom) || undefined;
+
+      rows.push({ lineNo, dayOfWeek: day, grade, slotId: slot.id, subject, teacherId: teacher.teacherId, teacherName: teacher.teacherName, classroom });
+    });
+
+    return { rows, errors, totalLines: lines.length, detectedHeader, delimiter };
+  }
+
+  /**
+   * Aplica filas ya validadas de parseScheduleImport. Upsert por (grado, día, bloque).
+   * wipeIncludedGrades: borra ANTES las asignaciones actuales SOLO de los cursos que
+   * aparecen en el archivo (borrado escopado — jamás toca cursos no incluidos).
+   */
+  static applyScheduleImport(rows: ParsedScheduleRow[], opts?: { wipeIncludedGrades?: boolean }): { applied: number; removed: number } {
+    let removed = 0;
+    if (opts?.wipeIncludedGrades && rows.length > 0) {
+      const grades = [...new Set(rows.map(r => r.grade))];
+      const assignments = this.getScheduleAssignments();
+      const kept = assignments.filter(a => !grades.includes(a.grade));
+      removed = assignments.length - kept.length;
+      this.saveScheduleAssignments(kept);
     }
 
-    for (let i = startIndex; i < lines.length; i++) {
-      const line = lines[i];
-      const rowNum = i + 1;
-      const delimiter = line.includes(';') ? ';' : (line.includes('\t') ? '\t' : ',');
-      const parts = line.split(delimiter).map(p => p.trim().replace(/^["']|["']$/g, ''));
-
-      if (parts.length < 3) {
-        result.ignoredRowsCount++;
-        result.ignoredRows.push({ row: rowNum, line, reason: 'Línea con menos de 3 columnas (se requiere al menos Grado; Día; Asignatura).' });
-        continue;
-      }
-
-      // Expected format: Grade; Day; Slot/Hour; Subject; Teacher; Classroom
-      const grade = parts[0];
-      const dayRaw = parts[1].toLowerCase();
-      const dayOfWeek = dayMap[dayRaw] || Number(dayRaw) || 1;
-      const slotRaw = parts.length >= 4 ? parts[2] : '1';
-      const subject = parts.length >= 4 ? parts[3] : parts[2];
-      const teacherRaw = parts[4] || '';
-      const classroom = parts[5] || 'Aula Regular';
-
-      if (!grade || !subject) {
-        result.ignoredRowsCount++;
-        result.ignoredRows.push({ row: rowNum, line, reason: 'Grado o Asignatura vacía.' });
-        continue;
-      }
-
-      let matchedSlot = slots.find(s => s.id === slotRaw || s.name.toLowerCase().includes(slotRaw.toLowerCase()) || s.startTime.startsWith(slotRaw));
-      if (!matchedSlot) {
-        const orderNum = parseInt(slotRaw.replace(/\D/g, ''), 10);
-        if (!isNaN(orderNum)) {
-          matchedSlot = slots.find(s => s.order === orderNum && s.type === 'CLASS');
-        }
-      }
-      if (!matchedSlot) {
-        matchedSlot = slots.find(s => s.type === 'CLASS');
-      }
-
-      if (!matchedSlot) {
-        result.ignoredRowsCount++;
-        result.ignoredRows.push({ row: rowNum, line, reason: `No se encontró slot de clase para: ${slotRaw}` });
-        continue;
-      }
-
-      const teacher = teachers.find(t => 
-        t.fullName.toLowerCase().includes(teacherRaw.toLowerCase()) || 
-        t.username.toLowerCase() === teacherRaw.toLowerCase()
-      );
-
-      // Check conflict
-      const conflict = newAssignments.find(a => 
-        a.slotId === matchedSlot!.id && 
-        a.dayOfWeek === dayOfWeek && 
-        a.teacherId && 
-        teacher && 
-        a.teacherId === teacher.id && 
-        a.grade !== grade
-      );
-
-      if (conflict) {
-        result.conflictsCount++;
-        result.conflicts.push({
-          row: rowNum,
-          reason: 'Conflicto de cruce docente',
-          detail: `Prof. ${teacher?.fullName} ocupado en ${conflict.grade} el día ${dayOfWeek} en ${matchedSlot.name}.`
-        });
-      }
-
-      const existIdx = newAssignments.findIndex(a => a.grade === grade && a.slotId === matchedSlot!.id && a.dayOfWeek === dayOfWeek);
-      const assignmentObj: ClassScheduleAssignment = {
-        id: `as-csv-${Date.now()}-${i}`,
-        grade,
-        dayOfWeek,
-        slotId: matchedSlot.id,
-        subject,
-        teacherId: teacher?.id,
-        teacherName: teacher?.fullName || teacherRaw || 'Docente Titular',
-        classroom
-      };
-
-      if (existIdx >= 0) {
-        newAssignments[existIdx] = assignmentObj;
-      } else {
-        newAssignments.push(assignmentObj);
-      }
-      result.importedAssignmentsCount++;
+    let applied = 0;
+    for (const row of rows) {
+      this.setAssignment({
+        dayOfWeek: row.dayOfWeek,
+        slotId: row.slotId,
+        grade: row.grade,
+        subject: row.subject,
+        teacherId: row.teacherId,
+        teacherName: row.teacherName,
+        classroom: row.classroom
+      });
+      applied++;
     }
-
-    this.saveScheduleAssignments(newAssignments);
-    return result;
+    return { applied, removed };
   }
 
   // ==================== ATTENDANCE RECORDS (CLASS BASED) ====================
