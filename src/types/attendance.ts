@@ -204,7 +204,9 @@ export interface QRPayload {
 }
 
 export interface ScanResultFeedback {
-  type: 'success_punctual' | 'success_tardy' | 'already_scanned' | 'not_found' | 'invalid_signature' | 'rate_limited' | 'error' | 'block_closed' | 'pending_review' | 'non_computable' | 'out_of_window';
+  // Ronda 19: 'no_active_slot' — escaneo durante recreo/transición (BUG-1 del informe de testing:
+  // antes caía al fallback 'slot-1' y se registraba TARDANZA en 1ª Hora). No registra nada.
+  type: 'success_punctual' | 'success_tardy' | 'already_scanned' | 'not_found' | 'invalid_signature' | 'rate_limited' | 'error' | 'block_closed' | 'pending_review' | 'non_computable' | 'out_of_window' | 'no_active_slot';
   title: string;
   message: string;
   timestamp: string;
@@ -276,11 +278,15 @@ export interface StudentAttendanceStats {
 export interface AttendanceSummary {
   totalEnrolled: number;
   totalClassesToday: number;
+  // Ronda 19 (BUG-2 del informe): cuenta ESTUDIANTES ÚNICOS (Set por studentCode), no registros;
+  // con múltiples bloques el conteo por registros podía superar la matrícula (53 "presentes" con 50).
   totalPresent: number;
   punctualCount: number;
   tardyCount: number;
   absentCount: number;
-  attendanceRate: number; // 0 - 100
+  // Ronda 19 (BUG-2 del informe): null cuando la fecha no tiene registros — antes mostraba un 95%
+  // hardcodeado, dato contradictorio en una revisión (día sin escaneos = "95% de asistencia").
+  attendanceRate: number | null; // 0 - 100, o null si no hay registros en la fecha
 }
 
 export interface OfflineQueueItem {

@@ -1036,6 +1036,66 @@ export class AttendanceStorageService {
     return slots[0] ? { slot: slots[0], isWithin: false, dayOfWeek } : null;
   }
 
+  /**
+   * Ronda 19 (BUG-1 del informe de testing): primer bloque CLASE que inicia DESPUÉS de la hora
+   * dada (o actual). Sirve para redactar el mensaje de `no_active_slot`:
+   * "El próximo bloque es la 4ª a las 09:45". Devuelve undefined si no queda ninguno por hoy.
+   */
+  static getNextUpcomingClassSlot(customTimeStr?: string): ScheduleSlot | undefined {
+    const slots = this.getScheduleSlots().filter(s => s.type === 'CLASS');
+    const timeStr = customTimeStr || getCurrentTimeString();
+    const [h, m] = timeStr.split(':').map(Number);
+    const currentMin = h * 60 + m;
+
+    return slots
+      .filter(s => {
+        const [startH, startM] = s.startTime.split(':').map(Number);
+        return startH * 60 + startM > currentMin;
+      })
+      .sort((a, b) => {
+        const [ah, am] = a.startTime.split(':').map(Number);
+        const [bh, bm] = b.startTime.split(':').map(Number);
+        return (ah * 60 + am) - (bh * 60 + bm);
+      })[0];
+  }
+
+  /**
+   * Ronda 19 (BUG-1): mensaje único y honesto para cuando el reloj NO está dentro de un bloque
+   * CLASE (recreo, cambio de salón, antes de la primera hora). Una sola fuente de verdad para
+   * los tres puntos de escaneo (terminal, representante, aula docente).
+   */
+  static buildNoActiveSlotMessage(customTimeStr?: string): string {
+    const timeStr = customTimeStr || getCurrentTimeString();
+    const next = this.getNextUpcomingClassSlot(timeStr);
+    if (next) {
+      return `Ahora no hay clase en curso (recreo o transición, ${timeStr}). El próximo bloque es ${next.name} a las ${next.startTime}. El escaneo se habilitará al iniciar ese bloque.`;
+    }
+    return `Ahora no hay clase en curso (${timeStr}) y no quedan más bloques de clase por hoy. No se registra asistencia por escáner.`;
+  }
+
+  // ==================== RATE LIMIT (BUG-3 del informe) ====================
+  // Ronda 19: `rateLimitMaxPerMin` existía en Ajustes pero ninguna función lo leía (32/32
+  // escaneos en 10 s pasaron). Cola de timestamps en memoria (sesión de la pestaña): cuenta
+  // INTENTOS de escaneo del terminal, incluidos los rechazados — detecta lectores USB defectuosos
+  // que re-disparan. No persiste: un recargo de página reinicia el contador (aceptable).
+  private static scanAttemptTimestamps: number[] = [];
+
+  static checkScanRateLimit(): { limited: boolean; maxPerMin: number; retryAfterSec: number } {
+    const settings = this.getSettings();
+    const max = settings.rateLimitMaxPerMin && settings.rateLimitMaxPerMin > 0 ? settings.rateLimitMaxPerMin : 30;
+    const now = Date.now();
+    this.scanAttemptTimestamps = this.scanAttemptTimestamps.filter(t => now - t < 60_000);
+
+    if (this.scanAttemptTimestamps.length >= max) {
+      const oldest = this.scanAttemptTimestamps[0];
+      const retryAfterSec = Math.max(1, Math.ceil((60_000 - (now - oldest)) / 1000));
+      return { limited: true, maxPerMin: max, retryAfterSec };
+    }
+
+    this.scanAttemptTimestamps.push(now);
+    return { limited: false, maxPerMin: max, retryAfterSec: 0 };
+  }
+
   static getNextClassSlot(slotId: string): ScheduleSlot | undefined {
     const classSlots = this.getScheduleSlots().filter(s => s.type === 'CLASS').sort((a, b) => a.order - b.order);
     const currIdx = classSlots.findIndex(s => s.id === slotId);
@@ -1749,11 +1809,25 @@ export class AttendanceStorageService {
     const punctualCount = records.filter(r => r.status === 'PUNTUAL').length;
     const tardyCount = records.filter(r => r.status === 'TARDANZA').length;
     const absentCount = records.filter(r => r.status === 'AUSENTE').length;
-    const totalPresent = punctualCount + tardyCount;
 
-    const attendanceRate = totalClassesToday > 0 
-      ? Math.round((totalPresent / totalClassesToday) * 100) 
-      : (totalEnrolled > 0 ? 95 : 100);
+    // Ronda 19 (BUG-2 del informe): presentes = ESTUDIANTES ÚNICOS con registro PUNTUAL/TARDANZA.
+    // Antes contaba registros; con múltiples bloques el KPI mostraba "PRESENTES HOY: 53" con
+    // matrícula de 50. Un Set por studentCode lo hace imposible.
+    const totalPresent = new Set(
+      records
+        .filter(r => r.status === 'PUNTUAL' || r.status === 'TARDANZA')
+        .map(r => r.studentCode)
+    ).size;
+
+    // Ronda 19 (BUG-2 del informe): tasa = PRESENTES ÚNICOS / MATRÍCULA ACTIVA — la misma
+    // semántica del KPI "Presentes Hoy" (antes mezclaba registros; ahora el % y el número
+    // del KPI cuentan lo mismo). Sin registros → null (la UI muestra texto honesto);
+    // clamp a 100 por si existieran registros de estudiantes ya eliminados de la matrícula.
+    // Antes: `a>0 ? 95 : 100` — un 95 hardcodeado que en un día sin escaneos mostraba
+    // "95% de asistencia" con 0 presentes.
+    const attendanceRate = totalClassesToday > 0 && totalEnrolled > 0
+      ? Math.min(100, Math.round((totalPresent / totalEnrolled) * 100))
+      : null;
 
     return {
       totalEnrolled,
@@ -1846,8 +1920,22 @@ export class AttendanceStorageService {
     customStatus?: any;
     notes?: string;
   }): Promise<any> {
+    // Ronda 19 (BUG-1 del informe de testing): si el reloj NO está dentro de un bloque CLASE
+    // (recreo, cambio de salón, antes de la primera hora) NO se registra nada. Antes:
+    // `activeSlotInfo?.slot.id || 'slot-1'` inyectaba la 1ª Hora y el estudiante aparecía
+    // "tardando a una clase que terminó hace 2 horas", contaminando la planilla.
     const activeSlotInfo = this.getCurrentActiveSlot();
-    const slotId = activeSlotInfo?.slot.id || 'slot-1';
+    if (!activeSlotInfo || !activeSlotInfo.isWithin) {
+      return {
+        type: 'no_active_slot' as const,
+        title: 'No hay clase en curso',
+        message: activeSlotInfo
+          ? this.buildNoActiveSlotMessage()
+          : 'No hay bloques de clase configurados en la plantilla de jornada activa.',
+        timestamp: new Date().toISOString()
+      };
+    }
+    const slotId = activeSlotInfo.slot.id;
     
     // Look up student to supply grade
     const parsed = await parseAndVerifyScan(params.scanInput);

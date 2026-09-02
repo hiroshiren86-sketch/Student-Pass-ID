@@ -87,6 +87,21 @@ export const ScanHubView: React.FC<ScanHubViewProps> = ({ onScanSuccess }) => {
 
     try {
       const cleanInput = rawCode.trim();
+
+      // Ronda 19 (BUG-3 del informe): límite de escaneos por minuto (Ajustes → rateLimitMaxPerMin).
+      // Antes la config existía pero ninguna función la leía: 32/32 escaneos en 10 s pasaron.
+      const limit = AttendanceStorageService.checkScanRateLimit();
+      if (limit.limited) {
+        setLastFeedback({
+          type: 'rate_limited',
+          title: 'Límite de escaneos alcanzado',
+          message: `Se alcanzó el máximo de ${limit.maxPerMin} escaneos por minuto. Reintenta en ${limit.retryAfterSec}s.`,
+          timestamp: new Date().toISOString()
+        });
+        if (soundEnabled) SoundService.playBeepError();
+        return;
+      }
+
       const feedback = await AttendanceStorageService.registerScan({
         scanInput: cleanInput,
         method: method,
@@ -330,9 +345,9 @@ export const ScanHubView: React.FC<ScanHubViewProps> = ({ onScanSuccess }) => {
             className={`p-4 sm:p-5 rounded-2xl border transition-all animate-fadeIn ${
               lastFeedback.type === 'success_punctual'
                 ? 'bg-emerald-50/90 dark:bg-emerald-950/60 border-emerald-200 dark:border-emerald-800/80 text-emerald-950 dark:text-emerald-100'
-                : lastFeedback.type === 'success_tardy'
+                : lastFeedback.type === 'success_tardy' || lastFeedback.type === 'rate_limited'
                 ? 'bg-amber-50/90 dark:bg-amber-950/60 border-amber-200 dark:border-amber-800/80 text-amber-950 dark:text-amber-100'
-                : lastFeedback.type === 'already_scanned'
+                : lastFeedback.type === 'already_scanned' || lastFeedback.type === 'no_active_slot'
                 ? 'bg-indigo-50/90 dark:bg-indigo-950/60 border-indigo-200 dark:border-indigo-800/80 text-indigo-950 dark:text-indigo-100'
                 : 'bg-rose-50/90 dark:bg-rose-950/60 border-rose-200 dark:border-rose-800/80 text-rose-950 dark:text-rose-100'
             }`}
@@ -341,7 +356,7 @@ export const ScanHubView: React.FC<ScanHubViewProps> = ({ onScanSuccess }) => {
               <div className="shrink-0">
                 {lastFeedback.type === 'success_punctual' ? (
                   <CheckCircle2 className="w-8 h-8 text-emerald-600 dark:text-emerald-400" />
-                ) : lastFeedback.type === 'success_tardy' ? (
+                ) : lastFeedback.type === 'success_tardy' || lastFeedback.type === 'rate_limited' ? (
                   <AlertTriangle className="w-8 h-8 text-amber-600 dark:text-amber-400" />
                 ) : (
                   <XCircle className="w-8 h-8 text-rose-600 dark:text-rose-400" />

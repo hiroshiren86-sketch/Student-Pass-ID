@@ -112,7 +112,12 @@ export const AttendanceReportsView: React.FC = () => {
           <div className="text-2xl font-black text-emerald-600 dark:text-emerald-400">
             {summary.totalPresent}
           </div>
-          <span className="text-[10px] text-emerald-600/80">{summary.attendanceRate}% de asistencia</span>
+          {/* Ronda 19 (BUG-2): sin registros la tasa es null → texto honesto en vez de un % inventado */}
+          <span className="text-[10px] text-emerald-600/80">
+            {summary.attendanceRate === null
+              ? (summary.totalClassesToday === 0 ? 'Sin registros en esta fecha' : 'Matrícula activa vacía')
+              : `${summary.attendanceRate}% de asistencia`}
+          </span>
         </div>
 
         <div className="glass-panel p-4 rounded-2xl space-y-1 border-indigo-500/30">
@@ -179,7 +184,7 @@ export const AttendanceReportsView: React.FC = () => {
           </div>
         ) : (
           <div className="w-full overflow-x-auto rounded-xl border border-slate-200 dark:border-zinc-800/50">
-            <table className="w-full text-left text-xs min-w-[700px]">
+            <table className="w-full text-left text-xs min-w-[780px]">
               <thead>
                 <tr className="border-b border-slate-100 dark:border-zinc-800/50 text-slate-400 font-bold uppercase">
                   <th className="py-3 px-3">Hora</th>
@@ -187,6 +192,9 @@ export const AttendanceReportsView: React.FC = () => {
                   <th className="py-3 px-3">Documento (ID)</th>
                   <th className="py-3 px-3">Estudiante</th>
                   <th className="py-3 px-3">Curso</th>
+                  {/* Ronda 19 (hallazgo 6 del informe): la data ya existía en cada registro (el CSV
+                      export sí la traía) — faltaba en pantalla. Es la consulta central del docente. */}
+                  <th className="py-3 px-3">Asignatura</th>
                   <th className="py-3 px-3">Tipo</th>
                   <th className="py-3 px-3">Estado</th>
                   <th className="py-3 px-3">Dispositivo</th>
@@ -211,6 +219,11 @@ export const AttendanceReportsView: React.FC = () => {
                     <td className="py-3 px-3">
                       <span className="px-2 py-0.5 rounded-md font-bold text-[11px] bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300">
                         {r.studentGrade}
+                      </span>
+                    </td>
+                    <td className="py-3 px-3">
+                      <span className="text-[11px] font-bold text-indigo-700 dark:text-indigo-300">
+                        {r.subject || '—'}
                       </span>
                     </td>
                     <td className="py-3 px-3">

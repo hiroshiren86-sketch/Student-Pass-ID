@@ -88,6 +88,23 @@ export const TeacherClassroomView: React.FC<TeacherClassroomViewProps> = ({
   const [delegatedStudentCode, setDelegatedStudentCode] = useState<string>('');
   const [latestDelegation, setLatestDelegation] = useState<EphemeralScanDelegation | null>(null);
 
+  // Ronda 19 (hallazgo 10 del informe): Escape cierra los modales de este módulo — el de
+  // Delegación era el único que ignoraba la tecla (había que pulsar "Cancelar"). Patrón
+  // Regla E10 / ConfirmDialog: listener global mientras el modal está abierto.
+  useEffect(() => {
+    if (!showRepModal && !showSubRepModal && !showDelegationModal) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.stopPropagation();
+        setShowRepModal(false);
+        setShowSubRepModal(false);
+        setShowDelegationModal(false);
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [showRepModal, showSubRepModal, showDelegationModal]);
+
   // Reloj vivo + ventana de aviso de fin de bloque (T-{n}) — notificación única por bloque/día
   const [nowMinuteOfDay, setNowMinuteOfDay] = useState<number>(() => {
     const [h, m] = getCurrentTimeString().split(':').map(Number);
@@ -265,6 +282,14 @@ export const TeacherClassroomView: React.FC<TeacherClassroomViewProps> = ({
     setIsProcessing(true);
 
     try {
+      // Ronda 19 (BUG-3 del informe): límite anti-abuso también en el aula (lector USB defectuoso).
+      const limit = AttendanceStorageService.checkScanRateLimit();
+      if (limit.limited) {
+        setScanFeedback({ type: 'warning', message: `Demasiados escaneos por minuto (máx. ${limit.maxPerMin}). Reintenta en ${limit.retryAfterSec}s.` });
+        if (soundEnabled) SoundService.playBeepError();
+        return;
+      }
+
       const result = await AttendanceStorageService.registerClassScan({
         scanInput: rawCode.trim(),
         method,

@@ -259,8 +259,27 @@ export const StudentPortalView: React.FC<StudentPortalViewProps> = ({ onLogout, 
   const handleRepRegister = async (rawCode: string, method: 'CAMERA' | 'USB' | 'MANUAL') => {
     if (!activeStudent || !rawCode.trim()) return;
 
+    // Ronda 19 (BUG-3 del informe): límite anti-abuso / anti-lector-defectuoso configurado en Ajustes.
+    const limit = AttendanceStorageService.checkScanRateLimit();
+    if (limit.limited) {
+      if (soundEnabled) SoundService.playBeepError();
+      setRepScanFeedback({ type: 'warning', message: `Demasiados escaneos por minuto (máx. ${limit.maxPerMin}). Reintenta en ${limit.retryAfterSec}s.` });
+      setRepManualInput('');
+      setTimeout(() => setRepScanFeedback(null), 4000);
+      return;
+    }
+
+    // Ronda 19 (BUG-1 del informe): durante recreo/transición el reloj NO define el bloque.
+    // Antes: `activeSlotInfo?.slot.id || 'slot-1'` registraba TARDANZA en 1ª Hora a las 09:20.
     const activeSlotInfo = AttendanceStorageService.getCurrentActiveSlot();
-    const slotId = activeSlotInfo?.slot.id || 'slot-1';
+    if (!activeSlotInfo || !activeSlotInfo.isWithin) {
+      if (soundEnabled) SoundService.playBeepError();
+      setRepScanFeedback({ type: 'warning', message: activeSlotInfo ? AttendanceStorageService.buildNoActiveSlotMessage() : 'No hay bloques de clase configurados en la plantilla.' });
+      setRepManualInput('');
+      setTimeout(() => setRepScanFeedback(null), 4000);
+      return;
+    }
+    const slotId = activeSlotInfo.slot.id;
 
     const res = await AttendanceStorageService.registerClassScan({
       scanInput: rawCode.trim(),
