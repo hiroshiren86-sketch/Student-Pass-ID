@@ -429,8 +429,12 @@ export const ScheduleBuilderView: React.FC = () => {
         </div>
       )}
 
-      {/* Header Banner */}
-      <div className="p-6 rounded-3xl bg-white/70 dark:bg-zinc-950/70 border border-slate-200/80 dark:border-zinc-800/50 backdrop-blur-xl shadow-sm flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
+      {/* Header Banner — Ronda 22: `relative z-30` crea el stacking context del banner
+          POR ENCIMA de las barras hermanas posteriores (también backdrop-blur, z-auto).
+          Sin esto, el z-40 del menú bento queda atrapado dentro del contexto del banner
+          y el selector de días (Lun-Mar-Mié...) pintaba encima del menú desplegado.
+          z-30 < z-40 del header sticky de la app y < z-50 de los modales: sin colisiones. */}
+      <div className="relative z-30 p-6 rounded-3xl bg-white/70 dark:bg-zinc-950/70 border border-slate-200/80 dark:border-zinc-800/50 backdrop-blur-xl shadow-sm flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
         <div>
           <div className="flex items-center gap-2 flex-wrap">
             <span className="text-[11px] font-bold px-2.5 py-0.5 rounded-full bg-indigo-50 dark:bg-indigo-950/60 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800 uppercase tracking-wider">
