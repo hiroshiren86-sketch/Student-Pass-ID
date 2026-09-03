@@ -31,7 +31,8 @@ import {
   Power,
   QrCode,
   Download,
-  Upload
+  Upload,
+  ChevronDown
 } from 'lucide-react';
 import {
   ScheduleSlot,
@@ -115,6 +116,41 @@ export const ScheduleBuilderView: React.FC = () => {
 
   // Mode: 'grid' (Timetable matrix) vs 'weekly-matrix' (Full 5-day week) vs 'slots-editor' (Design structure of hours) vs 'templates' (Plantillas + política) vs 'class-qr' (QR de Clase — Ronda 19)
   const [subView, setSubView] = useState<'grid' | 'weekly-matrix' | 'slots-editor' | 'templates' | 'class-qr'>('grid');
+
+  // Ronda 21 — tarjetas del menú bento. QR de Clase PRIMERO (petición del propietario).
+  const VIEW_CARDS: Array<{ id: typeof subView; label: string; desc: string; icon: React.ComponentType<{ className?: string }>; accent?: boolean }> = [
+    {
+      id: 'class-qr',
+      label: 'QR de Clase',
+      desc: 'Vincula la materia exacta con un QR firmado: 1 toque en el aula antes de pasar lista.',
+      icon: QrCode,
+      accent: true
+    },
+    { id: 'grid', label: 'Por Día', desc: 'Timetable de un día para el grado seleccionado.', icon: Calendar },
+    { id: 'weekly-matrix', label: 'Semana Completa', desc: 'Matriz semanal de los 5 días de jornada.', icon: LayoutGrid },
+    { id: 'slots-editor', label: 'Estructura de Horas', desc: `Diseña bloques, recreos y bloques dobles (${slots.length} bloques).`, icon: SlidersHorizontal },
+    { id: 'templates', label: 'Plantillas', desc: 'Jornadas tipo por día y políticas del colegio.', icon: LayoutTemplate }
+  ];
+
+  // Ronda 21 — UI bento (petición del propietario): la línea horizontal de botones
+  // (imposible de deslizar en móvil, el QR de Clase quedaba escondido al final)
+  // se reemplaza por UN botón que despliega TARJETAS. Elegir tarjeta = pulsar el
+  // botón de esa vista. QR de Clase PRIMERO (prioridad del flujo 2026).
+  const [viewMenuOpen, setViewMenuOpen] = useState(false);
+  const viewMenuRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!viewMenuOpen) return;
+    const onOutside = (e: MouseEvent) => {
+      if (viewMenuRef.current && !viewMenuRef.current.contains(e.target as Node)) setViewMenuOpen(false);
+    };
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setViewMenuOpen(false); };
+    document.addEventListener('mousedown', onOutside);
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('mousedown', onOutside);
+      document.removeEventListener('keydown', onKey);
+    };
+  }, [viewMenuOpen]);
 
   // Ronda 19 — QR de Clase: modal de generación/descarga de la tarjeta A6 firmada
   const [classQrModal, setClassQrModal] = useState<{ grade: string; dayOfWeek: number; slotId: string; slotName: string; slotStartTime: string; slotEndTime: string; subject: string; teacherName: string; classroom?: string } | null>(null);
@@ -413,69 +449,67 @@ export const ScheduleBuilderView: React.FC = () => {
           </p>
         </div>
 
-        {/* Sub-view Switcher */}
-        <div className="flex items-center bg-slate-100 dark:bg-slate-800/80 p-1 rounded-2xl border border-slate-200 dark:border-zinc-800 self-stretch md:self-auto overflow-x-auto">
+        {/* Ronda 21 — Sub-view Switcher BENTO: un solo botón que despliega tarjetas.
+            QR de Clase primero (petición del propietario); en móvil ya no hay que
+            deslizar la línea de botones hasta el final para encontrarlo. */}
+        <div className="relative self-stretch md:self-auto" ref={viewMenuRef}>
           <button
-            onClick={() => setSubView('grid')}
-            className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-1.5 shrink-0 ${
-              subView === 'grid'
-                ? 'bg-white dark:bg-zinc-950 text-indigo-600 dark:text-indigo-400 shadow-sm'
-                : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
-            }`}
+            onClick={() => setViewMenuOpen(o => !o)}
+            aria-expanded={viewMenuOpen}
+            aria-haspopup="menu"
+            aria-label={`Vista actual: ${VIEW_CARDS.find(v => v.id === subView)?.label}. Cambiar de vista`}
+            className="w-full md:w-auto px-4 py-2.5 rounded-2xl bg-slate-100 dark:bg-slate-800/80 border border-slate-200 dark:border-zinc-800 text-xs font-black text-slate-700 dark:text-slate-200 hover:border-indigo-400 transition-all flex items-center justify-between md:justify-center gap-2.5"
           >
-            <Calendar className="w-3.5 h-3.5" />
-            <span>Por Día</span>
+            <span className="flex items-center gap-2">
+              {(() => { const C = VIEW_CARDS.find(v => v.id === subView)?.icon || Calendar; return <C className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />; })()}
+              {VIEW_CARDS.find(v => v.id === subView)?.label || 'Vista'}
+            </span>
+            <ChevronDown className={`w-4 h-4 text-slate-400 transition-transform duration-200 ${viewMenuOpen ? 'rotate-180' : ''}`} />
           </button>
 
-          <button
-            onClick={() => setSubView('weekly-matrix')}
-            className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-1.5 shrink-0 ${
-              subView === 'weekly-matrix'
-                ? 'bg-white dark:bg-zinc-950 text-indigo-600 dark:text-indigo-400 shadow-sm'
-                : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
-            }`}
-          >
-            <LayoutGrid className="w-3.5 h-3.5" />
-            <span>Semana Completa</span>
-          </button>
-
-          <button
-            onClick={() => setSubView('slots-editor')}
-            className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-1.5 shrink-0 ${
-              subView === 'slots-editor'
-                ? 'bg-white dark:bg-zinc-950 text-indigo-600 dark:text-indigo-400 shadow-sm'
-                : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
-            }`}
-          >
-            <SlidersHorizontal className="w-3.5 h-3.5" />
-            <span>Estructura ({slots.length})</span>
-          </button>
-
-          <button
-            onClick={() => setSubView('templates')}
-            className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-1.5 shrink-0 ${
-              subView === 'templates'
-                ? 'bg-white dark:bg-zinc-950 text-indigo-600 dark:text-indigo-400 shadow-sm'
-                : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
-            }`}
-          >
-            <LayoutTemplate className="w-3.5 h-3.5" />
-            <span>Plantillas</span>
-          </button>
-
-          {/* Ronda 19 — QR de Clase (informe de testing, sección 5.3): la vía que vincula la
-              materia sin depender del reloj ni del horario completo */}
-          <button
-            onClick={() => setSubView('class-qr')}
-            className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-1.5 shrink-0 ${
-              subView === 'class-qr'
-                ? 'bg-white dark:bg-zinc-950 text-indigo-600 dark:text-indigo-400 shadow-sm'
-                : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
-            }`}
-          >
-            <QrCode className="w-3.5 h-3.5" />
-            <span>QR de Clase</span>
-          </button>
+          {viewMenuOpen && (
+            <div
+              role="menu"
+              aria-label="Elegir vista de horarios"
+              className="absolute right-0 md:right-auto left-0 md:left-auto top-full mt-2 z-40 p-2 rounded-3xl bg-white dark:bg-zinc-950 border border-slate-200 dark:border-zinc-800/60 shadow-2xl shadow-slate-900/10 grid grid-cols-1 sm:grid-cols-2 gap-2 w-full md:w-[520px]"
+            >
+              {VIEW_CARDS.map(v => {
+                const Icon = v.icon;
+                const active = subView === v.id;
+                return (
+                  <button
+                    key={v.id}
+                    role="menuitemradio"
+                    aria-checked={active}
+                    onClick={() => { setSubView(v.id); setViewMenuOpen(false); }}
+                    className={`text-left p-3.5 rounded-2xl border transition-all flex items-start gap-3 group ${
+                      active
+                        ? 'bg-indigo-50 dark:bg-indigo-950/50 border-indigo-300 dark:border-indigo-800 shadow-sm'
+                        : 'bg-slate-50/80 dark:bg-black/40 border-slate-100 dark:border-zinc-800/60 hover:border-indigo-300 dark:hover:border-indigo-800 hover:shadow-md hover:-translate-y-0.5'
+                    }`}
+                  >
+                    <span className={`w-9 h-9 rounded-xl flex items-center justify-center shrink-0 ${
+                      v.accent
+                        ? 'bg-indigo-600 text-white shadow-md shadow-indigo-600/30'
+                        : active
+                          ? 'bg-indigo-100 dark:bg-indigo-900/60 text-indigo-600 dark:text-indigo-300'
+                          : 'bg-slate-100 dark:bg-slate-800 text-slate-500 dark:text-slate-400 group-hover:text-indigo-600 dark:group-hover:text-indigo-300'
+                    }`}>
+                      <Icon className="w-5 h-5" />
+                    </span>
+                    <span className="min-w-0">
+                      <span className={`block text-xs font-black ${active ? 'text-indigo-700 dark:text-indigo-300' : 'text-slate-800 dark:text-slate-100'} flex items-center gap-1.5`}>
+                        {v.label}
+                      </span>
+                      <span className="block text-[10px] text-slate-500 dark:text-slate-400 leading-snug mt-0.5">
+                        {v.desc}
+                      </span>
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+          )}
         </div>
       </div>
 
