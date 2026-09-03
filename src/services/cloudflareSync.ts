@@ -295,9 +295,46 @@ export class CloudflareSyncService {
         const currentRecords = AttendanceStorageService.getAllAttendance();
         const existingIds = new Set(currentRecords.map(r => r.id));
         const newRecords = records.filter((r: any) => !existingIds.has(r.id));
-        const merged = [...currentRecords, ...newRecords];
+        // Ronda 21 (spec §1.2/§4.4): convergencia dirigida del OVERLAY de excusas.
+        // El pull clásico solo AÑADÍA registros nuevos; una decisión de Rectoría
+        // (aprobar → verificada / rechazar → desvincular) jamás alcanzaba a los
+        // registros que ya existían localmente. Reglas (por id):
+        //  1) snapshot trae excuseId → se aplica (radicación/aprobación propagadas).
+        //  2) snapshot NO trae excuseId pero trae excuseUpdatedAt más nuevo que el
+        //     local → gana el snapshot (rechazo/eliminación propagados; el stamp se
+        //     conserva como evidencia). Sin stamp en el snapshot (datos pre-Ronda 21)
+        //     el overlay local NO se toca: no se destruye lo que no se puede comparar.
+        const byIdMap = new Map(currentRecords.map(r => [r.id, r]));
+        const mergedExcuse = records
+          .filter((r: any) => existingIds.has(r.id))
+          .reduce((changes: number, pulled: any) => {
+            const local = byIdMap.get(pulled.id);
+            if (!local) return changes;
+            const pulledStamp: string | undefined = pulled.excuseUpdatedAt || undefined;
+            const localStamp: string | undefined = local.excuseUpdatedAt || undefined;
+            const pulledNewer = !!pulledStamp && (!localStamp || pulledStamp > localStamp);
+            if (pulled.excuseId && (pulled.excuseId !== local.excuseId || pulled.excuseStatus !== local.excuseStatus)) {
+              byIdMap.set(pulled.id, {
+                ...local,
+                excuseId: pulled.excuseId,
+                excuseStatus: pulled.excuseStatus,
+                excuseUpdatedAt: pulledStamp || local.excuseUpdatedAt
+              });
+              return changes + 1;
+            }
+            if (!pulled.excuseId && local.excuseId && pulledNewer) {
+              const { excuseId: _e, excuseStatus: _s, ...rest } = local;
+              byIdMap.set(pulled.id, { ...(rest as AttendanceRecord), excuseUpdatedAt: pulledStamp });
+              return changes + 1;
+            }
+            return changes;
+          }, 0);
+        const merged = [...byIdMap.values(), ...newRecords];
         AttendanceStorageService.saveAttendance(merged);
         importedRecords = newRecords.length;
+        if (mergedExcuse > 0) {
+          console.info(`[Sync Pull] Overlay de excusas convergido en ${mergedExcuse} registro(s) (Ronda 21).`);
+        }
       }
 
       if (Array.isArray(teachers) && teachers.length > 0) {

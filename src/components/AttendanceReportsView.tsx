@@ -12,7 +12,8 @@ import {
   FileSpreadsheet,
   Layers,
   ArrowUpDown,
-  Sparkles
+  Sparkles,
+  ShieldCheck
 } from 'lucide-react';
 import { AttendanceRecord, AttendanceSummary } from '../types/attendance';
 import { AttendanceStorageService, getTodayDateString } from '../services/attendanceStorage';
@@ -98,7 +99,7 @@ export const AttendanceReportsView: React.FC = () => {
       </div>
 
       {/* KPI Cards */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 sm:gap-4">
+      <div className="grid grid-cols-2 sm:grid-cols-5 gap-3 sm:gap-4">
         <div className="glass-panel p-4 rounded-2xl space-y-1">
           <span className="text-[11px] font-bold text-slate-400 uppercase">Matrícula Activa</span>
           <div className="text-2xl font-black text-slate-900 dark:text-white">
@@ -134,6 +135,16 @@ export const AttendanceReportsView: React.FC = () => {
             {summary.tardyCount}
           </div>
           <span className="text-[10px] text-amber-600/80">Ingreso extemporáneo</span>
+        </div>
+
+        {/* Ronda 21 (spec §4.3): 4º número del resumen — ausencias protegidas por excusa.
+            No sustituye a Ausentes: es la porción de las faltas que NO son injustificadas. */}
+        <div className="glass-panel p-4 rounded-2xl space-y-1 border-emerald-400/30">
+          <span className="text-[11px] font-bold text-emerald-600 dark:text-emerald-400 uppercase">Justificadas</span>
+          <div className="text-2xl font-black text-emerald-600 dark:text-emerald-400">
+            {summary.justificados}
+          </div>
+          <span className="text-[10px] text-emerald-600/80">Ausencias con excusa vigente</span>
         </div>
       </div>
 
@@ -246,9 +257,19 @@ export const AttendanceReportsView: React.FC = () => {
                           Puntual
                         </span>
                       ) : r.status === 'AUSENTE' ? (
-                        <span className="px-2.5 py-0.5 rounded-full font-bold text-[10px] bg-rose-500/15 text-rose-700 dark:text-rose-300 border border-rose-500/30">
-                          Ausente
-                        </span>
+                        /* Ronda 21 (spec §4.2): etiqueta derivada del overlay de excusas.
+                           La planilla JAMÁS muestra el motivo ni la foto (minimización §5). */
+                        r.excuseId ? (
+                          <span className="px-2.5 py-0.5 rounded-full font-bold text-[10px] bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 border border-emerald-500/30 inline-flex items-center gap-1"
+                            title="Ausencia protegida por excusa — la decisión es de Rectoría">
+                            <ShieldCheck className="w-3 h-3" />
+                            {r.excuseStatus === 'APROBADA' ? 'Excusada (verificada)' : 'Excusada (bajo revisión)'}
+                          </span>
+                        ) : (
+                          <span className="px-2.5 py-0.5 rounded-full font-bold text-[10px] bg-rose-500/15 text-rose-700 dark:text-rose-300 border border-rose-500/30">
+                            Ausente
+                          </span>
+                        )
                       ) : (
                         <span className="px-2.5 py-0.5 rounded-full font-bold text-[10px] bg-amber-500/15 text-amber-700 dark:text-amber-300 border border-amber-500/30">
                           Tardanza

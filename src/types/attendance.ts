@@ -179,6 +179,58 @@ export interface AttendanceRecord {
   // por reloj/plantilla (comportamiento clásico). El CSV exporta una columna "Contexto".
   contextSource?: 'QR_CLASE' | 'HORA';
   classQrVerified?: boolean; // la firma del token CLASE:v1 que activó el contexto era válida
+  // Ronda 21 — Excusas (spec-excusas-2026 §1.2): OVERLAY, no un 4º estado. El registro
+  // conserva status='AUSENTE' y referencia la excusa que lo protege. "Falta injustificada"
+  // = AUSENTE sin excuseId. excuseStatus es un SNAPSHOT para pintar la etiqueta derivada
+  // ("Excusada (bajo revisión)" / "Excusada (verificada)") sin consultas extra; la verdad
+  // vive en D1 (student_excuses) y se refresca por sync/post-hoc.
+  excuseId?: string;
+  excuseStatus?: ExcuseStatus;
+  // Marcador local de CUÁNDO cambió el overlay por última vez (radicación/aprobación/
+  // rechazo). Permite que el pull dirija la convergencia: si el snapshot trae un estado
+  // del overlay más nuevo que el local, gana el snapshot (set O clear).
+  excuseUpdatedAt?: string;
+}
+
+// ==================== Ronda 21 — Excusas Justificadas (spec-excusas-2026) ====================
+
+export type ExcuseStatus = 'PENDIENTE' | 'APROBADA' | 'RECHAZADA';
+
+export type ExcuseReason = 'CITA_MEDICA' | 'INCAPACIDAD' | 'CALAMIDAD' | 'DEPORTIVA' | 'OTRA';
+
+export const EXCUSE_REASON_LABELS: Record<ExcuseReason, string> = {
+  CITA_MEDICA: 'Cita médica',
+  INCAPACIDAD: 'Incapacidad',
+  CALAMIDAD: 'Calamidad doméstica',
+  DEPORTIVA: 'Evento deportivo',
+  OTRA: 'Otra'
+};
+
+/**
+ * Entidad unificada (dos temporalidades, UNA entidad — spec §1):
+ * - Anticipada (Escudo): start_date futura, sin vínculo a registros todavía.
+ * - Post-hoc (1 toque de Rectoría): sourceAttendanceId apunta al AUSENTE justificado.
+ * CamelCase (contrato API worker) — el mapeo a snake_case vive SOLO en el worker.
+ */
+export interface StudentExcuse {
+  id: string;
+  studentCode: string;
+  studentName: string;
+  grade: string;
+  startDate: string; // YYYY-MM-DD
+  endDate: string;   // YYYY-MM-DD
+  reason: ExcuseReason;
+  notes?: string | null;
+  status: ExcuseStatus;
+  submittedBy: string;          // 'PORTAL_ESTUDIANTE' | 'RECTORIA' | ...
+  sourceAttendanceId?: string | null; // post-hoc: el AUSENTE anclado (NULL si anticipada)
+  attachmentPath?: string | null;
+  reviewedBy?: string | null;   // usuario de Rectoría que decidió
+  reviewedAt?: string | null;
+  rejectReason?: string | null; // obligatorio si status=RECHAZADA (R6)
+  autoApproved?: number;        // 1 = la ventana 72 h la aprobó (R8, auditable)
+  auditHash?: string | null;    // eslabón HMAC tamper-evidente (§6.2)
+  createdAt?: string;
 }
 
 export interface UserSession {
@@ -276,6 +328,10 @@ export interface StudentAttendanceStats {
   punctualCount: number;
   tardyCount: number;
   absentCount: number;
+  // Ronda 21 (spec §7.4): ausencias protegidas por excusa no rechazada. La vista del
+  // estudiante las muestra como "Excusada" y NO entran al % de faltas injustificadas.
+  justificados: number;
+  absentUnjustified: number;
   attendancePercentage: number; // (attendedCount / totalClasses) * 100
   punctualityRate: number; // (punctualCount / attendedCount) * 100
   bySubject: SubjectAttendanceSummary[];
@@ -293,6 +349,10 @@ export interface AttendanceSummary {
   // Ronda 19 (BUG-2 del informe): null cuando la fecha no tiene registros — antes mostraba un 95%
   // hardcodeado, dato contradictorio en una revisión (día sin escaneos = "95% de asistencia").
   attendanceRate: number | null; // 0 - 100, o null si no hay registros en la fecha
+  // Ronda 21 — Excusas (spec §4.3): 4º número del resumen. Ausencias AUSENTE con excusa
+  // NO rechazada (protegidas). No toca presentes/ausentes: la excusa no altera el conteo
+  // hasta que es RECHAZADA (y entonces el overlay se desvincula, no cambia el estado).
+  justificados: number;
 }
 
 /**

@@ -34,6 +34,7 @@ import {
 import jsQR from 'jsqr';
 import { Student, AttendanceRecord, SchoolSettings, Teacher, ScheduleSlot, AttendanceStatus, EphemeralScanDelegation } from '../types/attendance';
 import { AttendanceStorageService, getTodayDateString, getCurrentTimeString } from '../services/attendanceStorage';
+import { ExcuseService } from '../services/excuseService'; // Ronda 21: protección de excusas en el cierre de bloque
 import { SoundService } from '../utils/sound';
 
 // Ronda 19 — autogestión docente: días para "Mis Cátedras"
@@ -392,7 +393,11 @@ export const TeacherClassroomView: React.FC<TeacherClassroomViewProps> = ({
   // inconsistente con el diseño y algunos navegadores lo suprimen en iframes.
   const [confirmState, setConfirmState] = useState<{ title: string; message: string; confirmLabel?: string; action: () => void } | null>(null);
 
-  const executeCloseBlock = (force: boolean) => {
+  // Ronda 21 (spec §4.1): el cierre consulta la protección de excusas ANTES de marcar.
+  // async porque refresca el cache de excusas del Worker (best-effort: si falla, cierra
+  // igual con el cache vigente — jamás bloquea la operación pedagógica por red).
+  const executeCloseBlock = async (force: boolean) => {
+    await ExcuseService.syncFromWorker();
     const res = AttendanceStorageService.closeBlockAttendance({
       grade: selectedGrade,
       slotId: activeSlot.id,
@@ -415,9 +420,14 @@ export const TeacherClassroomView: React.FC<TeacherClassroomViewProps> = ({
         action: () => executeCloseBlock(true)
       });
     } else {
+      // Ronda 21: las ausencias cubiertas por excusa NO cuentan como inasistencias
+      // (spec §4.1) — se informan aparte para transparencia del docente.
+      const excusedNote = res.excusedCount > 0
+        ? ` (${res.excusedCount} protegida(s) por excusa, no cuentan como falta)`
+        : '';
       setScanFeedback({
         type: 'success',
-        message: `Bloque cerrado exitosamente. Se marcaron ${res.markedAbsentCount} inasistencias automáticas.`
+        message: `Bloque cerrado exitosamente. Se marcaron ${res.markedAbsentCount} inasistencias automáticas${excusedNote}.`
       });
     }
     setTimeout(() => setScanFeedback(null), 6000);
@@ -1156,9 +1166,18 @@ export const TeacherClassroomView: React.FC<TeacherClassroomViewProps> = ({
                         </span>
                       )}
                       {status === 'AUSENTE' && (
-                        <span className="px-2.5 py-1 rounded-full bg-rose-100 dark:bg-rose-950/60 text-rose-700 dark:text-rose-300 font-bold text-[11px] inline-flex items-center gap-1">
-                          <XCircle className="w-3.5 h-3.5" /> Ausente
-                        </span>
+                        /* Ronda 21 (spec §4.2): etiqueta derivada del overlay — NUNCA el
+                           motivo ni la foto (minimización §5); solo el estado de protección. */
+                        rec?.excuseId ? (
+                          <span className="px-2.5 py-1 rounded-full bg-emerald-100 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300 font-bold text-[11px] inline-flex items-center gap-1"
+                            title="Ausencia protegida por excusa — la decisión es de Rectoría">
+                            <ShieldCheck className="w-3.5 h-3.5" /> {rec.excuseStatus === 'APROBADA' ? 'Excusada (verificada)' : 'Excusada (bajo revisión)'}
+                          </span>
+                        ) : (
+                          <span className="px-2.5 py-1 rounded-full bg-rose-100 dark:bg-rose-950/60 text-rose-700 dark:text-rose-300 font-bold text-[11px] inline-flex items-center gap-1">
+                            <XCircle className="w-3.5 h-3.5" /> Ausente
+                          </span>
+                        )
                       )}
                       {status === 'JUSTIFICADO' && (
                         <span className="px-2.5 py-1 rounded-full bg-blue-100 dark:bg-blue-950/60 text-blue-700 dark:text-blue-300 font-bold text-[11px] inline-flex items-center gap-1">

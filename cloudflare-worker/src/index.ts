@@ -201,9 +201,23 @@ export default {
 
           // 3. Guardar Registros de Asistencia en D1 en batches
           if (records.length > 0) {
+            // Ronda 21 (spec §1.2): upsert con PROTECCIÓN DEL OVERLAY. INSERT OR REPLACE
+            // reemplazaba la fila completa: un dispositivo que aún no conocía una excusa
+            // (excuseId NULL local) BORRABA la vinculación vigente en D1 al pushear su
+            // snapshot. Con ON CONFLICT DO UPDATE, excuse_id = COALESCE(entrante, vigente):
+            // el entrante solo gana cuando trae un valor (fuente: auto-cierre con excusa o
+            // post-hoc propagado). El rechazo converge vía excuseUpdatedAt en el pull.
             const recordStmt = env.DB.prepare(
-              `INSERT OR REPLACE INTO attendance_records (id, student_code, student_name, document_id, grade, date, time, status, method, verified_hmac, scanned_by, scanned_by_name, subject, slot_id, notes)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+              `INSERT INTO attendance_records (id, student_code, student_name, document_id, grade, date, time, status, method, verified_hmac, scanned_by, scanned_by_name, subject, slot_id, notes, excuse_id)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+               ON CONFLICT(id) DO UPDATE SET
+                 student_code=excluded.student_code, student_name=excluded.student_name,
+                 document_id=excluded.document_id, grade=excluded.grade, date=excluded.date,
+                 time=excluded.time, status=excluded.status, method=excluded.method,
+                 verified_hmac=excluded.verified_hmac, scanned_by=excluded.scanned_by,
+                 scanned_by_name=excluded.scanned_by_name, subject=excluded.subject,
+                 slot_id=excluded.slot_id, notes=excluded.notes,
+                 excuse_id=COALESCE(excluded.excuse_id, attendance_records.excuse_id)`
             );
             const recordBatch = records.map((r: any) =>
               recordStmt.bind(
@@ -221,7 +235,8 @@ export default {
                 r.scannedByName || null,
                 r.subject || null,
                 r.slotId || null,
-                r.notes || null
+                r.notes || null,
+                r.excuseId || null
               )
             );
             for (let i = 0; i < recordBatch.length; i += 50) {
@@ -305,9 +320,18 @@ export default {
         const id = r.id || `${r.studentCode}_${r.date}_${r.time}`;
 
         if (env.DB) {
+          // Ronda 21: misma protección COALESCE del overlay que en /api/sync/push.
           await env.DB.prepare(
-            `INSERT OR REPLACE INTO attendance_records (id, student_code, student_name, document_id, grade, date, time, status, method, verified_hmac, scanned_by, scanned_by_name, subject, slot_id, notes)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+            `INSERT INTO attendance_records (id, student_code, student_name, document_id, grade, date, time, status, method, verified_hmac, scanned_by, scanned_by_name, subject, slot_id, notes, excuse_id)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             ON CONFLICT(id) DO UPDATE SET
+               student_code=excluded.student_code, student_name=excluded.student_name,
+               document_id=excluded.document_id, grade=excluded.grade, date=excluded.date,
+               time=excluded.time, status=excluded.status, method=excluded.method,
+               verified_hmac=excluded.verified_hmac, scanned_by=excluded.scanned_by,
+               scanned_by_name=excluded.scanned_by_name, subject=excluded.subject,
+               slot_id=excluded.slot_id, notes=excluded.notes,
+               excuse_id=COALESCE(excluded.excuse_id, attendance_records.excuse_id)`
           ).bind(
             id,
             r.studentCode,
@@ -323,7 +347,8 @@ export default {
             r.scannedByName || null,
             r.subject || null,
             r.slotId || null,
-            r.notes || null
+            r.notes || null,
+            r.excuseId || null
           ).run();
         }
 

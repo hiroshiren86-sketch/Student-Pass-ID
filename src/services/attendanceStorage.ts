@@ -14,6 +14,7 @@ import {
   UserSession,
   StudentAttendanceStats,
   SubjectAttendanceSummary,
+  StudentExcuse,
   ScheduleImportResult,
   ScannedByRole,
   DayTemplateType,
@@ -36,6 +37,8 @@ import {
 import { parseAndVerifyScan, parseAndVerifyClassScan } from '../utils/crypto';
 import { isValidGrade } from '../utils/documentParser';
 import { FirebaseService } from './firebase';
+// Ciclo runtime-only (excuseService ↔ attendanceStorage): seguro, solo métodos estáticos.
+import { ExcuseService, justificationLabelOf, isRecordProtected } from './excuseService';
 
 const STUDENTS_KEY = 'inas_students_v5';
 const ATTENDANCE_KEY = 'inas_attendance_v5';
@@ -793,13 +796,19 @@ export class AttendanceStorageService {
     }
   }
 
-  static async closeDayAttendance(params: { dateStr?: string; forceClose?: boolean; closedBy?: string }): Promise<{ closedAt: string; blocksClosed: number; absentMarked: number; pendingRevision: number; details: Array<{ grade: string; slotId: string; status: string; absent: number }> }> {
+  static async closeDayAttendance(params: { dateStr?: string; forceClose?: boolean; closedBy?: string }): Promise<{ closedAt: string; blocksClosed: number; absentMarked: number; excusedMarked: number; pendingRevision: number; details: Array<{ grade: string; slotId: string; status: string; absent: number; excused: number }> }> {
     const date = params.dateStr || getTodayDateString();
     const slots = this.getScheduleSlots().filter(s => s.type !== 'BREAK' && s.type !== 'LUNCH');
     const grades = Array.from(new Set(this.getStudents().filter(s => s.active).map(s => s.grade)));
-    const details: Array<{ grade: string; slotId: string; status: string; absent: number }> = [];
+    const details: Array<{ grade: string; slotId: string; status: string; absent: number; excused: number }> = [];
     let absentMarked = 0;
+    let excusedMarked = 0;
     let pendingRevision = 0;
+
+    // Ronda 21 (spec §4.1): refrescar la protección UNA sola vez por cierre (best-effort:
+    // si el Worker no responde, el cache vigente protege y el día se cierra igual).
+    await ExcuseService.syncFromWorker();
+    const protection = ExcuseService.getProtectionMapForDate(date);
 
     for (const grade of grades) {
       for (const slot of slots) {
@@ -810,14 +819,16 @@ export class AttendanceStorageService {
             subject: slot.name,
             teacherName: params.closedBy || 'Cierre Automático de Jornada',
             dateStr: date,
-            forceClose: params.forceClose
+            forceClose: params.forceClose,
+            excuseProtectionMap: protection
           });
           if (res.status === 'CLOSED') {
             absentMarked += res.markedAbsentCount;
-            details.push({ grade, slotId: slot.id, status: 'CLOSED', absent: res.markedAbsentCount });
+            excusedMarked += res.excusedCount;
+            details.push({ grade, slotId: slot.id, status: 'CLOSED', absent: res.markedAbsentCount, excused: res.excusedCount });
           } else if (res.status === 'PENDIENTE_REVISION') {
             pendingRevision += 1;
-            details.push({ grade, slotId: slot.id, status: 'PENDIENTE_REVISION', absent: 0 });
+            details.push({ grade, slotId: slot.id, status: 'PENDIENTE_REVISION', absent: 0, excused: 0 });
           }
           // NO_COMPUTABLE (Regla de Oro: 0 escaneos / hora libre / día especial) → no se cuenta
         } catch { /* un bloque que falla no debe abortar el cierre del día */ }
@@ -833,7 +844,7 @@ export class AttendanceStorageService {
     } catch { /* flag informativo */ }
     this.notify();
 
-    return { closedAt, blocksClosed: details.filter(d => d.status === 'CLOSED').length, absentMarked, pendingRevision, details };
+    return { closedAt, blocksClosed: details.filter(d => d.status === 'CLOSED').length, absentMarked, excusedMarked, pendingRevision, details };
   }
 
   // Evaluación perezosa e idempotente: solo actúa si la hora actual superó el fin de
@@ -1820,11 +1831,18 @@ export class AttendanceStorageService {
     teacherName?: string;
     dateStr?: string;
     forceClose?: boolean;
-  }): { 
+    // Ronda 21 (spec §4.1): mapa studentCode → excusa vigente. Si no viene, se lee del
+    // cache de excusas (el llamante responsable refresca con syncFromWorker() antes).
+    excuseProtectionMap?: Map<string, StudentExcuse>;
+  }): {
     status: 'CLOSED' | 'NO_COMPUTABLE' | 'PENDIENTE_REVISION';
-    markedAbsentCount: number; 
+    markedAbsentCount: number;
     presentCount: number;
     totalStudents: number;
+    // Ronda 21: ausencias cubiertas por excusa NO-Rechazada — AUSENTE + excuse_id
+    // (protegidas, §4.1). NO entran en markedAbsentCount (spec: "no entran al X% ni
+    // al 'Se marcaron N inasistencias'").
+    excusedCount: number;
     reason?: string;
   } {
     const today = params.dateStr || getTodayDateString();
@@ -1833,6 +1851,7 @@ export class AttendanceStorageService {
     const allRecords = this.getAllAttendance();
     const slots = this.getScheduleSlots();
     const slot = slots.find(s => s.id === params.slotId) || slots[0];
+    const protection = params.excuseProtectionMap || ExcuseService.getProtectionMapForDate(today);
 
     // Verificar si el bloque está marcado como NO COMPUTABLE (Hora libre, acto cívico o día especial)
     const checkNonComp = this.isSlotNonComputable(params.slotId, params.grade, today);
@@ -1840,6 +1859,7 @@ export class AttendanceStorageService {
       return {
         status: 'NO_COMPUTABLE',
         markedAbsentCount: 0,
+        excusedCount: 0,
         presentCount: 0,
         totalStudents,
         reason: checkNonComp.reason
@@ -1860,6 +1880,7 @@ export class AttendanceStorageService {
       return {
         status: 'NO_COMPUTABLE',
         markedAbsentCount: 0,
+        excusedCount: 0,
         presentCount: 0,
         totalStudents,
         reason: 'Cero escaneos en el bloque. Se presume hora libre sin penalizar ausencias a los estudiantes.'
@@ -1872,6 +1893,7 @@ export class AttendanceStorageService {
       return {
         status: 'PENDIENTE_REVISION',
         markedAbsentCount: 0,
+        excusedCount: 0,
         presentCount,
         totalStudents,
         reason: `Solo se registró el ${Math.round(scanRatio * 100)}% del grupo (${presentCount}/${totalStudents}). Requiere confirmación docente para evitar falsos ausentes.`
@@ -1880,6 +1902,7 @@ export class AttendanceStorageService {
 
     // Auto-cierre estándar: Marcar a los estudiantes no registrados como AUSENTES
     let markedAbsentCount = 0;
+    let excusedCount = 0;
     const resolvedSubject = params.subject || 'Cátedra General';
     const resolvedTeacher = params.teacherName || 'Docente Titular';
 
@@ -1891,6 +1914,40 @@ export class AttendanceStorageService {
       );
 
       if (!existing) {
+        // Ronda 21 (spec §4.1): ANTES de marcar AUSENTE, consultar la protección.
+        // Con excusa → AUSENTE + excuse_id (overlay, jamás "injustificado");
+        // sin excusa → AUSENTE puro (comportamiento actual, sin cambios).
+        const excuse = protection.get(student.code);
+        if (excuse) {
+          excusedCount++;
+          allRecords.push({
+            id: `rec-abs-${Date.now()}-${student.code}`,
+            studentCode: student.code,
+            studentDocument: student.documentId,
+            studentName: `${student.firstName} ${student.lastName}`,
+            studentGrade: student.grade,
+            studentSection: student.section,
+            slotId: slot.id,
+            slotName: slot.name,
+            slotStartTime: slot.startTime,
+            slotEndTime: slot.endTime,
+            subject: resolvedSubject,
+            teacherName: resolvedTeacher,
+            timestamp: new Date().toISOString(),
+            date: today,
+            time: getCurrentTimeString(),
+            type: 'CLASE',
+            status: 'AUSENTE',
+            method: 'AUTO_CIERRE',
+            scannedBy: 'AUTO_CIERRE',
+            notes: `Inasistencia automática protegida por excusa (${excuse.status === 'APROBADA' ? 'verificada' : 'bajo revisión'})`,
+            excuseId: excuse.id,
+            excuseStatus: excuse.status,
+            verifiedHmac: true,
+            synced: true
+          });
+          return;
+        }
         markedAbsentCount++;
         allRecords.push({
           id: `rec-abs-${Date.now()}-${student.code}`,
@@ -1919,13 +1976,14 @@ export class AttendanceStorageService {
       }
     });
 
-    if (markedAbsentCount > 0) {
+    if (markedAbsentCount > 0 || excusedCount > 0) {
       this.saveAttendance(allRecords);
     }
 
     return { 
       status: 'CLOSED',
       markedAbsentCount, 
+      excusedCount,
       presentCount,
       totalStudents 
     };
@@ -1941,6 +1999,10 @@ export class AttendanceStorageService {
     const tardyCount = records.filter(r => r.status === 'TARDANZA').length;
     const absentCount = records.filter(r => r.status === 'AUSENTE').length;
     const attendedCount = punctualCount + tardyCount;
+    // Ronda 21 (spec §7.4): excusas no rechazadas protegen la ausencia — el estudiante
+    // ve "Excusada" y su % de faltas injustificadas no las cuenta (§1.1).
+    const justificados = records.filter(isRecordProtected).length;
+    const absentUnjustified = absentCount - justificados;
 
     const attendancePercentage = totalClasses > 0 ? Math.round((attendedCount / totalClasses) * 100) : 100;
     const punctualityRate = attendedCount > 0 ? Math.round((punctualCount / attendedCount) * 100) : 100;
@@ -1980,6 +2042,8 @@ export class AttendanceStorageService {
       punctualCount,
       tardyCount,
       absentCount,
+      justificados,
+      absentUnjustified,
       attendancePercentage,
       punctualityRate,
       bySubject
@@ -1996,6 +2060,10 @@ export class AttendanceStorageService {
     const punctualCount = records.filter(r => r.status === 'PUNTUAL').length;
     const tardyCount = records.filter(r => r.status === 'TARDANZA').length;
     const absentCount = records.filter(r => r.status === 'AUSENTE').length;
+    // Ronda 21 (spec §4.3): 4º número del resumen — ausencias protegidas por excusa
+    // no rechazada. NO toca presentes/ausentes (regla de oro §1.1: la excusa no altera
+    // el conteo hasta ser RECHAZADA, y entonces el overlay ya se desvinculó).
+    const justificados = records.filter(isRecordProtected).length;
 
     // Ronda 19 (BUG-2 del informe): presentes = ESTUDIANTES ÚNICOS con registro PUNTUAL/TARDANZA.
     // Antes contaba registros; con múltiples bloques el KPI mostraba "PRESENTES HOY: 53" con
@@ -2023,6 +2091,7 @@ export class AttendanceStorageService {
       punctualCount,
       tardyCount,
       absentCount,
+      justificados,
       attendanceRate
     };
   }
@@ -2051,6 +2120,7 @@ export class AttendanceStorageService {
       'Método de Captura',
       'Firma HMAC Verificada',
       'Contexto de Vinculación', // Ronda 19: QR de Clase vs inferencia por hora (transparencia del informe, sección 5.3)
+      'Justificación', // Ronda 21 (spec §4.3): Bajo revisión | Verificada | (vacío) — misma línea que Contexto
       'Notas'
     ];
 
@@ -2070,6 +2140,7 @@ export class AttendanceStorageService {
       `"${r.method}"`,
       `"${r.verifiedHmac ? 'Token QR Firmado (VÁLIDO)' : (r.method === 'AUTO_CIERRE' ? 'N/A (Auto-Cierre)' : 'Manual / Teclado (N/A)')}"`,
       `"${r.contextSource === 'QR_CLASE' ? 'QR de Clase (firmado)' : 'Inferencia por hora'}"`,
+      `"${justificationLabelOf(r)}"`,
       `"${r.notes || ''}"`
     ]);
 

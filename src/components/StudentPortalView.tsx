@@ -1229,9 +1229,18 @@ export const StudentPortalView: React.FC<StudentPortalViewProps> = ({ onLogout, 
                         </span>
                       )}
                       {r.status === 'AUSENTE' && (
-                        <span className="px-2 py-0.5 rounded-full font-bold text-[10px] bg-rose-500/15 text-rose-700 dark:text-rose-300 border border-rose-500/30">
-                          Ausente
-                        </span>
+                        /* Ronda 21 (spec §7.4): la ausencia justificada se muestra como
+                           "Excusada" — no es una falta injustificada para el estudiante. */
+                        r.excuseId ? (
+                          <span className="px-2 py-0.5 rounded-full font-bold text-[10px] bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 border border-emerald-500/30 inline-flex items-center gap-1">
+                            <ShieldCheck className="w-3 h-3" />
+                            {r.excuseStatus === 'APROBADA' ? 'Excusada (verificada)' : 'Excusada (bajo revisión)'}
+                          </span>
+                        ) : (
+                          <span className="px-2 py-0.5 rounded-full font-bold text-[10px] bg-rose-500/15 text-rose-700 dark:text-rose-300 border border-rose-500/30">
+                            Ausente
+                          </span>
+                        )
                       )}
                     </td>
                     <td className="py-2.5 px-3 text-slate-500 text-[11px]">
