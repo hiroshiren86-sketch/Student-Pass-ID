@@ -660,6 +660,32 @@ El proveedor **Email/Password NO está habilitado** en Firebase Console (`accoun
 
 ---
 
+### 🔍 Ronda 23 (03/09/2026): AUDITORÍA DE DESPLIEGUE — el Worker NO se despliega solo + la excusa real del propietario desapareció de D1 (forense en curso)
+
+**Origen:** el propietario reportó que sincronizó el Worker con GitHub "desde el panel de Cloud" y preguntó **exactamente qué se sincroniza** para no reportar falsos positivos. Esta ronda audita la cadena de despliegue real contra la evidencia en vivo.
+
+**Hallazgo 1 — EL DESPLIEGUE AUTOMÁTICO DEL WORKER NO FUNCIONA (evidencia dura):**
+- *Fingerprint del worker vivo:* `GET /api/excuses` responde SIN la clave `purgedThisSweep` (siempre presente en el código P4, commit `84e2d4f`) y `POST /api/excuses/id-falso/attachment` responde "No existe la excusa" (comportamiento P3). → **El worker en vivo es la versión desplegada manualmente durante P3 (02:55 UTC = 21:55 Bogotá del 02/09), NO incluye P4 ni el endurecimiento HMAC pasada 2 de la Ronda 22.**
+- *Prueba del push:* commit `6584624` (endpoint de diagnóstico temporal SOLO LECTURA `/api/diag/ronda23`) pusheado 16:34 UTC → **8+ sondeos en 8 minutos: la ruta sigue inexistente en el worker vivo** → ningún build del panel publicó el commit. Conclusión: **los despliegues del worker hasta hoy fueron MANUALES con `wrangler deploy` (token del propietario entregado por chat en sesión anterior); el vínculo panel↔GitHub que el propietario cree activo no está construyendo** (o está mal configurado: root directory / watch paths / build pausado).
+- El **frontend (Pages) SÍ se despliega solo** con cada push (verificado desde Ronda 8 y confirmado hoy: el propietario vio el menú bento de la Ronda 21 en producción).
+- **Lo que sí viaja con cada commit del worker:** el código (`src/`) + configuración de `wrangler.toml` (vars públicas y bindings D1/KV). **Lo que NUNCA viaja con commits:** el esquema de D1 (`schema.sql`/migraciones se aplican aparte con `wrangler d1 execute --remote` — ya aplicadas hasta P0), los datos, los secrets (`EXCUSE_CHAIN_SECRET` ya configurado en producción — `verify-chain` responde `signed:true`) y la config del dashboard.
+
+**Hallazgo 2 — LA EXCUSA REAL radicada por el propietario YA NO ESTÁ EN D1 (posible falso positivo confirmado):**
+- `GET /api/excuses` en vivo → lista VACÍA; `verify-chain` → `{"intact":true,"signed":true,"checked":2}` (2 eventos EXCUSE_* en audit_logs, cadena íntegra).
+- El POST de radicación devolvió 201 (la caché local solo se escribe en éxito y el buzón lee SOLO del Worker — `listFromWorker` no toca caché) → **la excusa SÍ estuvo en D1 y fue eliminada por fuera del código desplegado**: ninguna versión P0–P3 tiene endpoint DELETE ni purga (la única ruta de borrado es la purga de retención de P4, NO desplegada, y su alcance `end_date < now−12 meses` jamás tocaría una excusa reciente). Hipótesis principal: limpieza SQL remota durante el testing de la sesión anterior (el audit_log no se limpió — por eso quedan 2 eventos). Requiere lectura directa de D1 (endpoint de diagnóstico ya pusheado, pendiente de despliegue) para confirmar qué contienen los 2 eventos.
+- *Vector de falso positivo corregido (commit `53fb493`):* "Mis Justificaciones" del portal caía a la **caché local sin avisar** cuando el Worker no respondía → ahora muestra aviso ámbar explícito "Sin conexión con el Worker: se muestra la última sincronización guardada en este dispositivo".
+
+**Acciones de esta ronda:**
+1. Endpoint temporal `/api/diag/ronda23` (SOLO LECTURA: conteos de students/attendance_records/student_excuses/sync_snapshots/audit_logs, columnas de student_excuses y los eventos EXCUSE_* con detalles truncados) — **se elimina en el próximo commit tras capturar el forense**.
+2. Aviso de honestidad de datos en el portal (ver arriba). `tsc` 0, `vite build` limpio (8.9s).
+3. Recuperación autónoma del token descartada por diseño: Firestore `school_settings/main` NO existe (404) y desde Ronda 16 los secretos jamás se suben a la nube — el token solo vive en el localStorage del propietario.
+
+**⏳ Desbloqueo requerido del propietario (una de dos opciones):**
+- **(a) Reparar el despliegue automático** — Panel Cloudflare → Workers y Pages → `inas-attendance-worker` → Ajustes de Build/Deployments: verificar que exista una conexión de **Workers Builds** con *Root directory* = `cloudflare-worker`, *Deploy command* = `npx wrangler deploy`, rama `main`, y pulsar "Retry/Create deployment". Si el historial (Deployments) no muestra builds por commit, la conexión no existe (solo está conectado Pages).
+- **(b) Entregar un token** (como en la sesión anterior): My Profile → API Tokens → Create Token (plantilla "Edit Cloudflare Workers") → pegarlo por chat. Con él el agente despliega P4+diagnóstico, captura el forense de D1, retira el endpoint temporal y re-despliega limpio.
+
+---
+
 ### ✅ Ronda 22 (03/09/2026): Sábado fuera de la jornada + bug del menú bento + Fases P3/P4 de Excusas + verificación de los 12 casos §10 (216 checks en verde)
 
 **Origen:** el propietario probó la Ronda 21 en producción (radicó una excusa y apareció en el buzón ✓) y encargó al agente principal, **en modo autónomo total**, tres frentes: (1) bug reportado — el menú bento de Horarios se desplegaba por DEBAJO del selector deslizante de días; (2) rastrear, aislar y **eliminar el sábado** de la jornada escolar (L–V, sáb/dom de descanso); (3) probar/verificar/arreglar todas las fases restantes y documentar todo aquí.
