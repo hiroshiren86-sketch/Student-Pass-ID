@@ -36,6 +36,9 @@ const STATUS_UI: Record<ExcuseStatus, { label: string; cls: string; icon: React.
 export const PortalExcusesSection: React.FC<PortalExcusesSectionProps> = ({ studentCode }) => {
   const [excuses, setExcuses] = useState<StudentExcuse[]>([]);
   const [loading, setLoading] = useState(true);
+  // Ronda 23 (honestidad de datos): si el Worker no responde y mostramos la caché
+  // local, se AVISA en pantalla — jamás presentar datos locales como verdad de la nube.
+  const [offlineCache, setOfflineCache] = useState(false);
   const [showNew, setShowNew] = useState(false);
   const [reason, setReason] = useState<ExcuseReason | null>(null);
   const [notes, setNotes] = useState('');
@@ -54,10 +57,13 @@ export const PortalExcusesSection: React.FC<PortalExcusesSectionProps> = ({ stud
   const load = useCallback(async () => {
     setLoading(true);
     const res = await ExcuseService.listFromWorker({ studentCode });
-    if (res.ok) setExcuses(res.excuses);
-    else {
+    if (res.ok) {
+      setExcuses(res.excuses);
+      setOfflineCache(false);
+    } else {
       // Sin Worker: cache local (última sincronización) para que el expediente no quede vacío
       setExcuses(ExcuseService.getCachedExcuses().filter(e => e.studentCode === studentCode));
+      setOfflineCache(true);
     }
     setLoading(false);
   }, [studentCode]);
@@ -136,6 +142,11 @@ export const PortalExcusesSection: React.FC<PortalExcusesSectionProps> = ({ stud
         {feedback && (
           <p role="status" className={`text-xs font-bold ${feedback.ok ? 'text-emerald-600 dark:text-emerald-400' : 'text-rose-600 dark:text-rose-400'}`}>
             {feedback.msg}
+          </p>
+        )}
+        {offlineCache && (
+          <p role="note" className="text-xs font-bold text-amber-700 dark:text-amber-300 bg-amber-500/10 border border-amber-500/30 rounded-xl px-3 py-2">
+            Sin conexión con el Worker: se muestra la última sincronización guardada en este dispositivo. Puede estar desactualizada — la verdad oficial está en la nube.
           </p>
         )}
       </div>
