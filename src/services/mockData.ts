@@ -95,6 +95,33 @@ export const DAY_TEMPLATES_DEFINITIONS: DayTemplateConfig[] = [
     recessDurationMinutes: 30,
     totalBlocks: 6,
     isNonComputableAllDay: true
+  },
+  {
+    // Ronda 21 — plantilla de PRUEBAS (petición del propietario): las funciones que
+    // dependen de la hora de clase (escaneo PUNTUAL/TARDANZA, cierre de bloque con
+    // regla del 30%, auto-cierre de jornada, ventana del QR de Clase) son imposibles
+    // de ejercitar de noche con la Plantilla A (termina 12:30). Esta jornada cubre
+    // casi todo el día DENTRO del mismo día calendario (00:05 → 23:50) porque el
+    // motor de ventanas no admite cruce de medianoche (endMin <= startMin → null).
+    // 30 bloques × 45 min + recreo 30 = 1380 min → último bloque 21:20–22:05;
+    // de 22:05 a 23:50 la jornada sigue abierta (ventana) aunque sin bloque activo.
+    // Va AL FINAL a propósito: resolveTemplate() resuelve el legacy 'NORMAL' por TYPE
+    // y la Plantilla A debe seguir ganando esa búsqueda. NO USAR EN PRODUCCIÓN:
+    // al terminar las pruebas, vuelve a la Plantilla A.
+    id: 'tmpl-pruebas-extendida',
+    type: 'NORMAL',
+    name: 'Plantilla T: Jornada de Pruebas',
+    badge: 'SOLO PRUEBAS (no producción)',
+    description: 'Jornada extendida 00:05 → 23:50 (30 bloques × 45 min + recreo) para probar de noche el escaneo, el cierre de bloques y el auto-cierre. Al terminar, aplica de nuevo la Plantilla A.',
+    shift: 'UNICA',
+    baseStartTime: '00:05',
+    blockDurationMinutes: 45,
+    trimMinutesPerBlock: 0,
+    recessDurationMinutes: 30,
+    totalBlocks: 30,
+    proportionalNoticeMinutes: 9,
+    dayStartTime: '00:05',
+    dayEndTime: '23:50'
   }
 ];
 
