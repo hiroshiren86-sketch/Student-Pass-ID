@@ -40,6 +40,7 @@ import { generateBarcodeDataUrl } from '../utils/barcode';
 import { SoundService } from '../utils/sound';
 import { ConfirmDialog } from './ConfirmDialog';
 import { ActiveClassBanner } from './ActiveClassBanner';
+import { PortalExcusesSection } from './PortalExcusesSection'; // Ronda 21: Mis Justificaciones (Escudo)
 
 interface StudentPortalViewProps {
   onLogout?: () => void;
@@ -1171,6 +1172,12 @@ export const StudentPortalView: React.FC<StudentPortalViewProps> = ({ onLogout, 
             ))}
           </div>
         </div>
+      )}
+
+      {/* Ronda 21 (spec §7.1): "Mis Justificaciones" — radicación anticipada (Escudo)
+          + expediente propio. La post-hoc de 1 toque es de Rectoría (planilla). */}
+      {activeStudent && (
+        <PortalExcusesSection studentCode={activeStudent.code} />
       )}
 
       {/* History Table */}

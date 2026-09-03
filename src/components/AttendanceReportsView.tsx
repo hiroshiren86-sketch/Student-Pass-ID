@@ -15,11 +15,19 @@ import {
   Sparkles,
   ShieldCheck
 } from 'lucide-react';
-import { AttendanceRecord, AttendanceSummary } from '../types/attendance';
+import { AttendanceRecord, AttendanceSummary, UserRole } from '../types/attendance';
 import { AttendanceStorageService, getTodayDateString } from '../services/attendanceStorage';
 import { matchStudentFuzzy } from '../utils/searchHelper';
+import { ExcuseJustifyModal } from './ExcuseJustifyModal'; // Ronda 21: justificación post-hoc de 1 toque
 
-export const AttendanceReportsView: React.FC = () => {
+interface AttendanceReportsViewProps {
+  currentRole?: UserRole;
+  reviewedBy?: string;
+}
+
+export const AttendanceReportsView: React.FC<AttendanceReportsViewProps> = ({ currentRole = 'ADMIN', reviewedBy = 'RECTORIA' }) => {
+  const isAdmin = currentRole === 'ADMIN';
+  const [justifyRecord, setJustifyRecord] = useState<AttendanceRecord | null>(null);
   const [selectedDate, setSelectedDate] = useState<string>(getTodayDateString());
   const [records, setRecords] = useState<AttendanceRecord[]>([]);
   const [summary, setSummary] = useState<AttendanceSummary>(AttendanceStorageService.getSummary());
@@ -210,6 +218,8 @@ export const AttendanceReportsView: React.FC = () => {
                   <th className="py-3 px-3">Estado</th>
                   <th className="py-3 px-3">Dispositivo</th>
                   <th className="py-3 px-3">Notas</th>
+                  {/* Ronda 21 (spec §7.2): acción de 1 toque — SOLO Rectoría (R5) */}
+                  {isAdmin && <th className="py-3 px-3">Acción</th>}
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100 dark:divide-slate-800/60">
@@ -282,6 +292,24 @@ export const AttendanceReportsView: React.FC = () => {
                     <td className="py-3 px-3 text-slate-400 text-[11px] max-w-[200px] truncate">
                       {r.notes || '-'}
                     </td>
+                    {isAdmin && (
+                      <td className="py-3 px-3">
+                        {/* Solo AUSENTE sin excusa ofrece el 1 toque; ya justificada → el badge
+                            verde lo indica y el botón desaparece (R2 impide la segunda excusa) */}
+                        {r.status === 'AUSENTE' && !r.excuseId ? (
+                          <button
+                            onClick={() => setJustifyRecord(r)}
+                            aria-label={`Justificar ausencia de ${r.studentName} el ${r.date}`}
+                            className="px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-[10px] font-black transition-all shadow-sm shadow-emerald-600/20 inline-flex items-center gap-1"
+                          >
+                            <ShieldCheck className="w-3 h-3" />
+                            Justificar
+                          </button>
+                        ) : (
+                          <span className="text-slate-300 dark:text-zinc-700 text-[11px]">—</span>
+                        )}
+                      </td>
+                    )}
                   </tr>
                 ))}
               </tbody>
@@ -289,6 +317,16 @@ export const AttendanceReportsView: React.FC = () => {
           </div>
         )}
       </div>
+
+      {/* Ronda 21: modal de 1 toque — la radicación dispara applyOverlay → notify →
+          loadData (subscribe) y el badge "Excusada (bajo revisión)" aparece al instante */}
+      {justifyRecord && (
+        <ExcuseJustifyModal
+          record={justifyRecord}
+          onClose={() => setJustifyRecord(null)}
+          onRadicated={() => setJustifyRecord(null)}
+        />
+      )}
     </div>
   );
 };

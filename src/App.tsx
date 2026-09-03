@@ -35,6 +35,7 @@ import { StudentPortalView } from './components/StudentPortalView';
 import { TeacherClassroomView } from './components/TeacherClassroomView';
 import { TeachersManagerView } from './components/TeachersManagerView';
 import { ScheduleBuilderView } from './components/ScheduleBuilderView';
+import { ExcusesInboxView } from './components/ExcusesInboxView'; // Ronda 21: buzón de justificaciones (Rectoría)
 import { LoginScreen } from './components/LoginScreen';
 import { SettingsModal } from './components/SettingsModal';
 import { useTheme } from './context/ThemeContext';
@@ -43,7 +44,7 @@ import { AttendanceStorageService } from './services/attendanceStorage';
 import { CloudflareSyncService } from './services/cloudflareSync';
 import { FirebaseService } from './services/firebase';
 
-export type ActiveTab = 'scan' | 'students' | 'teachers' | 'schedules' | 'cards' | 'attendance' | 'ai-grades' | 'teacher' | 'portal';
+export type ActiveTab = 'scan' | 'students' | 'teachers' | 'schedules' | 'cards' | 'attendance' | 'ai-grades' | 'teacher' | 'portal' | 'excuses';
 
 export default function App() {
   const [isAuthenticated, setIsAuthenticated] = useState<boolean>(true);
@@ -159,6 +160,7 @@ export default function App() {
     { id: 'teacher' as ActiveTab, label: 'Portal Docente (Aula)', icon: BookOpen, badge: 'Clases', primary: true, roles: ['ADMIN', 'DOCENTE'] },
     { id: 'cards' as ActiveTab, label: 'Generador de Carnés PDF', icon: CreditCard, badge: 'CR80 PVC', primary: false, roles: ['ADMIN'] },
     { id: 'attendance' as ActiveTab, label: 'Planilla de Asistencia', icon: FileSpreadsheet, badge: 'Reportes', primary: false, roles: ['ADMIN', 'DOCENTE'] },
+    { id: 'excuses' as ActiveTab, label: 'Buzón de Justificaciones', icon: ShieldCheck, badge: 'Excusas', primary: false, roles: ['ADMIN'] },
     { id: 'ai-grades' as ActiveTab, label: 'Analítica e IA por Grado', icon: BrainCircuit, badge: 'IA Global', primary: false, roles: ['ADMIN', 'DOCENTE'] },
     { id: 'portal' as ActiveTab, label: 'Portal Estudiante / Acudiente', icon: UserCheck, badge: 'Consulta', primary: false, roles: ['ADMIN', 'ESTUDIANTE_ACUDIENTE'] },
   ];
@@ -430,7 +432,8 @@ export default function App() {
         {activeTab === 'teachers' && <TeachersManagerView />}
         {activeTab === 'teacher' && <TeacherClassroomView teacher={loggedUser.teacher} teacherName={loggedUser.username} />}
         {activeTab === 'cards' && <CardsManagerView />}
-        {activeTab === 'attendance' && <AttendanceReportsView />}
+        {activeTab === 'attendance' && <AttendanceReportsView currentRole={currentRole} reviewedBy={loggedUser.username} />}
+        {activeTab === 'excuses' && <ExcusesInboxView reviewedBy={loggedUser.username} />}
         {activeTab === 'ai-grades' && <GradeAiSummaryView />}
         {activeTab === 'portal' && <StudentPortalView activeStudentCode={loggedUser.student?.code} />}
       </main>
