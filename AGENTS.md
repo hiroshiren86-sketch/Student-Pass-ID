@@ -660,6 +660,31 @@ El proveedor **Email/Password NO está habilitado** en Firebase Console (`accoun
 
 ---
 
+### ✅ Ronda 21 (03/09/2026): Excusas Justificadas — Fase P0 del contrato `spec-excusas-2026` (worker + D1 en producción, 25/25 verde)
+
+**Origen:** el propietario recibió la spec de referencia 2026 del QA Externo (anexada en `docs/spec-excusas-2026.md`) y ordenó implementarla **por etapas consolidadas** con prueba y verificación total. La implementación del módulo pasa al agente principal (Super Z); el diseño del encargado (Escudo + buzón) se conserva 100% — la spec es aditiva.
+
+**Alcance P0 (contrato + API, spec §2, §2.4, §3, §8):**
+- **Migración aditiva D1** (`migrations/0002_excuses_v2.sql`): 7 columnas en `student_excuses` (`source_attendance_id`, `attachment_path`, `reviewed_by`, `reviewed_at`, `reject_reason`, `auto_approved`, `audit_hash`), índice único parcial `uq_excuses_attendance` (R2: 1 excusa por AUSENTE) y overlay `attendance_records.excuse_id`. **Aplicada en la D1 REMOTA** (8 tablas, cero datos movidos). `schema.sql` actualizado para instalaciones frescas (status nace `PENDIENTE`; SQLite no permite cambiar el default de la tabla vieja, pero el Worker SIEMPRE inserta status explícito — Regla 6).
+- **API en el Worker** (`src/excuses.ts`, cableado en `index.ts`; versión desplegada `0a25ac01`):
+  - `POST /api/excuses` — radica anticipada (Escudo, `start_date ≥ hoy+1` Bogotá) o post-hoc (1 toque sobre el AUSENTE con `source_attendance_id`, o por rango de fechas con AUSENTEs sin excusa). Valida R1, R2, R3 (máx. 3 activas — las post-hoc pasadas no cuentan; `OTRA` exige notas), R9 (TARDANZA jamás), R10 (si se configura `SCHOOL_TERM_END`). El overlay vincula TODOS los AUSENTE sin excusa del rango (cubo el caso bloque doble: 1ª hora asistió, 2ª hora AUSENTE queda justificable).
+  - `PATCH /api/excuses/:id` — solo rol **RECTORIA** (R5, verificado en servidor; 403 a otros roles), 409 si ya decidida (sin reversas), rechazo exige motivo (R6) → desvincula registros (vuelven AUSENTE puro) para recálculo; aprobación re-vincula idempotente. `physicalDocumentVerified` registra el checkbox de la rectora (su firma física sigue siendo válida y opcional).
+  - `GET /api/excuses` (filtros studentCode/status/grade/from/to) con **R8 lazy sweep**: PENDIENTE con >72 h (configurable `EXCUSE_AUTO_APPROVE_HOURS`, 0 desactiva) → `APROBADA auto_approved=1` + audit `EXCUSE_AUTO_APPROVED`.
+  - `GET /api/excuses/verify-chain` — **cadena HMAC-SHA256 tamper-evidente de 2 pasadas**: (1) eslabones+payload de `audit_logs` firmados (alterar razón/fechas/motivo del log rompe la cadena), (2) estado actual de cada fila vs su último evento (alterar la fila en D1 fuera del API la caza). Secret: `EXCUSE_CHAIN_SECRET` (configurado en producción con valor aleatorio; fallback AUTH_TOKEN; sin secret → `signed:false`, NUNCA se simula seguridad).
+  - `GET /api/excuses/:id/attachment` → 501 explícito (fase P3, fotos cifradas AES-GCM — sin simulación).
+- **Auditoría:** `audit_logs` reutilizado con `EXCUSE_CREATED/APPROVED/REJECTED/AUTO_APPROVED` (details_json con excusa, prevHash, hash).
+
+**Validación:**
+- Suite funcional local `scripts/verify_excuses_p0.sh` — **25/25 PASS**: validaciones R1/R3 con mensajes ES, post-hoc bloque doble (recordsLinked=1, el PUNTUAL de 1ª hora intacto), R2 doble justificación, R5/R6 en decisiones, desvinculación tras rechazo, 409 sin reversas, límite 3 activas, overlay verificado en D1, y tamper-evidente en dos frentes (fila alterada + payload del log alterado, ambos detectados con `firstBroken`).
+- Smoke de producción: health OK, `GET /api/excuses` vacía, POST con estudiante inexistente → 404 ES (valida contra matrícula real), `verify-chain` `{intact:true, signed:true}`. Cero datos de prueba contaminando producción.
+- `tsc` worker 0, `tsc` raíz 0, `vite build` limpio. Commits: `58d5a78`.
+
+**Configuración del propietario (opcional, sin urgencia):** `wrangler.toml [vars]` acepta `SCHOOL_TERM_START`/`SCHOOL_TERM_END` (YYYY-MM-DD) para activar R3 "10 días por término" y R10; `EXCUSE_AUTO_APPROVE_HOURS` ajusta la ventana R8. Sin configurar: anti-spam de 3 activas + auto-aprobo 72 h ya rigen por defecto.
+
+**Siguiente (P1):** motor de protección en el frontend — auto-cierre consulta excusas (AUSENTE+excuse_id protegido), etiquetas "Excusada (bajo revisión/verificada)" en planilla, 4º número `justificados` en resúmenes, columna CSV `Justificación`.
+
+---
+
 ## 🚀 4. Hoja de Roadmap y Pasos a Seguir
 
 ### ⏳ Fase Actual (Inmediata): Validación de campo del Worker desplegado
