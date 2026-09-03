@@ -760,6 +760,34 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ onClose }) => {
                 <BellOff className="w-3.5 h-3.5" />
                 <span>Desactivar</span>
               </button>
+              {/* Ronda 24: prueba de entrega real — el Worker envía una notificación de prueba
+                  y devuelve el estado HTTP de cada push service (veredicto honesto, WCAG 3.3.1) */}
+              <button
+                type="button"
+                onClick={async () => {
+                  setPushBusy(true);
+                  try {
+                    const baseUrl = (JSON.parse(localStorage.getItem('inas_settings_v5') || '{}').cloudflareWorkerUrl || '').trim().replace(/\/+$/, '');
+                    if (!baseUrl) throw new Error('Configura primero la URL del Cloudflare Worker.');
+                    const res = await fetch(`${baseUrl}/api/push/test`, {
+                      method: 'POST',
+                      headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify({ role: 'RECTORIA' })
+                    });
+                    const data = await res.json().catch(() => null);
+                    setPushFeedback({ ok: !!(data?.sent > 0), message: data?.message || `HTTP ${res.status}` });
+                  } catch (e: any) {
+                    setPushFeedback({ ok: false, message: e?.message || 'Fallo de la prueba de notificación.' });
+                  }
+                  setPushStatus(await getPushStatus());
+                  setPushBusy(false);
+                }}
+                disabled={pushBusy}
+                className="px-3 py-1.5 bg-white dark:bg-black text-slate-700 dark:text-slate-200 border border-slate-300 dark:border-zinc-700 rounded-xl text-xs font-bold flex items-center gap-1.5 transition-all disabled:opacity-40"
+              >
+                <BellRing className="w-3.5 h-3.5" />
+                <span>Probar notificación</span>
+              </button>
               {pushStatus && !pushStatus.supported && (
                 <span className="text-[11px] font-bold text-amber-700 dark:text-amber-300">Navegador sin soporte push (requiere HTTPS).</span>
               )}

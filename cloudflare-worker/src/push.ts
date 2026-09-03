@@ -105,8 +105,12 @@ async function encryptPayload(payload: string, p256dhB64url: string, authB64url:
     // 1) IKM = HKDF(ecdh_secreto, salt=auth_secret, info="WebPush: info" || 0x00 || ua_pub || eph_pub)
     const eph = await crypto.subtle.generateKey({ name: 'ECDH', namedCurve: 'P-256' }, true, ['deriveBits']) as CryptoKeyPair;
     const ephPublicRaw = new Uint8Array(await crypto.subtle.exportKey('raw', eph.publicKey) as ArrayBuffer);
+    // Ronda 24 (fix crítico): deriveBits EXIGE un CryptoKey en `public` — pasar los
+    // bytes crudos lanzaba TypeError → catch → null → CADA push fallaba y la
+    // suscripción se borraba como "muerta". Importar la clave pública del cliente:
+    const uaKey = await crypto.subtle.importKey('raw', uaPublic as BufferSource, { name: 'ECDH', namedCurve: 'P-256' }, true, []);
     const ecdhSecret = new Uint8Array(await crypto.subtle.deriveBits(
-      { name: 'ECDH', public: uaPublic as BufferSource } as any, eph.privateKey, 256
+      { name: 'ECDH', public: uaKey } as any, eph.privateKey, 256
     ));
     const keyInfo = concatBytes(
       new TextEncoder().encode('WebPush: info'), new Uint8Array(1), uaPublic, ephPublicRaw
@@ -163,8 +167,17 @@ export async function ensurePushTable(env: Env): Promise<void> {
 export async function sendPushTo(env: Env, opts: {
   role?: string; studentCode?: string; title: string; body: string; tag?: string; url?: string
 }): Promise<number> {
+  const res = await sendPushDetailed(env, opts);
+  return res.sent;
+}
+
+/** Ronda 24: variante con detalle de entrega por suscripción (diagnóstico /api/push/test). */
+export async function sendPushDetailed(env: Env, opts: {
+  role?: string; studentCode?: string; title: string; body: string; tag?: string; url?: string
+}): Promise<{ sent: number; results: Array<{ ep: string; status: number; error?: string }> }> {
   const keys = getVapidKeys(env);
-  if (!keys || !env.DB) return 0;
+  const results: Array<{ ep: string; status: number; error?: string }> = [];
+  if (!keys || !env.DB) return { sent: 0, results };
   try {
     await ensurePushTable(env);
     let rows: Array<{ endpoint: string; p256dh: string; auth: string; id: string }> = [];
@@ -177,7 +190,7 @@ export async function sendPushTo(env: Env, opts: {
         `SELECT endpoint, p256dh, auth, id FROM push_subscriptions WHERE role = ?`
       ).bind(opts.role).all<{ endpoint: string; p256dh: string; auth: string; id: string }>()).results || [];
     }
-    if (!rows.length) return 0;
+    if (!rows.length) return { sent: 0, results };
 
     const payload = JSON.stringify({ title: opts.title, body: opts.body, tag: opts.tag || 'inas', url: opts.url || '/' });
     let sent = 0;
@@ -185,7 +198,9 @@ export async function sendPushTo(env: Env, opts: {
     for (const sub of rows) {
       try {
         const body = await encryptPayload(payload, sub.p256dh, sub.auth);
-        if (!body) { stale.push(sub.id); continue; }
+        // Ronda 24: un fallo de cifrado NO borra la suscripción (puede ser un bug de
+        // código, no una suscripción muerta — solo el push service decide eso con 404/410).
+        if (!body) { results.push({ ep: sub.endpoint.slice(0, 40), status: 0, error: 'cifrado fallido (p256dh/auth inválidos)' }); continue; }
         const jwt = await createVapidJwt(sub.endpoint, keys);
         const res = await fetch(sub.endpoint, {
           method: 'POST',
@@ -200,7 +215,10 @@ export async function sendPushTo(env: Env, opts: {
         });
         if (res.status === 201 || res.status === 200) sent++;
         else if (res.status === 404 || res.status === 410) stale.push(sub.id); // suscripción muerta
-      } catch { /* una suscripción que falla no detiene a las demás */ }
+        results.push({ ep: sub.endpoint.slice(0, 40), status: res.status, ...(res.status !== 201 && res.status !== 200 ? { error: `HTTP ${res.status}` } : {}) });
+      } catch (e: any) {
+        results.push({ ep: sub.endpoint.slice(0, 40), status: 0, error: (e?.message || 'fallo de red').slice(0, 120) });
+      }
     }
     for (const id of stale) {
       await env.DB.prepare(`DELETE FROM push_subscriptions WHERE id = ?`).bind(id).run();
@@ -208,9 +226,9 @@ export async function sendPushTo(env: Env, opts: {
     // Ronda 24: observabilidad mínima — visible con `wrangler tail` para diagnosticar
     // entregas sin instrumentar el cliente (p.ej. 403 = VAPID inválido/mal rotado).
     console.log(`[push] rol=${opts.role || opts.studentCode || '?'} destino=${rows.length} enviados=${sent} muertos=${stale.length}`);
-    return sent;
+    return { sent, results };
   } catch {
-    return 0; // el push jamás rompe el flujo principal
+    return { sent: 0, results }; // el push jamás rompe el flujo principal
   }
 }
 
@@ -261,6 +279,31 @@ export async function handlePushRoutes(request: Request, env: Env, url: URL, pat
     await ensurePushTable(env);
     await env.DB.prepare(`DELETE FROM push_subscriptions WHERE endpoint = ?`).bind(endpoint).run();
     return ok({ success: true, message: 'Suscripción eliminada.' });
+  }
+
+  // POST /api/push/test — envía una notificación de PRUEBA y devuelve el detalle de
+  // entrega (estado HTTP de cada push service). Útil en Ajustes para que Rectoría
+  // verifique sus dispositivos sin depender de radicar una excusa real.
+  if (path === '/api/push/test' && request.method === 'POST') {
+    let body: any = {};
+    try { body = await request.json(); } catch { /* cuerpo opcional */ }
+    const role = ['RECTORIA', 'PORTAL'].includes(String(body.role)) ? String(body.role) : 'RECTORIA';
+    const studentCode = body.studentCode ? String(body.studentCode).trim() : undefined;
+    const detail = await sendPushDetailed(env, {
+      role: studentCode ? undefined : role,
+      studentCode,
+      title: 'INAS — Notificación de prueba',
+      body: 'Si ves esto, las notificaciones push de excusas funcionan en este dispositivo.',
+      tag: 'inas-test'
+    });
+    return ok({
+      success: true,
+      sent: detail.sent,
+      results: detail.results,
+      message: detail.sent > 0
+        ? `Entregado a ${detail.sent} dispositivo(s). Deberías ver la notificación en segundos.`
+        : 'No se entregó a ninguna suscripción (revisa que este dispositivo esté activado).'
+    });
   }
 
   return null; // no es una ruta de push
