@@ -38,6 +38,8 @@ import { ScheduleBuilderView } from './components/ScheduleBuilderView';
 import { ExcusesInboxView } from './components/ExcusesInboxView'; // Ronda 21: buzón de justificaciones (Rectoría)
 import { LoginScreen } from './components/LoginScreen';
 import { SettingsModal } from './components/SettingsModal';
+import { PushOnboardingBanner } from './components/PushOnboardingBanner'; // Ronda 24: onboarding visible de notificaciones
+import { useExcusesBadge } from './hooks/useExcusesBadge'; // Ronda 24: punto rojo de excusas pendientes
 import { useTheme } from './context/ThemeContext';
 import { SchoolSettings, Student, Teacher, UserRole } from './types/attendance';
 import { AttendanceStorageService } from './services/attendanceStorage';
@@ -63,6 +65,9 @@ export default function App() {
   const [isUserMenuOpen, setIsUserMenuOpen] = useState(false);
   const userMenuRef = useRef<HTMLDivElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
+
+  // Ronda 24: punto rojo de excusas pendientes (Rectoría) — sondeo 30s, verdad = Worker
+  const { pendingCount, refresh: refreshExcuseBadge } = useExcusesBadge(currentRole, activeTab);
 
   useEffect(() => {
     AttendanceStorageService.ensureActiveTemplateConsistency(); // Ronda 8 (B4): realinea plantilla activa vs slots
@@ -94,10 +99,28 @@ export default function App() {
     return () => window.clearInterval(intervalId);
   }, []);
 
+  // Ronda 24 (fix crítico): persistir la sesión real del usuario. Históricamente
+  // saveCurrentSession JAMÁS se llamaba → pushService leía una sesión fantasma y
+  // enrutaba TODAS las suscripciones como PORTAL → Rectoría jamás recibía el push
+  // de "nueva excusa" y el estudiante jamás el veredicto.
+  const persistSession = (role: UserRole, payload?: { teacher?: Teacher; student?: Student; username: string }) => {
+    try {
+      AttendanceStorageService.saveCurrentSession({
+        username: payload?.username || role,
+        role,
+        token: 'local-session',
+        studentCode: role === 'ESTUDIANTE_ACUDIENTE' ? payload?.student?.code : undefined,
+        teacherId: role === 'DOCENTE' ? payload?.teacher?.id : undefined
+      });
+      localStorage.setItem('inas_push_role_v1', role === 'ADMIN' ? 'RECTORIA' : 'PORTAL');
+    } catch { /* prescindible: el push degrada a PORTAL */ }
+  };
+
   // Handle successful login
   const handleLoginSuccess = (role: UserRole, userPayload?: { teacher?: Teacher; student?: Student; username: string }) => {
     setCurrentRole(role);
     setIsAuthenticated(true);
+    persistSession(role, userPayload);
     if (userPayload) {
       setLoggedUser(userPayload);
     } else {
@@ -124,6 +147,11 @@ export default function App() {
     setCurrentRole(role);
     setShowRoleModal(false);
     setIsUserMenuOpen(false);
+    persistSession(role, {
+      teacher: role === 'DOCENTE' ? AttendanceStorageService.getTeachers()[0] : undefined,
+      student: role === 'ESTUDIANTE_ACUDIENTE' ? AttendanceStorageService.getStudents()[0] : undefined,
+      username: role === 'ADMIN' ? 'Rectoría / Administrador General' : undefined
+    } as any);
     if (role === 'DOCENTE') {
       setActiveTab('teacher');
       const firstTeacher = AttendanceStorageService.getTeachers()[0];
@@ -226,7 +254,7 @@ export default function App() {
               </div>
             )}
 
-            {/* Primary Action Buttons based on Role */}
+              {/* Primary Action Buttons based on Role */}
             <div className="hidden lg:flex items-center bg-slate-100 dark:bg-slate-800/70 p-1 rounded-2xl border border-slate-200/80 dark:border-zinc-800/80">
               {visibleNavItems.slice(0, 4).map((item) => {
                 const Icon = item.icon;
@@ -235,7 +263,7 @@ export default function App() {
                   <button
                     key={item.id}
                     onClick={() => setActiveTab(item.id)}
-                    className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 ${
+                    className={`relative px-3 py-1.5 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 ${
                       isActive
                         ? 'bg-white dark:bg-zinc-950 text-indigo-600 dark:text-indigo-400 shadow-sm'
                         : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
@@ -243,6 +271,12 @@ export default function App() {
                   >
                     <Icon className="w-3.5 h-3.5" />
                     <span>{item.label}</span>
+                    {/* Ronda 24: punto rojo distintivo — excusas esperando revisión (Rectoría) */}
+                    {item.id === 'excuses' && pendingCount > 0 && (
+                      <span className="absolute -top-1 -right-1 min-w-[16px] h-4 px-1 rounded-full bg-red-500 text-white text-[9px] font-black flex items-center justify-center ring-2 ring-slate-100 dark:ring-zinc-800 animate-pulse" aria-label={`${pendingCount} excusas pendientes`}>
+                        {pendingCount > 9 ? '9+' : pendingCount}
+                      </span>
+                    )}
                   </button>
                 );
               })}
@@ -253,7 +287,7 @@ export default function App() {
               <div className="relative" ref={menuRef}>
                 <button
                   onClick={() => setIsMenuOpen(!isMenuOpen)}
-                  className={`px-3 py-2 rounded-2xl text-xs font-bold border transition-all flex items-center gap-1.5 ${
+                  className={`relative px-3 py-2 rounded-2xl text-xs font-bold border transition-all flex items-center gap-1.5 ${
                     isMenuOpen
                       ? 'bg-indigo-50 dark:bg-indigo-950/70 text-indigo-700 dark:text-indigo-300 border-indigo-200 dark:border-indigo-800'
                       : 'bg-white dark:bg-zinc-950 text-slate-700 dark:text-slate-300 border-slate-200 dark:border-zinc-800/50 hover:bg-slate-50 dark:hover:bg-slate-800'
@@ -262,6 +296,12 @@ export default function App() {
                   <Layers className="w-3.5 h-3.5" />
                   <span className="hidden xs:inline">Módulos</span>
                   <ChevronDown className={`w-3.5 h-3.5 transition-transform ${isMenuOpen ? 'rotate-180' : ''}`} />
+                  {/* Ronda 24: el punto rojo vive también en el disparador del menú — visible mientras uno navega, sin abrir nada */}
+                  {pendingCount > 0 && (
+                    <span className="absolute -top-1.5 -right-1.5 min-w-[18px] h-[18px] px-1 rounded-full bg-red-500 text-white text-[9px] font-black flex items-center justify-center ring-2 ring-white dark:ring-zinc-900 shadow-sm animate-pulse" aria-label={`${pendingCount} excusas pendientes de revisión`}>
+                      {pendingCount > 9 ? '9+' : pendingCount}
+                    </span>
+                  )}
                 </button>
 
                 {/* Floating Dropdown Drawer */}
@@ -290,6 +330,12 @@ export default function App() {
                           <div className="flex items-center gap-2.5">
                             <Icon className={`w-4 h-4 ${isActive ? 'text-white' : 'text-indigo-500'}`} />
                             <span>{item.label}</span>
+                            {/* Ronda 24: punto rojo junto al módulo Buzón de Justificaciones */}
+                            {item.id === 'excuses' && pendingCount > 0 && (
+                              <span className="min-w-[18px] h-[18px] px-1 rounded-full bg-red-500 text-white text-[9px] font-black flex items-center justify-center animate-pulse" aria-label={`${pendingCount} excusas pendientes`}>
+                                {pendingCount > 9 ? '9+' : pendingCount}
+                              </span>
+                            )}
                           </div>
                           <span className={`text-[9px] font-mono px-2 py-0.5 rounded-full ${
                             isActive ? 'bg-white/20 text-white' : 'bg-slate-100 dark:bg-slate-800 text-slate-500'
@@ -423,6 +469,13 @@ export default function App() {
           </div>
         </div>
       </header>
+
+      {/* Ronda 24: onboarding de notificaciones push (Rectoría y Portal) — el navegador exige gesto del usuario */}
+      {(currentRole === 'ADMIN' || currentRole === 'ESTUDIANTE_ACUDIENTE') && (
+        <div className="max-w-7xl w-full mx-auto px-4 sm:px-6 pt-4">
+          <PushOnboardingBanner variant={currentRole === 'ADMIN' ? 'rectoria' : 'portal'} />
+        </div>
+      )}
 
       {/* Main View Display */}
       <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 py-6">

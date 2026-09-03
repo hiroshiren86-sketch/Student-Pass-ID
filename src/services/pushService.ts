@@ -47,10 +47,18 @@ function urlBase64ToUint8Array(base64String: string): Uint8Array {
   return output;
 }
 
+/**
+ * Ronda 24 (fix crítico): la sesión `inas_user_session_v5` históricamente NUNCA se
+ * escribía (saveCurrentSession sin llamadores) → toda suscripción se registraba como
+ * PORTAL y el push de "nueva excusa" (dirigido a RECTORIA) jamás tenía destinatarios.
+ * Ahora el rol vive en DOS fuentes, en orden de confianza:
+ *   1. `inas_push_role_v1` — escrito por App.tsx en cada login/cambio de rol.
+ *   2. `inas_user_session_v5` — respaldo (persistida desde Ronda 24).
+ */
 function currentRole(): 'RECTORIA' | 'PORTAL' {
   try {
-    // El rol vive en la sesión del usuario (inas_user_session_v5): ADMIN = Rectoría
-    // (recibe "nueva excusa por revisar"); el resto es portal del estudiante/acudiente.
+    const flag = localStorage.getItem('inas_push_role_v1');
+    if (flag === 'RECTORIA' || flag === 'PORTAL') return flag;
     const raw = localStorage.getItem('inas_user_session_v5');
     const session = raw ? JSON.parse(raw) : {};
     return session?.role === 'ADMIN' ? 'RECTORIA' : 'PORTAL';
@@ -96,6 +104,17 @@ export async function enablePush(): Promise<PushEnableResult> {
     }
 
     let sub = await registration.pushManager.getSubscription();
+    if (sub) {
+      // Ronda 24: si la clave VAPID del Worker rotó (applicationServerKey distinto),
+      // la suscripción vieja está huérfana → se renueva en silencio. Sin esto, tras
+      // rotar claves habría que limpiar localStorage a mano en cada dispositivo.
+      const currentKeyB64 = btoa(String.fromCharCode(...new Uint8Array(sub.options.applicationServerKey as ArrayBufferLike & ArrayLike<number>)))
+        .replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+      if (currentKeyB64 !== keyData.publicKey) {
+        await sub.unsubscribe().catch(() => {});
+        sub = null as any;
+      }
+    }
     if (!sub) {
       sub = await registration.pushManager.subscribe({
         userVisibleOnly: true,

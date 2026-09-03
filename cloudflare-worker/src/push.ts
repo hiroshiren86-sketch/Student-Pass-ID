@@ -204,6 +204,9 @@ export async function sendPushTo(env: Env, opts: {
     for (const id of stale) {
       await env.DB.prepare(`DELETE FROM push_subscriptions WHERE id = ?`).bind(id).run();
     }
+    // Ronda 24: observabilidad mínima — visible con `wrangler tail` para diagnosticar
+    // entregas sin instrumentar el cliente (p.ej. 403 = VAPID inválido/mal rotado).
+    console.log(`[push] rol=${opts.role || opts.studentCode || '?'} destino=${rows.length} enviados=${sent} muertos=${stale.length}`);
     return sent;
   } catch {
     return 0; // el push jamás rompe el flujo principal
