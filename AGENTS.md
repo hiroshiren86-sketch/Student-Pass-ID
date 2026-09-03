@@ -660,6 +660,56 @@ El proveedor **Email/Password NO está habilitado** en Firebase Console (`accoun
 
 ---
 
+### ✅ Ronda 22 (03/09/2026): Sábado fuera de la jornada + bug del menú bento + Fases P3/P4 de Excusas + verificación de los 12 casos §10 (216 checks en verde)
+
+**Origen:** el propietario probó la Ronda 21 en producción (radicó una excusa y apareció en el buzón ✓) y encargó al agente principal, **en modo autónomo total**, tres frentes: (1) bug reportado — el menú bento de Horarios se desplegaba por DEBAJO del selector deslizante de días; (2) rastrear, aislar y **eliminar el sábado** de la jornada escolar (L–V, sáb/dom de descanso); (3) probar/verificar/arreglar todas las fases restantes y documentar todo aquí.
+
+**1. Bug del menú bento (commit `6a83c32`):** causa raíz — el `backdrop-blur-xl` del banner crea un *stacking context* propio, así que el `z-40` del menú solo valía DENTRO del banner y las barras hermanas posteriores (también con backdrop-blur, z-auto) pintaban encima. Fix: `relative z-30` en el banner (queda sobre hermanos z-auto, bajo el header sticky z-40 y los modales z-50).
+
+**2. Eliminación del sábado (commit `1a19e09`, suite `verify_ronda22_sabado.ts` 26/26):** jornada escolar = **Lunes a Viernes**.
+- **UI:** `DAYS_OF_WEEK` sin id 6 en Constructor de Horarios (chips, matriz semanal, selector de importación, tarjetas QR) y en Mis Cátedras (aula docente); el portal ya no muestra columna sábado en Mi Horario ni acepta "1-6" en su ayuda de CSV.
+- **Validaciones:** `upsertTeacherOwnAssignment` limita 1–5 ("El día debe ser Lunes (1) a Viernes (5): la jornada escolar no incluye el sábado."); ambos parsers CSV (importación masiva y horario personal) **rechazan** `Sábado/sabado/6` con mensaje específico "el sábado no es día lectivo (jornada de lunes a viernes)".
+- **Limpieza de huérfanas:** `getScheduleAssignments()` y `getAllStudentSchedules()` purgan en lectura las cátedras/entradas día-6 legadas y persisten la versión limpia; `saveAllStudentSchedules()` es **barrera de escritura** (un snapshot de sync no puede reintroducir el sábado).
+- **Defensa final intacta:** `getSchoolDayWindow` sigue devolviendo null en dom/sab (guard protector documentado).
+- **No se tocó:** el mapa `dayNames` del error "QR de otro día" (formatear hoy=Sábado es correcto) y los tipos sin cambio de forma (solo comentarios §Ronda 22).
+
+**3. Fase P3 "Evidencia" (commits `a4341cc`, suite `verify_excuses_p3.sh` 17/17):** soporte fotográfico del documento físico.
+- **Worker:** `POST /api/excuses/:id/attachment` — la foto llega comprimida (imageCompressor ~780×1040) y se **cifra AES-GCM-256 server-side** (WebCrypto, IV aleatorio de 12 bytes, clave = SHA-256 de `EXCUSE_ATTACHMENT_SECRET` → fallback `EXCUSE_CHAIN_SECRET` → `AUTH_TOKEN`). Se persiste en `attachment_path` como `AESGCM:v1:<ivB64>:<ctB64>` — **sin migración remota**. Sin secret → 503 (jamás se guarda sin cifrar). Límite 400 KB base64 → 413 con mensaje ES. Solo JPEG/PNG/WebP.
+- **Acceso (Ley 1581 art. 3(o)):** `GET .../attachment?role=RECTORIA` o `?requestBy=<código dueño>` descifra; cualquier otro → 403. La planilla jamás llama al endpoint (minimización §5).
+- **Portal:** foto OPCIONAL (WCAG 3.3.7) en la radicación anticipada; subida best-effort tras radicar (un fallo de la foto no revierte la excusa).
+- **Buzón Rectoría:** botón "Ver soporte (cifrado)" con visor descifrado (Escape/clic-fuera, aria-label) + **aprobación por lote** "Aprobar pendientes (N)" con ConfirmDialog, resultados por excusa en aria-live (spec §7.3).
+
+**4. Fase P4 (parcial, commit `84e2d4f`):** lo factible sin pruebas de campo.
+- **Cláusula art. 7:** en la matrícula (Rectoría) checkbox de consentimiento del representante legal para el soporte fotográfico (dato especial de salud), con fecha de evidencia en la ficha (`excuseDataConsent`/`excuseDataConsentAt`); editable en la ficha; texto verídico ("sin autorización el soporte se presenta solo físico").
+- **Purga de retención:** `sweepRetention()` lazy en `GET /api/excuses` — elimina excusas (y sus soportes cifrados) con `end_date` anterior a `EXCUSE_RETENTION_MONTHS` (default 12 = "término+1 año"); desvincula `excuse_id` antes de borrar (sin huérfanos); `audit_logs` se conserva (evidencia, no dato especial); `0` desactiva. Reportado como `purgedThisSweep`.
+- **Web Push: POSPUESTO** — requiere VAPID en producción + permisos de navegador + prueba real en dispositivo del propietario. Documentado como único ítem abierto de la spec junto con el despliegue del worker (ver "Estado").
+
+**5. Endurecimiento de la cadena HMAC (hallazgo del testing, commit `879fd1f`):** la pasada 2 de `verify-chain` solo comparaba `status`+`audit_hash` — alterar `notes`/`reason` de la fila en D1 pasaba inadvertido. Ahora la pasada 2 compara además `reviewed_by` vs `performed_by` del último evento, `reject_reason` vs el evento de rechazo, y `reason/startDate/endDate/notes` vs el evento `EXCUSE_CREATED` (la API jamás los edita). **Compatibilidad:** los campos ausentes en eventos pre-Ronda 22 se omiten — la excusa real radicada por el propietario el 03/09 queda `intact:true` tras el despliegue. `EXCUSE_CREATED` ahora firma también `notes`.
+
+**6. Verificación de los 12 casos de aceptación §10 (gate de la spec):**
+| # | Caso | Evidencia automatizada |
+|---|------|------------------------|
+| 1 | Anticipada → cierre protege | `verify_excuses_12casos_ui.ts` (motor end-to-end: excusedCount, overlay, justificados) |
+| 2 | Aprobación + audit | `verify_excuses_p0.sh` (PATCH RECTORÍA, reviewed_by/at, EXCUSE_APPROVED) |
+| 3 | Rechazo con motivo → desvinculación | `p0` + `verify_excuses_12casos.sh` (R6, % recalcula) |
+| 4 | Post-hoc 1 toque | `p0` (bloque doble: PUNTUAL intacto, AUSENTE vinculado) |
+| 5 | Incapacidad multi-día | `12casos.sh` (1 excusa → 3 registros en D1) |
+| 6 | Doble justificación → 400 | `p0` (índice único R2) |
+| 7 | Inmutabilidad | `12casos.sh` (403 ESTUDIANTE/DOCENTE) + `12casos_ui.ts` (sin UI de editar/retirar/DELETE) |
+| 8 | Minimización | `12casos_ui.ts` (planillas: etiquetas derivadas, jamás reason/foto) |
+| 9 | Ventana 72 h | `p0` (R8 auto-aprobo auditable) |
+| 10 | Tampering | `p0` + `12casos.sh` (fila y payload; ahora incluye notes) |
+| 11 | WCAG 2.2 | `12casos_ui.ts` (aria-live, Escape, role=dialog, foco) |
+| 12 | Bordes | `p0` + `12casos.sh` (R10 término → 400, 404 matrícula, R3 OTRA sin nota, R1 día asistido) |
+
+**7. Regresión total de la Ronda 22 (216 checks en verde):** `p0` 25/25 · `p1` 12/12 · `12casos API` 13/13 · `12casos UI` 29/29 · `ronda22_sabado` 26/26 · `ronda19` 111/111 · `ronda18` 48/0/1 SKIP. `tsc` raíz 0 y worker 0; `vite build` limpio (8s). Comandos: `bash scripts/verify_excuses_{p0,p1,12casos,p3}.sh && bun scripts/verify_excuses_12casos_ui.ts && bun scripts/verify_ronda22_sabado.ts && bun scripts/verify_ronda19.ts`.
+
+**⚠️ Pendiente de despliegue (no bloqueante):** el worker endurecido (pasada 2 + P3 + purga) requiere `cd cloudflare-worker && npx wrangler deploy` con credenciales del propietario — esta sesión no las tenía. Todo lo demás (frontend: bento fix, sábado fuera, portal foto, buzón, cláusula art. 7) ya está en producción vía Pages con el push. El smoke de las excusas del propietario en producción quedó intacto (compatibilidad hacia atrás verificada en la suite).
+
+**Re-verificación de hallazgos históricos:** gate del suplente intacto (portal solo abre con `isRepresentative`; `getScannerAuthority` sigue sin llamar — pendiente de cablear en ronda futura) y guard dom/sab intacto como defensa final.
+
+---
+
 ### ✅ Ronda 21 (03/09/2026): Excusas Justificadas — Fase P0 del contrato `spec-excusas-2026` (worker + D1 en producción, 25/25 verde)
 
 **Origen:** el propietario recibió la spec de referencia 2026 del QA Externo (anexada en `docs/spec-excusas-2026.md`) y ordenó implementarla **por etapas consolidadas** con prueba y verificación total. La implementación del módulo pasa al agente principal (Super Z); el diseño del encargado (Escudo + buzón) se conserva 100% — la spec es aditiva.
@@ -724,7 +774,7 @@ El proveedor **Email/Password NO está habilitado** en Firebase Console (`accoun
 4. Validar sincronización bidireccional entre 2 dispositivos simultáneos (PC + Móvil docente).
 5. ~~Decidir si se configura `AUTH_TOKEN`~~ **DECIDIDO (Ronda 18): el propietario lo activará en 1–2 días** — `wrangler secret put AUTH_TOKEN` + mismo valor en Ajustes de cada terminal. Mientras tanto: acceso abierto (riesgo temporal aceptado). Las reglas Firestore endurecidas de Ronda 18 quedaron en el repo **pendientes de deploy** (ver orden de despliegue en Ronda 18 → H2).
 6. ~~Implementar F1→F3→F2→F4→F5~~ **HECHO (Ronda 4)** y verificado en producción (Ronda 7); hallazgos de QA arreglados (Ronda 8).
-7. **Siguiente frente sugerido (decisión del propietario):** (a) prueba de sincronización bidireccional con 2 dispositivos físicos (PC + móvil docente) — único ítem de esta fase que no es automatizable desde el QA; (b) activar `AUTH_TOKEN` del worker (1–2 días, decisión tomada); (c) desplegar reglas Ronda 18 (`deploy_firebase`); (d) activar App Check reCAPTCHA v3 (pasos en Ronda 18) cuando el despliegue esté estable; (e) ~~módulo de Excusas / Buzón~~ **EN CURSO (Ronda 21): fases P0+P1+P2 implementadas y verificadas (API worker, motor de protección, buzón de Rectoría, 1 toque en planilla, portal "Mis Justificaciones") — ver 3.Bitácora → Ronda 21; quedan P3/P4 (fotos cifradas, Web Push, cláusula art. 7) y las pruebas de campo del propietario con la "Plantilla T: Jornada de Pruebas"**; (f) usar la **guía de vaciado de bases de Ronda 18** para la entrega limpia del proyecto; (g) ~~probar en producción el **QR de Clase**, la **Importación CSV** y **Mis Cátedras** implementados en Ronda 19 (guía en 3.Bitácora → Ronda 19)~~ **HECHO (Ronda 20, 03/09/2026 — QA Externo): verificación E2E completa en el build `index-DjJzmWei.js` — 26/26 checks en verde, QR de Clase de punta a punta (tarjeta→PNG→jsQR→activación→vinculación→anti-tampering), importación CSV con errores por línea, Mis Cátedras y columna "Contexto de Vinculación" en el export; todos los bugs del informe de fase 1 confirmados arreglados — ver 3.Bitácora → Ronda 20**; (h) del informe de testing quedan pendientes: verificación HMAC server-side (informe #6), consentimiento Ley 1581 (#7), code splitting (#8), aria-labels masivos (#9), PWA (#14) — priorizarlos tras la validación de campo de Ronda 19.
+7. **Siguiente frente sugerido (decisión del propietario):** (a) prueba de sincronización bidireccional con 2 dispositivos físicos (PC + móvil docente) — único ítem de esta fase que no es automatizable desde el QA; (b) activar `AUTH_TOKEN` del worker (1–2 días, decisión tomada); (c) desplegar reglas Ronda 18 (`deploy_firebase`); (d) activar App Check reCAPTCHA v3 (pasos en Ronda 18) cuando el despliegue esté estable; (e) ~~módulo de Excusas / Buzón~~ **CASI COMPLETO (Rondas 21-22): P0+P1+P2 implementados y verificados (Ronda 21); Ronda 22 añadió P3 (fotos cifradas AES-GCM, acceso solo Rectoría/dueño, bulk approval), P4 parcial (cláusula art. 7 + purga término+1 año) y la verificación automatizada de los 12 casos §10 (216 checks en verde) — ver 3.Bitácora → Ronda 22; quedan SOLO: desplegar el worker endurecido (`wrangler deploy`, credenciales del propietario), Web Push (prueba en dispositivo del propietario) y las pruebas de campo con la "Plantilla T: Jornada de Pruebas"**; (f) usar la **guía de vaciado de bases de Ronda 18** para la entrega limpia del proyecto; (g) ~~probar en producción el **QR de Clase**, la **Importación CSV** y **Mis Cátedras** implementados en Ronda 19 (guía en 3.Bitácora → Ronda 19)~~ **HECHO (Ronda 20, 03/09/2026 — QA Externo): verificación E2E completa en el build `index-DjJzmWei.js` — 26/26 checks en verde, QR de Clase de punta a punta (tarjeta→PNG→jsQR→activación→vinculación→anti-tampering), importación CSV con errores por línea, Mis Cátedras y columna "Contexto de Vinculación" en el export; todos los bugs del informe de fase 1 confirmados arreglados — ver 3.Bitácora → Ronda 20**; (h) del informe de testing quedan pendientes: verificación HMAC server-side (informe #6), consentimiento Ley 1581 (#7), code splitting (#8), aria-labels masivos (#9), PWA (#14) — priorizarlos tras la validación de campo de Ronda 19.
 
 ### ⏳ Fase Futura Planificada: Módulo de Excusas Médicas / Permisos Anticipados y Buzón Escolar
 - **Propósito:** Permitir a los estudiantes/acudientes reportar inasistencias programadas (citas médicas, incapacidades, calamidades) fuera del horario lectivo (después de la 1:00 p.m. o fines de semana) para proteger su registro de asistencia.
