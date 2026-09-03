@@ -1026,7 +1026,7 @@ export const StudentPortalView: React.FC<StudentPortalViewProps> = ({ onLogout, 
         // Ronda 8 (B3): ahora lee del estado reactivo (suscripción al storage arriba);
         // antes solo se refrescaba al remontar y quedaba stale en cambio de rol caliente.
         const templatesOnly = settings.templatesOnlyMode === true;
-        const dayNames = ['', 'Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado'];
+        const dayNames = ['', 'Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes']; // Ronda 22: jornada L–V, sin sábado
         return (
           <div className="glass-panel rounded-3xl p-5 sm:p-6 space-y-4">
             <div className="flex items-center justify-between border-b border-slate-100 dark:border-zinc-800/50 pb-3">
@@ -1045,7 +1045,7 @@ export const StudentPortalView: React.FC<StudentPortalViewProps> = ({ onLogout, 
             ) : mySchedule && mySchedule.entries.length > 0 ? (
               <div className="space-y-3">
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                  {[1, 2, 3, 4, 5, 6].map(day => {
+                  {[1, 2, 3, 4, 5].map(day => { // Ronda 22: jornada L–V (día-6 legado se purga en el storage)
                     const rows = mySchedule.entries.filter(e => e.dayOfWeek === day).sort((a, b) => a.startTime.localeCompare(b.startTime));
                     if (rows.length === 0) return null;
                     return (
@@ -1088,7 +1088,7 @@ export const StudentPortalView: React.FC<StudentPortalViewProps> = ({ onLogout, 
                 <p className="text-xs text-slate-500 dark:text-slate-400 font-bold">
                   Pega tu horario en CSV — una clase por línea: <span className="font-mono">día, materia, horaInicio, horaFin (opcional)</span>. Ejemplo:
                   <span className="block mt-1 p-2 rounded-lg bg-slate-950 text-emerald-300 font-mono text-[10px] leading-relaxed">{'Lunes, Matemáticas, 07:00, 07:55'}</span>
-                  <span className="block mt-1">Días: Lunes…Sábado (o 1-6). Si omites la hora de fin se asumen 55 min.</span>
+                  <span className="block mt-1">Días: Lunes…Viernes (o 1-5). El sábado no es día lectivo. Si omites la hora de fin se asumen 55 min.</span>
                 </p>
                 <textarea
                   value={scheduleCsvText}

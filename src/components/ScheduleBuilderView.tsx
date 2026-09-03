@@ -53,8 +53,9 @@ const DAYS_OF_WEEK = [
   { id: 2, name: 'Martes', short: 'MAR' },
   { id: 3, name: 'Miércoles', short: 'MIÉ' },
   { id: 4, name: 'Jueves', short: 'JUE' },
-  { id: 5, name: 'Viernes', short: 'VIE' },
-  { id: 6, name: 'Sábado', short: 'SÁB' }
+  { id: 5, name: 'Viernes', short: 'VIE' }
+  // Ronda 22: el sábado se elimina de la jornada escolar (L–V) por decisión del propietario.
+  // El guard getSchoolDayWindow sigue descartando dom/sab como última línea de defensa.
 ];
 
 const SLOT_TYPE_CONFIG: Record<ScheduleSlotType, { label: string; icon: any; bg: string; text: string; border: string; desc: string }> = {
@@ -749,7 +750,7 @@ export const ScheduleBuilderView: React.FC = () => {
               <thead>
                 <tr className="border-b border-slate-200 dark:border-zinc-800/50 text-[11px] uppercase tracking-wider text-slate-400">
                   <th className="py-2.5 px-3 font-bold">Bloque / Hora</th>
-                  {DAYS_OF_WEEK.slice(0, 5).map(d => (
+                  {DAYS_OF_WEEK.map(d => ( /* Ronda 22: ya sin sábado, slice(0,5) redundante */
                     <th key={d.id} className="py-2.5 px-3 font-black text-slate-900 dark:text-white">
                       {d.name}
                     </th>
@@ -789,7 +790,7 @@ export const ScheduleBuilderView: React.FC = () => {
                         <div className="text-[10px] text-slate-400">{slot.startTime}</div>
                       </td>
 
-                      {DAYS_OF_WEEK.slice(0, 5).map((d) => {
+                      {DAYS_OF_WEEK.map((d) => { /* Ronda 22: ya sin sábado, slice(0,5) redundante */
                         const asgn = getAssignment(slot.id, d.id, selectedGrade);
 
                         return (
@@ -1490,7 +1491,7 @@ export const ScheduleBuilderView: React.FC = () => {
             <div className="text-center space-y-1">
               <p className="text-sm font-black text-slate-900 dark:text-white">{classQrModal.subject}</p>
               <p className="text-xs font-bold text-slate-600 dark:text-slate-300">
-                {classQrModal.grade} · {DAYS_OF_WEEK.find(d => d.id === classQrModal.dayOfWeek)?.name} · {classQrModal.slotName} ({classQrModal.slotStartTime}–{classQrModal.slotEndTime})
+                {classQrModal.grade} · {DAYS_OF_WEEK.find(d => d.id === classQrModal.dayOfWeek)?.name || `Día ${classQrModal.dayOfWeek}`} · {classQrModal.slotName} ({classQrModal.slotStartTime}–{classQrModal.slotEndTime})
               </p>
               {classQrModal.classroom && <p className="text-[11px] text-slate-500">{classQrModal.classroom}</p>}
               <p className="text-[10px] text-slate-400 font-mono break-all">CLASE:v1 · Firmado HMAC-SHA256 · Vence el 19-dic</p>

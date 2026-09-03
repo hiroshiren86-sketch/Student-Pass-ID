@@ -753,7 +753,10 @@ export class AttendanceStorageService {
     const date = dateStr || getTodayDateString();
     const [y, mo, d] = date.split('-').map(Number);
     const dow = y && mo && d ? new Date(y, mo - 1, d).getDay() : new Date().getDay();
-    if (dow === 0 || dow === 6) return null; // domingo/sábado: sin jornada lectiva
+    // Ronda 22: política confirmada por el propietario — la jornada escolar es de LUNES a VIERNES.
+    // dom/sab quedan sin ventana lectiva (fin de semana de descanso). Guard protector: aunque un
+    // dato legado día-6 sobreviva en algún rincón, jamás genera jornada ni cierre de asistencia.
+    if (dow === 0 || dow === 6) return null;
 
     const settings = this.getSettings();
     const tmpl = this.getActiveDayTemplate();
@@ -868,8 +871,22 @@ export class AttendanceStorageService {
   static getAllStudentSchedules(): Record<string, StudentPersonalSchedule> {
     try {
       const raw = localStorage.getItem(STUDENT_SCHEDULES_KEY);
-      const obj = raw ? JSON.parse(raw) : {};
-      return obj && typeof obj === 'object' ? obj : {};
+      const obj: Record<string, StudentPersonalSchedule> = raw ? JSON.parse(raw) : {};
+      if (!(obj && typeof obj === 'object')) return {};
+      // Ronda 22 (limpieza de huérfanas): entradas día-6 legadas se descartan en lectura;
+      // el próximo save (o la sincronización que use este getter) persiste la versión limpia.
+      const clean: Record<string, StudentPersonalSchedule> = {};
+      let purged = false;
+      for (const [code, sched] of Object.entries(obj) as [string, StudentPersonalSchedule][]) {
+        if (!sched || !Array.isArray(sched.entries)) { clean[code] = sched; continue; }
+        const entries = sched.entries.filter(e => !(e && typeof e.dayOfWeek === 'number' && (e.dayOfWeek < 1 || e.dayOfWeek > 5)));
+        if (entries.length !== sched.entries.length) purged = true;
+        clean[code] = { ...sched, entries };
+      }
+      if (purged) {
+        try { localStorage.setItem(STUDENT_SCHEDULES_KEY, JSON.stringify(clean)); } catch {}
+      }
+      return clean;
     } catch {
       return {};
     }
@@ -877,7 +894,14 @@ export class AttendanceStorageService {
 
   // Ronda 4 (F5): reemplazo total desde el snapshot de sync (patrón igual que slots/assignments)
   static saveAllStudentSchedules(map: Record<string, StudentPersonalSchedule>): void {
-    localStorage.setItem(STUDENT_SCHEDULES_KEY, JSON.stringify(map && typeof map === 'object' ? map : {}));
+    // Ronda 22: barrera de escritura — un snapshot entrante no puede reintroducir el sábado.
+    const clean: Record<string, StudentPersonalSchedule> = {};
+    for (const [code, sched] of Object.entries(map && typeof map === 'object' ? map : {})) {
+      clean[code] = sched && Array.isArray(sched.entries)
+        ? { ...sched, entries: sched.entries.filter(e => !(e && typeof e.dayOfWeek === 'number' && (e.dayOfWeek < 1 || e.dayOfWeek > 5))) }
+        : sched;
+    }
+    localStorage.setItem(STUDENT_SCHEDULES_KEY, JSON.stringify(clean));
     this.notify();
   }
 
@@ -910,7 +934,8 @@ export class AttendanceStorageService {
   static parsePersonalScheduleCSV(text: string): { entries: StudentPersonalScheduleEntry[]; errors: string[] } {
     const errors: string[] = [];
     const entries: StudentPersonalScheduleEntry[] = [];
-    const dayMap: Record<string, number> = { lunes: 1, martes: 2, 'miércoles': 3, miercoles: 3, jueves: 4, 'viernes': 5, 'sábado': 6, sabado: 6 };
+    // Ronda 22: el sábado NO es día lectivo — se elimina del mapa y se rechaza con mensaje claro.
+    const dayMap: Record<string, number> = { lunes: 1, martes: 2, 'miércoles': 3, miercoles: 3, jueves: 4, viernes: 5 };
     const timeRe = /^([01]?\d|2[0-3]):[0-5]\d$/;
 
     (text || '').split(/\r?\n/).forEach((line, i) => {
@@ -927,8 +952,12 @@ export class AttendanceStorageService {
       }
       const dayKey = cells[0].toLowerCase();
       const dayOfWeek = /^\d$/.test(cells[0]) ? Number(cells[0]) : dayMap[dayKey];
-      if (!dayOfWeek || dayOfWeek < 1 || dayOfWeek > 6) {
-        errors.push(`Línea ${i + 1}: día no reconocido ("${cells[0]}"). Usa Lunes…Sábado o 1-6.`);
+      if (!dayOfWeek || dayOfWeek < 1 || dayOfWeek > 5) {
+        if (dayOfWeek === 6 || /s[áa]b/.test(dayKey)) {
+          errors.push(`Línea ${i + 1}: el sábado no es día lectivo (jornada de lunes a viernes). Usa Lunes…Viernes o 1-5.`);
+        } else {
+          errors.push(`Línea ${i + 1}: día no reconocido ("${cells[0]}"). Usa Lunes…Viernes o 1-5.`);
+        }
         return;
       }
       const subject = cells[1].slice(0, 60);
@@ -1031,7 +1060,17 @@ export class AttendanceStorageService {
     try {
       const stored = localStorage.getItem(SCHEDULE_ASSIGNMENTS_KEY);
       if (stored) {
-        return JSON.parse(stored);
+        const parsed = JSON.parse(stored) as ClassScheduleAssignment[];
+        if (Array.isArray(parsed)) {
+          // Ronda 22 (limpieza de huérfanas): la jornada es L–V; toda cátedra día-6 legada se
+          // purga en la primera lectura y se persiste el resultado (sin notify para no
+          // interrumpir renders — la próxima escritura real ya nace limpia).
+          const clean = parsed.filter(a => !(a && typeof a.dayOfWeek === 'number' && (a.dayOfWeek < 1 || a.dayOfWeek > 5)));
+          if (clean.length !== parsed.length) {
+            try { localStorage.setItem(SCHEDULE_ASSIGNMENTS_KEY, JSON.stringify(clean)); } catch {}
+          }
+          return clean;
+        }
       }
     } catch {}
     this.saveScheduleAssignments(INITIAL_SCHEDULE_ASSIGNMENTS);
@@ -1283,11 +1322,12 @@ export class AttendanceStorageService {
     const splitLine = (l: string): string[] => l.split(delimiter).map(c => c.trim().replace(/^["']|["']$/g, ''));
     const norm = this.normalizeTextForMatch;
 
-    // Días: nombre (con/sin tildes, mayúsculas) o número 1-6. Prefijo de 3 letras aceptado.
-    const dayByName: Record<string, number> = { lunes: 1, martes: 2, miercoles: 3, jueves: 4, viernes: 5, sabado: 6 };
+    // Días: nombre (con/sin tildes, mayúsculas) o número 1-5. Prefijo de 3 letras aceptado.
+    // Ronda 22: el sábado se elimina de la jornada — el parser lo rechaza con mensaje explícito.
+    const dayByName: Record<string, number> = { lunes: 1, martes: 2, miercoles: 3, jueves: 4, viernes: 5 };
     const parseDay = (raw: string): number | null => {
       const n = Number(raw);
-      if (Number.isInteger(n) && n >= 1 && n <= 6) return n;
+      if (Number.isInteger(n) && n >= 1 && n <= 5) return n;
       const key = norm(raw);
       if (!key) return null;
       for (const [name, dow] of Object.entries(dayByName)) {
@@ -1353,7 +1393,11 @@ export class AttendanceStorageService {
 
       const day = parseDay(cell(colIdx.day));
       if (day === null) {
-        errors.push(`Línea ${lineNo}: día no reconocido ("${cell(colIdx.day)}"). Usa Lunes…Sábado o 1-6.`);
+        if (/^\s*6\s*$/.test(cell(colIdx.day)) || /s[áa]b/i.test(cell(colIdx.day))) {
+          errors.push(`Línea ${lineNo}: el sábado no es día lectivo (jornada de lunes a viernes). Usa Lunes…Viernes o 1-5.`);
+        } else {
+          errors.push(`Línea ${lineNo}: día no reconocido ("${cell(colIdx.day)}"). Usa Lunes…Viernes o 1-5.`);
+        }
         return;
       }
 
@@ -1447,7 +1491,7 @@ export class AttendanceStorageService {
 
     const slot = this.getScheduleSlots().find(s => s.id === params.slotId && s.type === 'CLASS');
     if (!slot) return { ok: false, error: 'El bloque seleccionado no es un bloque de clase.' };
-    if (params.dayOfWeek < 1 || params.dayOfWeek > 6) return { ok: false, error: 'El día debe ser Lunes (1) a Sábado (6).' };
+    if (params.dayOfWeek < 1 || params.dayOfWeek > 5) return { ok: false, error: 'El día debe ser Lunes (1) a Viernes (5): la jornada escolar no incluye el sábado.' };
     if (!params.subject.trim()) return { ok: false, error: 'La materia no puede estar vacía.' };
 
     // Guarda 1: la celda (grado, día, bloque) ya tiene cátedra de OTRO docente → no se pisa

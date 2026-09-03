@@ -110,7 +110,7 @@ export interface ScheduleSlot {
 
 export interface ClassScheduleAssignment {
   id: string;
-  dayOfWeek: number; // 1 = Lunes, 2 = Martes, 3 = Miércoles, 4 = Jueves, 5 = Viernes, 6 = Sábado
+  dayOfWeek: number; // 1 = Lunes, 2 = Martes, 3 = Miércoles, 4 = Jueves, 5 = Viernes (jornada lectiva L–V; Ronda 22 elimina el sábado)
   slotId: string; // Referencia al ScheduleSlot
   grade: string; // "10°1"
   subject: string; // "Matemáticas"
@@ -363,7 +363,7 @@ export interface AttendanceSummary {
  */
 export interface ActiveClassContext {
   grade: string;           // '10°1'
-  dayOfWeek: number;       // 1 = Lunes ... 6 = Sábado
+  dayOfWeek: number;       // 1 = Lunes ... 5 = Viernes (jornada L–V; Ronda 22)
   slotId: string;          // 'slot-4'
   slotName: string;        // '4ª Hora de Clase'
   slotStartTime: string;   // '09:45'
@@ -383,7 +383,7 @@ export interface ActiveClassContext {
  */
 export interface ParsedScheduleRow {
   lineNo: number;          // número de línea en el archivo (trazabilidad de errores)
-  dayOfWeek: number;       // 1 = Lunes ... 6 = Sábado
+  dayOfWeek: number;       // 1 = Lunes ... 5 = Viernes (jornada L–V; Ronda 22)
   grade: string;           // normalizado al formato del sistema ('10°1')
   slotId: string;
   subject: string;
@@ -447,7 +447,7 @@ export interface GradeAiSummaryResult {
 // Informativo: NO interfiere con la asistencia (el escaneo registra fecha y hora).
 // Se deshabilita globalmente con settings.templatesOnlyMode = true (interruptor de Rectoría).
 export interface StudentPersonalScheduleEntry {
-  dayOfWeek: number; // 1 = Lunes … 6 = Sábado
+  dayOfWeek: number; // 1 = Lunes … 5 = Viernes (jornada L–V; Ronda 22)
   subject: string;
   startTime: string; // "07:00"
   endTime: string;   // "07:55"

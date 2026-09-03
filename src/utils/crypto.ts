@@ -134,7 +134,7 @@ export interface ParsedClassQrResult {
   isValidFormat: boolean;
   grade?: string;
   slotId?: string;
-  dayOfWeek?: number;         // 1=Lunes ... 6=Sábado
+  dayOfWeek?: number;         // 1=Lunes ... 5=Viernes (jornada lectiva L–V; Ronda 22)
   expiresAt?: number;
   isExpired?: boolean;
   signature?: string;

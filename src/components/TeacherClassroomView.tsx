@@ -43,8 +43,9 @@ const DAYS_OF_WEEK = [
   { id: 2, name: 'Martes' },
   { id: 3, name: 'Miércoles' },
   { id: 4, name: 'Jueves' },
-  { id: 5, name: 'Viernes' },
-  { id: 6, name: 'Sábado' }
+  { id: 5, name: 'Viernes' }
+  // Ronda 22: el sábado se elimina de la jornada escolar (L–V). Datos legados día-6
+  // se muestran con el fallback "Día N" y se purgan al vuelo desde el storage.
 ];
 
 interface TeacherClassroomViewProps {
