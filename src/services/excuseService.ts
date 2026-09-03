@@ -32,6 +32,35 @@ import { AttendanceStorageService } from './attendanceStorage';
 
 const EXCUSES_CACHE_KEY = 'inas_excuses_cache_v1';
 
+/**
+ * Ronda 24 (fix de UI): el GET /api/excuses devuelve filas crudas de D1 en
+ * snake_case (SELECT *) mientras la app consume camelCase. Sin normalizar, el
+ * buzón de Rectoría y "Mis Justificaciones" mostraban nombre/fechas/motivo
+ * VACÍOS desde la Ronda 21 (los botones funcionaban; el texto no). Tolerante
+ * con ambas formas: si ya viene normalizado (POST/decide), no toca nada.
+ */
+function normalizeExcuse(raw: any): StudentExcuse {
+  if (!raw || typeof raw !== 'object') return raw;
+  const pick = <T>(camel: T, snake: any): T =>
+    (camel === undefined || camel === null ? (snake as T) : camel);
+  return {
+    ...raw,
+    studentCode: pick(raw.studentCode, raw.student_code),
+    studentName: pick(raw.studentName, raw.student_name),
+    startDate: pick(raw.startDate, raw.start_date),
+    endDate: pick(raw.endDate, raw.end_date),
+    submittedBy: pick(raw.submittedBy, raw.submitted_by),
+    sourceAttendanceId: pick(raw.sourceAttendanceId, raw.source_attendance_id),
+    attachmentPath: pick(raw.attachmentPath, raw.attachment_path),
+    reviewedBy: pick(raw.reviewedBy, raw.reviewed_by),
+    reviewedAt: pick(raw.reviewedAt, raw.reviewed_at),
+    rejectReason: pick(raw.rejectReason, raw.reject_reason),
+    autoApproved: pick(raw.autoApproved, raw.auto_approved),
+    auditHash: pick(raw.auditHash, raw.audit_hash),
+    createdAt: pick(raw.createdAt, raw.created_at)
+  } as StudentExcuse;
+}
+
 /** Etiquetas derivadas del overlay — §1.2/§4.2. '' = ausencia injustificada. */
 export function justificationLabelOf(rec: Pick<AttendanceRecord, 'status' | 'excuseId' | 'excuseStatus'>): '' | 'Excusada (bajo revisión)' | 'Excusada (verificada)' {
   if (rec.status !== 'AUSENTE' || !rec.excuseId) return '';
@@ -85,7 +114,7 @@ export class ExcuseService {
     try {
       const raw = localStorage.getItem(EXCUSES_CACHE_KEY);
       const arr = raw ? JSON.parse(raw) : [];
-      return Array.isArray(arr) ? arr : [];
+      return Array.isArray(arr) ? arr.map(normalizeExcuse) : [];
     } catch {
       return [];
     }
@@ -111,7 +140,7 @@ export class ExcuseService {
       if (!res.ok || !data?.success) {
         return { ok: false, count: 0, error: data?.error || `HTTP ${res.status}` };
       }
-      const excuses: StudentExcuse[] = Array.isArray(data.excuses) ? data.excuses : [];
+      const excuses: StudentExcuse[] = Array.isArray(data.excuses) ? data.excuses.map(normalizeExcuse) : [];
       this.saveCache(excuses);
       return { ok: true, count: excuses.length };
     } catch (err: any) {
@@ -330,7 +359,7 @@ export class ExcuseService {
       if (!res.ok || !data?.success) {
         return { ok: false, excuses: [], error: data?.error || `HTTP ${res.status}` };
       }
-      return { ok: true, excuses: Array.isArray(data.excuses) ? data.excuses : [] };
+      return { ok: true, excuses: Array.isArray(data.excuses) ? data.excuses.map(normalizeExcuse) : [] };
     } catch (err: any) {
       return { ok: false, excuses: [], error: err?.message || 'Fallo de red al consultar excusas.' };
     }
