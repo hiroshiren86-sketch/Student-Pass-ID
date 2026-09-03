@@ -31,6 +31,8 @@ import { CloudflareSyncService, CloudflareSyncResult } from '../services/cloudfl
 import { AiService } from '../services/aiService';
 import { AiProviderMark } from './AiProviderMark';
 import { ConfirmDialog } from './ConfirmDialog';
+import { enablePush, disablePush, getPushStatus } from '../services/pushService';
+import { BellRing, BellOff } from 'lucide-react';
 
 import { SyncOverlay } from './SyncOverlay';
 
@@ -42,6 +44,10 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ onClose }) => {
   const [settings, setSettings] = useState<SchoolSettings>(AttendanceStorageService.getSettings());
   const [showSavedToast, setShowSavedToast] = useState(false);
   const [isSyncingCloud, setIsSyncingCloud] = useState(false);
+  // Ronda 23 (P4): notificaciones push de excusas (por dispositivo)
+  const [pushStatus, setPushStatus] = useState<{ supported: boolean; permission: string; subscribed: boolean } | null>(null);
+  const [pushBusy, setPushBusy] = useState(false);
+  const [pushFeedback, setPushFeedback] = useState<{ ok: boolean; message: string } | null>(null);
   // Ronda 18 (H4): confirmación propia para reiniciar datos demo
   const [resetConfirmOpen, setResetConfirmOpen] = useState(false);
   const [cloudSyncMsg, setCloudSyncMsg] = useState<string | null>(null);
@@ -122,6 +128,11 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ onClose }) => {
   React.useEffect(() => {
     fetchProviderModels(settings.aiProvider || 'groq', settings.customAiApiKey);
   }, [settings.aiProvider]);
+
+  // Ronda 23 (P4): estado de las notificaciones push al abrir Ajustes
+  React.useEffect(() => {
+    getPushStatus().then(setPushStatus);
+  }, []);
 
   // Regla E10: Cerrar modal de ajustes con la tecla Escape
   React.useEffect(() => {
@@ -697,6 +708,66 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ onClose }) => {
                 <CheckCircle2 className="w-4 h-4 shrink-0" />
                 <span>{cloudflareSyncResult.message}</span>
               </div>
+            )}
+          </div>
+
+          {/* Ronda 23 (P4): Notificaciones push de excusas — por dispositivo */}
+          <div className="p-4 rounded-2xl bg-violet-50/70 dark:bg-violet-950/30 border border-violet-200 dark:border-violet-900/60 space-y-3">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2 text-xs font-black text-violet-950 dark:text-violet-200">
+                <BellRing className="w-4 h-4 text-violet-600 dark:text-violet-400" />
+                <span>Notificaciones Push de Excusas (este dispositivo)</span>
+              </div>
+              <span className={`text-[10px] font-bold px-2 py-0.5 rounded-md ${
+                pushStatus?.subscribed
+                  ? 'bg-emerald-200 dark:bg-emerald-900 text-emerald-800 dark:text-emerald-200'
+                  : 'bg-slate-200 dark:bg-zinc-800 text-slate-600 dark:text-slate-300'
+              }`}>
+                {pushStatus === null ? '…' : pushStatus.subscribed ? 'Activas' : 'Inactivas'}
+              </span>
+            </div>
+            <p className="text-[11px] text-violet-800 dark:text-violet-300">
+              Rectoría recibe aviso cuando se radica una excusa; el estudiante/acudiente recibe la decisión (verificada o rechazada con motivo). Requiere permiso del navegador y conexión con el Worker.
+            </p>
+            <div className="flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                onClick={async () => {
+                  setPushBusy(true);
+                  const res = await enablePush();
+                  setPushFeedback({ ok: res.ok, message: res.message });
+                  setPushStatus(await getPushStatus());
+                  setPushBusy(false);
+                }}
+                disabled={pushBusy || (pushStatus !== null && !pushStatus.supported)}
+                className="px-3 py-1.5 bg-violet-600 hover:bg-violet-500 text-white rounded-xl text-xs font-bold shadow-xs flex items-center gap-1.5 transition-all disabled:opacity-50"
+              >
+                <BellRing className="w-3.5 h-3.5" />
+                <span>{pushBusy ? 'Activando...' : 'Activar notificaciones'}</span>
+              </button>
+              <button
+                type="button"
+                onClick={async () => {
+                  setPushBusy(true);
+                  const res = await disablePush();
+                  setPushFeedback({ ok: res.ok, message: res.message });
+                  setPushStatus(await getPushStatus());
+                  setPushBusy(false);
+                }}
+                disabled={pushBusy || (pushStatus !== null && !pushStatus.subscribed)}
+                className="px-3 py-1.5 bg-white dark:bg-black text-violet-800 dark:text-violet-200 border border-violet-300 dark:border-violet-800 rounded-xl text-xs font-bold flex items-center gap-1.5 transition-all disabled:opacity-40"
+              >
+                <BellOff className="w-3.5 h-3.5" />
+                <span>Desactivar</span>
+              </button>
+              {pushStatus && !pushStatus.supported && (
+                <span className="text-[11px] font-bold text-amber-700 dark:text-amber-300">Navegador sin soporte push (requiere HTTPS).</span>
+              )}
+            </div>
+            {pushFeedback && (
+              <p role="status" className={`text-xs font-bold ${pushFeedback.ok ? 'text-emerald-600 dark:text-emerald-400' : 'text-rose-600 dark:text-rose-400'}`}>
+                {pushFeedback.message}
+              </p>
             )}
           </div>
 

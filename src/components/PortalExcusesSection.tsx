@@ -70,6 +70,14 @@ export const PortalExcusesSection: React.FC<PortalExcusesSectionProps> = ({ stud
 
   useEffect(() => { load(); }, [load]);
 
+  // Ronda 23: el expediente también se refresca al volver a primer plano (la
+  // decisión de Rectoría llega por push, pero la lista siempre refleja al Worker).
+  useEffect(() => {
+    const onVisible = () => { if (document.visibilityState === 'visible') load(); };
+    document.addEventListener('visibilitychange', onVisible);
+    return () => document.removeEventListener('visibilitychange', onVisible);
+  }, [load]);
+
   const resetForm = () => {
     setReason(null); setNotes(''); setRangeMode(false);
     setSingleDate(''); setRangeStart(''); setRangeEnd('');

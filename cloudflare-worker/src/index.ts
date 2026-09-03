@@ -7,6 +7,7 @@
  */
 
 import { handleExcusesRoutes } from './excuses';
+import { handlePushRoutes } from './push';
 
 // Tipos autocontenidos para Cloudflare Worker Runtime
 export interface D1PreparedStatement {
@@ -57,6 +58,12 @@ export interface Env {
   // Ronda 22 (Fase P4 — retención Ley 1581): meses de conservación de las excusas (y sus
   // soportes) tras su fecha final. Default 12 ("término +1 año"). 0 = sin purga automática.
   EXCUSE_RETENTION_MONTHS?: string;
+  // Ronda 23 (Fase P4 — WEB PUSH de excusas, RFC 8030/8291/8292): claves VAPID del
+  // servidor de notificaciones. Se configuran con `wrangler secret put VAPID_*`.
+  // Sin claves → GET /api/push/public-key responde 503 y la app no ofrece notificaciones.
+  VAPID_PUBLIC_KEY?: string;   // clave pública P-256 (base64url, 87 chars)
+  VAPID_PRIVATE_KEY?: string;  // escalar privado P-256 (base64url, 43 chars)
+  VAPID_SUBJECT?: string;      // contacto VAPID (mailto: o https:)
 }
 
 // Encabezados de CORS para permitir conexiones seguras desde cualquier frontend o app móvil
@@ -136,65 +143,6 @@ export default {
       }
 
       // =========================================================================
-      // ⚠️ TEMPORAL — DIAGNÓSTICO RONDA 23 (SOLO LECTURA) — ELIMINAR TRAS USO ⚠️
-      // Objetivo: forensic del incidente "la excusa del propietario desapareció de
-      // D1" + verificar que el despliegue automático del panel (Workers Builds)
-      // realmente publica cada commit. NO escribe nada. Se elimina en el próximo
-      // commit una vez capturado el diagnóstico.
-      // =========================================================================
-      if (path === '/api/diag/ronda23' && request.method === 'GET') {
-        if (!env.DB) return jsonResponse({ diag: 'Ronda23', error: 'D1 no configurada' }, 503);
-        const countOf = async (sql: string): Promise<number | string> => {
-          try {
-            const r = await env.DB.prepare(sql).first<{ n: number }>();
-            return r?.n ?? -1;
-          } catch (e: any) {
-            return `ERR:${String(e?.message || e).slice(0, 100)}`;
-          }
-        };
-        const students = await countOf(`SELECT COUNT(*) AS n FROM students`);
-        const attendance = await countOf(`SELECT COUNT(*) AS n FROM attendance_records`);
-        const excuses = await countOf(`SELECT COUNT(*) AS n FROM student_excuses`);
-        const snapshots = await countOf(`SELECT COUNT(*) AS n FROM sync_snapshots`);
-        const auditExcuse = await countOf(`SELECT COUNT(*) AS n FROM audit_logs WHERE event_type LIKE 'EXCUSE_%'`);
-        const auditTotal = await countOf(`SELECT COUNT(*) AS n FROM audit_logs`);
-        let attendanceRange: unknown = null;
-        try {
-          attendanceRange = await env.DB.prepare(`SELECT MIN(date) AS minDate, MAX(date) AS maxDate FROM attendance_records`).first();
-        } catch (e: any) {
-          attendanceRange = `ERR:${String(e?.message || e).slice(0, 100)}`;
-        }
-        let excuseColumns: unknown = null;
-        try {
-          const cols = await env.DB.prepare(`PRAGMA table_info(student_excuses)`).all<{ name: string }>();
-          excuseColumns = (cols.results || []).map((c) => c.name);
-        } catch (e: any) {
-          excuseColumns = `ERR:${String(e?.message || e).slice(0, 100)}`;
-        }
-        let excuseAuditEvents: unknown = null;
-        try {
-          const rows = await env.DB.prepare(
-            `SELECT id, event_type, performed_by, created_at, SUBSTR(details_json, 1, 240) AS details
-             FROM audit_logs WHERE event_type LIKE 'EXCUSE_%' ORDER BY created_at ASC, id ASC LIMIT 20`
-          ).all();
-          excuseAuditEvents = rows.results || [];
-        } catch (e: any) {
-          excuseAuditEvents = `ERR:${String(e?.message || e).slice(0, 100)}`;
-        }
-        return jsonResponse({
-          diag: 'Ronda23-temporal-eliminar-tras-uso',
-          capturedAt: new Date().toISOString(),
-          tables: {
-            students, attendance_records: attendance, student_excuses: excuses,
-            sync_snapshots: snapshots, audit_logs_excuse_events: auditExcuse, audit_logs_total: auditTotal
-          },
-          attendanceRange,
-          excuseColumns,
-          excuseAuditEvents
-        });
-      }
-
-      // =========================================================================
       // RUTAS IA RETIRADAS (01/09/2026, decisión del propietario):
       // La IA se ejecuta 100% LOCAL en el navegador (cliente directo BYOK con la
       // clave del administrador). Los proveedores bloquean el egreso de datacenters
@@ -241,9 +189,22 @@ export default {
 
           // 2. Guardar Estudiantes en tabla relacional D1 en batches
           if (students.length > 0) {
+            // Ronda 23 (BUG CRÍTICO RESUELTO con prueba forense en D1): era INSERT OR REPLACE.
+            // En SQLite REPLACE = DELETE+INSERT, y students tiene FKs hijas con ON DELETE
+            // CASCADE (attendance_records y student_excuses, schema.sql:44 y :124). Cada push
+            // que reinsertaba un estudiante BORRABA EN CASCADA sus excusas y asistencias —
+            // por eso desaparecían las excusas radicadas tras cada "Sincronizar". El upsert
+            // verdadero (ON CONFLICT DO UPDATE) NO borra la fila: no dispara cascadas ni
+            // firea el trigger de auditoría trg_excuse_delete_audit.
             const studentStmt = env.DB.prepare(
-              `INSERT OR REPLACE INTO students (code, document_id, document_type, first_name, last_name, grade, photo_url, guardian_name, guardian_phone, status, updated_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))`
+              `INSERT INTO students (code, document_id, document_type, first_name, last_name, grade, photo_url, guardian_name, guardian_phone, status, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+               ON CONFLICT(code) DO UPDATE SET
+                 document_id=excluded.document_id, document_type=excluded.document_type,
+                 first_name=excluded.first_name, last_name=excluded.last_name,
+                 grade=excluded.grade, photo_url=excluded.photo_url,
+                 guardian_name=excluded.guardian_name, guardian_phone=excluded.guardian_phone,
+                 status=excluded.status, updated_at=datetime('now')`
             );
             const studentBatch = students.map((s: any) => 
               studentStmt.bind(
@@ -426,8 +387,12 @@ export default {
       // Anticipada (Escudo) + post-hoc (1 toque) en una entidad; reglas R1–R10,
       // audit_logs EXCUSE_* con cadena HMAC tamper-evidente. Ver src/excuses.ts
       // =========================================================================
-      const excusesResponse = await handleExcusesRoutes(request, env, url, path);
+      const excusesResponse = await handleExcusesRoutes(request, env, url, path, ctx);
       if (excusesResponse) return excusesResponse;
+
+      // RUTAS: WEB PUSH (Ronda 23 — suscripciones de notificaciones de excusas)
+      const pushResponse = await handlePushRoutes(request, env, url, path);
+      if (pushResponse) return pushResponse;
 
       return errorResponse(`Ruta no encontrada: ${path}`, 404);
     } catch (err: any) {

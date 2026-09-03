@@ -63,6 +63,21 @@ export const ExcusesInboxView: React.FC<ExcusesInboxViewProps> = ({ reviewedBy }
 
   useEffect(() => { load(); }, [load]);
 
+  // Ronda 23 (hallazgo del propietario con 2 teléfonos): el buzón solo cargaba al
+  // montar — en otro dispositivo la excusa nueva NO aparecía hasta refrescar a mano.
+  // Ahora: sondeo cada 30 s + refresco inmediato cuando la pestaña vuelve a primer
+  // plano (visibilitychange). El push (VAPID) complementa, pero la lista siempre
+  // muestra la verdad del Worker.
+  useEffect(() => {
+    const interval = setInterval(() => { load(); }, 30_000);
+    const onVisible = () => { if (document.visibilityState === 'visible') load(); };
+    document.addEventListener('visibilitychange', onVisible);
+    return () => {
+      clearInterval(interval);
+      document.removeEventListener('visibilitychange', onVisible);
+    };
+  }, [load]);
+
   const pendingCount = excuses.filter(e => e.status === 'PENDIENTE').length;
 
   const handleApprove = async (ex: StudentExcuse) => {

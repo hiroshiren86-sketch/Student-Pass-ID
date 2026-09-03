@@ -26,8 +26,13 @@
  * ==============================================================================
  */
 import type { Env } from './index';
+import { sendPushTo } from './push';
 
 const EXCUSE_REASONS = ['CITA_MEDICA', 'INCAPACIDAD', 'CALAMIDAD', 'DEPORTIVA', 'OTRA'] as const;
+const EXCUSE_REASON_LABELS: Record<string, string> = {
+  CITA_MEDICA: 'Cita médica', INCAPACIDAD: 'Incapacidad', CALAMIDAD: 'Calamidad doméstica',
+  DEPORTIVA: 'Representación deportiva', OTRA: 'Otra'
+};
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 
 interface ExcuseRuleError { rule: string; message_es: string }
@@ -216,7 +221,7 @@ function b64decode(s: string): Uint8Array {
   return out;
 }
 
-export async function handleExcusesRoutes(request: Request, env: Env, url: URL, path: string): Promise<Response | null> {
+export async function handleExcusesRoutes(request: Request, env: Env, url: URL, path: string, ctx?: { waitUntil(promise: Promise<any>): void }): Promise<Response | null> {
   if (!path.startsWith('/api/excuses')) return null;
   if (!env.DB) return jsonErr('Base de datos D1 no configurada en el Worker.', 503);
 
@@ -398,6 +403,14 @@ export async function handleExcusesRoutes(request: Request, env: Env, url: URL, 
       });
       await env.DB.prepare(`UPDATE student_excuses SET audit_hash = ? WHERE id = ?`).bind(hash, excuseId).run();
 
+      // Web Push (Ronda 23, best-effort): aviso a Rectoría de que hay una excusa por revisar.
+      ctx?.waitUntil(sendPushTo(env, {
+        role: 'RECTORIA',
+        title: 'Nueva excusa por revisar',
+        body: `${student.first_name} ${student.last_name} (${student.grade}) radicó ${EXCUSE_REASON_LABELS[reason as keyof typeof EXCUSE_REASON_LABELS] || reason} del ${startDate} al ${endDate}.`,
+        tag: `excusa-${excuseId}`, url: '/'
+      }));
+
       return jsonOk({
         success: true,
         excuse: { id: excuseId, studentCode, studentName: `${student.first_name} ${student.last_name}`, grade: student.grade, startDate, endDate, reason, notes: notes || null, status, submittedBy, sourceAttendanceId: sourceAttendanceId || null },
@@ -531,6 +544,13 @@ export async function handleExcusesRoutes(request: Request, env: Env, url: URL, 
           ).bind(excuseId, excuse.student_code, excuse.start_date, excuse.end_date).run();
           recordsAffected = (res as any)?.meta?.changes ?? 0;
           await writeExcuseAudit(env, { eventType: 'EXCUSE_APPROVED', performedBy: reviewedBy, excuseId, studentCode: excuse.student_code, status: newStatus, extra: { physicalDocumentVerified: !!body.physicalDocumentVerified } });
+          // Web Push (Ronda 23): aviso al estudiante/acudiente de la decisión.
+          ctx?.waitUntil(sendPushTo(env, {
+            studentCode: excuse.student_code,
+            title: 'Excusa verificada ✓',
+            body: `Tu excusa del ${excuse.start_date} al ${excuse.end_date} fue VERIFICADA por Rectoría. La ausencia queda "Excusada (verificada)".`,
+            tag: `excusa-${excuseId}`, url: '/'
+          }));
         } else {
           // RECHAZADA: desvincular (vuelve a AUSENTE puro; % recalculado por el motor)
           const res = await env.DB.prepare(
@@ -538,6 +558,13 @@ export async function handleExcusesRoutes(request: Request, env: Env, url: URL, 
           ).bind(excuseId).run();
           recordsAffected = (res as any)?.meta?.changes ?? 0;
           await writeExcuseAudit(env, { eventType: 'EXCUSE_REJECTED', performedBy: reviewedBy, excuseId, studentCode: excuse.student_code, status: newStatus, extra: { rejectReason } });
+          // Web Push (Ronda 23): aviso al estudiante/acudiente con el motivo (R6).
+          ctx?.waitUntil(sendPushTo(env, {
+            studentCode: excuse.student_code,
+            title: 'Excusa rechazada',
+            body: `Tu excusa del ${excuse.start_date} al ${excuse.end_date} fue rechazada. Motivo: ${rejectReason}. Los registros vuelven a Ausente.`,
+            tag: `excusa-${excuseId}`, url: '/'
+          }));
         }
 
         const hash = await getChainHead(env);
