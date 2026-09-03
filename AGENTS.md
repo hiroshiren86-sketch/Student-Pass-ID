@@ -627,6 +627,39 @@ El proveedor **Email/Password NO está habilitado** en Firebase Console (`accoun
 
 ---
 
+### ✅ Ronda 20 (03/09/2026): QA Externo — Regresión Completa de la Ronda 19 en Producción (26/26 en verde)
+
+**Origen:** verificación independiente del tester externo contra el build desplegado `index-DjJzmWei.js` (2,442,302 B) en `https://student-pass-id.pages.dev/`. Protocolo: Playwright Chromium headless limpio (cero localStorage/cookies), 1440×950, `America/Bogota`, `page.clock` congelado a 2026-05-25 06:40 donde aplica, escáner USB simulado vía teclado (burst <200 ms + Enter), y **decodificación real del QR impreso** con `jsQR` sobre el PNG descargado de la app (no del mock). Cierra el ítem **(g)** del roadmap.
+
+**Mandato del propietario:** re-verificar cada error reportado en el informe de testing externo contra el nuevo build.
+
+**Resultado: TODOS los bugs del informe de fase 1 confirmados como ARREGLADOS (26/26 checks en verde; capturas y JSONs de resultados en el repo de QA del tester).**
+
+**Bugs críticos (ALTA) — verificados en vivo:**
+- ~~**BUG-1 — escaneo en recreo inyectaba "1ª Hora":** escaneo a las 09:20 (recreo) → toast **"No hay clase en curso. El próximo bloque es…"** · registros del día **52 antes → 52 después** (cero contaminación). (Corregido y Validado en producción — feedback `no_active_slot` de `E1`.)~~
+- ~~**BUG-2 — KPI 95% falso + doble conteo:** (a) fecha sin registros → **"Sin registros en esta fecha"** (nada de 95%); (b) 3 escaneos reales (Daniel ×2 + Nicolás) → planilla con **exactamente 2 filas**, "Presentes hoy: **2**", "4% de asistencia" (= 2/50 matrícula, correcto — presentes únicos por Set). (Corregido y Validado en producción — `E1`.)~~
+- ~~**BUG-3 — sin límite de escaneos/minuto:** 32 intentos en 1 minuto → **exactamente 30 registros** + toast **"Se alcanzó el máximo de 30 escaneos por minuto. Reintenta en 60s"**. (Corregido y Validado en producción — `checkScanRateLimit()` de `E1`.)~~
+
+**Hallazgos y seguridad (MEDIA) — verificados en vivo:**
+- ~~**Hallazgo 6 — columna Asignatura ausente:** encabezado real de la planilla = `Hora | Código QR/Barras | Documento (ID) | Estudiante | Curso | **Asignatura** | Tipo | Estado | Dispositivo | Notas`. (Corregido y Validado.)~~
+- ~~**Hallazgo 7 — validación nativa en inglés:** listener global `invalid` + `setCustomValidity` en `main.tsx` (independiente del locale del navegador) → mensaje capturado: **"Este campo es obligatorio."**. (Corregido y Validado — `E5`.)~~
+- ~~**Hallazgo 10 — modal "Delegar Escaneo Efímero" sordo a Escape:** Escape → overlay desaparece (verificado antes/después). (Corregido y Validado — `E1`.)~~
+- ~~**BUG-5 — secret HMAC visible en Ajustes:** input `type=password` (28 chars, prefijo `INAS-HMA`), aleatorio por colegio al 1er arranque, NO rota en `resetToDemo`, NO viaja en `safeSettingsCopy`. (Corregido y Validado — `E5`.)~~
+
+**Comportamiento base (sin regresión):** escaneo válido 10°1 lunes 06:40 → "Daniel Quintero Echeverri • 10°1 • Matemáticas (1ª Hora de Clase)" PUNTUAL · duplicado detectado sin registro nuevo · carné inexistente → 404 correcto.
+
+**Nuevos de Ronda 19 (E2–E4) verificados E2E en producción:**
+- **QR de Clase (E2) — flujo completo de punta a punta:** Horarios → QR de Clase → tarjeta A6 "Matemáticas · 10°1 · Lunes · 1ª Hora (06:30–07:25) · Aula 204 · CLASE:v1 · Firmado HMAC-SHA256 · Vence el 19-dic" → **PNG 512×512 descargado y decodificable con jsQR** → token `CLASE:v1:10°1:slot-1:1:1797742799000:d23bc237a6d3a399` (7 partes, firma 16 hex) → escanear en el scanner → **"Clase activa en este dispositivo: Matemáticas · 10°1 · 1ª Hora de Clase (06:30–07:25) · Aula 204"** → escaneo de estudiante de 10°1 queda `{contextSource:"QR_CLASE", classQrVerified:true}` → **estudiante de 6°1 con clase activa de 10°1 NO se contamina** (`contextSource:"HORA"`, materia propia) → **token con 1 hex alterado → "QR de Clase con firma inválida"** rechazado.
+- **Importación CSV de horarios (E3):** 5 filas (2 válidas + 3 inválidas) → preview "2 CÁTEDRA(S) VÁLIDA(S) DETECTADA(S) · DELIMITADOR ','" + "3 LÍNEA(S) CON ERRORES" con mensajes útiles por línea (día no reconocido / grado inexistente en matrícula / bloque inexistente) · docente emparejado por contención con ✓ · "Aplicar (2)" persiste la asignación + toast "Horario importado: 2 cátedra(s) aplicada(s). 3 línea(s) con errores quedaron fuera."
+- **Mis Cátedras (E4):** rol Docente → sección "Mis Cátedras" visible con las asignaciones del docente.
+- **Transparencia (E2):** CSV export con columna **"Contexto de Vinculación"** (encabezado verificado).
+
+**Nota de transparencia del QA:** los 2 únicos falsos negativos de la primera corrida fueron de los scripts del tester (no de la app): (1) `keyboard.type` corrompía el `°` de "10°1" al tipear el token QR — con `fill()` la activación funciona; (2) regex case-sensitive contra texto renderizado en mayúsculas por CSS. Corregidos en la suite; cero defectos de la app en la regresión.
+
+**Pendientes del informe (sin cambios — decisión/roadmap del propietario):** ítems 5 (AUTH_TOKEN), 6 (HMAC server-side), 7 (Ley 1581), 8 (code splitting), 9 (aria-labels masivos), 14 (PWA) — ver "Siguiente frente sugerido" del roadmap.
+
+---
+
 ## 🚀 4. Hoja de Roadmap y Pasos a Seguir
 
 ### ⏳ Fase Actual (Inmediata): Validación de campo del Worker desplegado
@@ -636,7 +669,7 @@ El proveedor **Email/Password NO está habilitado** en Firebase Console (`accoun
 4. Validar sincronización bidireccional entre 2 dispositivos simultáneos (PC + Móvil docente).
 5. ~~Decidir si se configura `AUTH_TOKEN`~~ **DECIDIDO (Ronda 18): el propietario lo activará en 1–2 días** — `wrangler secret put AUTH_TOKEN` + mismo valor en Ajustes de cada terminal. Mientras tanto: acceso abierto (riesgo temporal aceptado). Las reglas Firestore endurecidas de Ronda 18 quedaron en el repo **pendientes de deploy** (ver orden de despliegue en Ronda 18 → H2).
 6. ~~Implementar F1→F3→F2→F4→F5~~ **HECHO (Ronda 4)** y verificado en producción (Ronda 7); hallazgos de QA arreglados (Ronda 8).
-7. **Siguiente frente sugerido (decisión del propietario):** (a) prueba de sincronización bidireccional con 2 dispositivos físicos (PC + móvil docente) — único ítem de esta fase que no es automatizable desde el QA; (b) activar `AUTH_TOKEN` del worker (1–2 días, decisión tomada); (c) desplegar reglas Ronda 18 (`deploy_firebase`); (d) activar App Check reCAPTCHA v3 (pasos en Ronda 18) cuando el despliegue esté estable; (e) módulo de Excusas Médicas / Buzón (Fase Futura, tabla `student_excuses` ya prevista en D1 — **el propietario tiene otro encargado gestionando este módulo**); (f) usar la **guía de vaciado de bases de Ronda 18** para la entrega limpia del proyecto; (g) probar en producción el **QR de Clase**, la **Importación CSV** y **Mis Cátedras** implementados en Ronda 19 (guía en 3.Bitácora → Ronda 19); (h) del informe de testing quedan pendientes: verificación HMAC server-side (informe #6), consentimiento Ley 1581 (#7), code splitting (#8), aria-labels masivos (#9), PWA (#14) — priorizarlos tras la validación de campo de Ronda 19.
+7. **Siguiente frente sugerido (decisión del propietario):** (a) prueba de sincronización bidireccional con 2 dispositivos físicos (PC + móvil docente) — único ítem de esta fase que no es automatizable desde el QA; (b) activar `AUTH_TOKEN` del worker (1–2 días, decisión tomada); (c) desplegar reglas Ronda 18 (`deploy_firebase`); (d) activar App Check reCAPTCHA v3 (pasos en Ronda 18) cuando el despliegue esté estable; (e) módulo de Excusas Médicas / Buzón (Fase Futura, tabla `student_excuses` ya prevista en D1 — **el propietario tiene otro encargado gestionando este módulo** — spec de referencia 2026 entregada por QA Externo, ver Fase Futura); (f) usar la **guía de vaciado de bases de Ronda 18** para la entrega limpia del proyecto; (g) ~~probar en producción el **QR de Clase**, la **Importación CSV** y **Mis Cátedras** implementados en Ronda 19 (guía en 3.Bitácora → Ronda 19)~~ **HECHO (Ronda 20, 03/09/2026 — QA Externo): verificación E2E completa en el build `index-DjJzmWei.js` — 26/26 checks en verde, QR de Clase de punta a punta (tarjeta→PNG→jsQR→activación→vinculación→anti-tampering), importación CSV con errores por línea, Mis Cátedras y columna "Contexto de Vinculación" en el export; todos los bugs del informe de fase 1 confirmados arreglados — ver 3.Bitácora → Ronda 20**; (h) del informe de testing quedan pendientes: verificación HMAC server-side (informe #6), consentimiento Ley 1581 (#7), code splitting (#8), aria-labels masivos (#9), PWA (#14) — priorizarlos tras la validación de campo de Ronda 19.
 
 ### ⏳ Fase Futura Planificada: Módulo de Excusas Médicas / Permisos Anticipados y Buzón Escolar
 - **Propósito:** Permitir a los estudiantes/acudientes reportar inasistencias programadas (citas médicas, incapacidades, calamidades) fuera del horario lectivo (después de la 1:00 p.m. o fines de semana) para proteger su registro de asistencia.
@@ -648,6 +681,36 @@ El proveedor **Email/Password NO está habilitado** en Firebase Console (`accoun
   - Panel administrativo para revisar, validar y auditar las justificaciones radicadas por los estudiantes con soporte físico o digital.
 - **Preparación en Base de Datos:**
   - La tabla `student_excuses` ya ha sido incorporada preventivamente en `schema.sql` de Cloudflare D1.
+
+### 📐 Spec de Referencia 2026 (QA Externo, 03/09/2026) — integración sin rework del módulo del encargado
+
+El tester externo entregó una **spec de referencia** para que el diseño existente (Escudo de Justificación + tabla `student_excuses` + buzón, gestionado por el otro encargado) y el baseline del propietario (justificación **post-hoc** de 1 toque, firma física de la rectora, aprobar/rechazo en notificaciones de Rectoría, "protegido" = no cuenta falta) **converjan en un solo contrato**. No reemplaza el módulo: es 100% aditiva. Spec íntegra anexada al repo en `docs/spec-excusas-2026.md`.
+
+**Decisiones centrales:**
+1. **Dos temporalidades, UNA entidad:** el rango `start_date/end_date` existente cubre el Escudo (fechas **futuras**, portal del estudiante) **y** la justificación post-hoc (fecha pasada, con nueva columna `source_attendance_id` → el AUSENTE justificado). Un solo ciclo de vida, un solo buzón, un solo conteo (evita reglas divergentes entre "escudo" y "justificación").
+2. **Overlay en vez de nuevo estado:** el registro conserva `status='AUSENTE'` y gana `excuse_id` (FK). "Falta injustificada" = `status='AUSENTE' AND excuse_id IS NULL`. Cero migración de histórico; reversión = NULL (rechazo); incapacidad multi-día = 1 excusa → N registros. El badge visual `EXCUSA` del diseño del encargado se respeta en UI.
+3. **Protección provisional + decisión real:** cualquier excusa NO rechazada protege en el auto-cierre (el Escudo sin latencia burocrática); Rectoría aprueba (definitiva) o rechaza (exige motivo → el registro vuelve AUSENTE puro, % recalculado, notificación al estudiante). Default `status` pasa de `APROBADA` a `PENDIENTE` (la tabla está vacía: cero riesgo; con default aprobada la revisión sería formalidad).
+4. **Baseline del propietario intacto:** 1 toque sin formulario sobre el AUSENTE (botón "Justificar" en planilla rectoría), la rectora sigue firmando el documento físico (checkbox "soportes físico verificado"), aprobar/rechazo en el panel de notificaciones de Rectoría (sección "Justificaciones" con badge de pendientes), protegido = no cuenta falta.
+5. **Vanguardia 2026:** (a) la aprobación de la rectora con sesión autenticada + **cadena HMAC-SHA256 tamper-evidente** (misma primitiva del QR de Clase, `qrSecret`) cumple los requisitos de firma digital de la **Ley 527/1999** arts. 21–22 (única, verificable, control exclusivo, ligada a la información) — equivalencia funcional con la firma física (ref. eIDAS art. 25); expediente verificable en segundos, cero infra nueva. (b) **Ley 1581 art. 3(o)**: la razón médica es **dato especial (salud)** → foto cifrada AES-GCM (solo Rectoría y el estudiante la ven; la planilla NUNCA), minimización, retención término+1 año, consentimiento específico del representante legal (art. 7, menores). (c) WCAG 2.2 (2.4.11 foco no oscurecido, 3.3.7 foto opcional, aria-live) y Web Push (roadmap PWA #14).
+6. **Anti-abuso (R1–R10):** 1 excusa por AUSENTE (index único), estudiante NO edita/retira tras radicar, máx. 3 excusas activas / 10 días justificados por término, `OTRA` exige nota, rechazo exige motivo, ventana 72 h con auto-aprobo auditable (configurable por colegio), validación siempre en el worker.
+
+**Migración aditiva (sobre `schema.sql` actual — ninguna tabla nueva obligatoria):**
+```sql
+ALTER TABLE student_excuses ADD COLUMN source_attendance_id TEXT REFERENCES attendance_records(id) ON DELETE SET NULL;
+ALTER TABLE student_excuses ADD COLUMN attachment_path TEXT;
+ALTER TABLE student_excuses ADD COLUMN reviewed_by TEXT;
+ALTER TABLE student_excuses ADD COLUMN reviewed_at TEXT;
+ALTER TABLE student_excuses ADD COLUMN reject_reason TEXT;
+ALTER TABLE student_excuses ADD COLUMN auto_approved INTEGER DEFAULT 0;
+ALTER TABLE student_excuses ADD COLUMN audit_hash TEXT;
+CREATE INDEX idx_excuses_attendance ON student_excuses(source_attendance_id);
+CREATE UNIQUE INDEX uq_excuses_attendance ON student_excuses(source_attendance_id) WHERE source_attendance_id IS NOT NULL;
+ALTER TABLE attendance_records ADD COLUMN excuse_id TEXT REFERENCES student_excuses(id) ON DELETE SET NULL;
+CREATE INDEX idx_attendance_excuse ON attendance_records(excuse_id);
+-- auditoría: reutiliza audit_logs existente con event_type EXCUSE_CREATED/APPROVED/REJECTED/REMOVED/AUTO_APPROVED
+```
+
+**Fuentes oficiales:** [Ley 1581/2012](https://www.suin-juriscol.gov.co/viewDocument.asp?ruta=Leyes/1684507) (art. 3(o) dato especial salud; art. 7 menores) · [Ley 527/1999](https://www.suin-juriscol.gov.co/viewDocument.asp?ruta=Leyes/1662013) (arts. 21–22 firma digital) · [eIDAS 910/2014 art. 25](https://eur-lex.europa.eu/legal-content/EN/TXT/?uri=CELEX:32014R0910) · [WCAG 2.2](https://www.w3.org/TR/WCAG22/) · [OWASP HTML5/Secure Coding](https://cheatsheetseries.owasp.org/cheatsheets/HTML5_Security_Cheat_Sheet.html).
 
 ---
 
