@@ -146,6 +146,10 @@ export interface Student {
   isRepresentative?: boolean; // Subrol: Representante Titular
   isSubstituteRepresentative?: boolean; // Subrol: Representante Suplente
   representativeGrade?: string; // Grado que representa (ej: "6°1")
+  // Ronda 22 (P4, Ley 1581 arts. 7 y 9): consentimiento específico del representante legal
+  // para el tratamiento del soporte fotográfico de justificaciones (dato especial de salud).
+  excuseDataConsent?: boolean;  // false/undefined = sin autorización (soporte solo físico)
+  excuseDataConsentAt?: string; // fecha ISO del consentimiento (evidencia)
 }
 
 export interface AttendanceRecord {

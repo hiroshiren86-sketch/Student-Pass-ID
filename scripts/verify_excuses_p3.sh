@@ -103,6 +103,31 @@ say "6. La cadena de auditoría no se ve afectada por adjuntos"
 R=$(B GET /api/excuses/verify-chain)
 assert "verify-chain intact tras uploads (los adjuntos no son eventos de decisión)" "$R" "d['intact']==True and d['signed']==True"
 
+say "7. P4 — Purga de retención (minimización, término+1 año)"
+OLD=$(date -u -d '-13 months' +%F)
+RECENT=$(date -u -d '-5 days' +%F)
+RECENT2=$(date -u -d '-4 days' +%F)
+# Excusa VIEJA (fuera de retención) + reciente (vigente) vinculada a un registro
+cat > /tmp/seed_p4.sql <<EOF
+INSERT INTO student_excuses (id, student_code, student_name, grade, start_date, end_date, reason, status, submitted_by, created_at) VALUES
+ ('exc-vieja', 'EST-P3', 'Sofía Prueba3', '9°1', '${OLD}', '${OLD}', 'CITA_MEDICA', 'APROBADA', 'RECTORIA', '${OLD}T10:00:00Z'),
+ ('exc-reciente', 'EST-P3', 'Sofía Prueba3', '9°1', '${RECENT}', '${RECENT2}', 'INCAPACIDAD', 'PENDIENTE', 'RECTORIA', '${RECENT}T10:00:00Z');
+INSERT INTO attendance_records (id, student_code, student_name, document_id, grade, date, time, status, method, excuse_id) VALUES
+ ('rec-vieja', 'EST-P3', 'Sofía Prueba3', '888001', '9°1', '${OLD}', '08:00', 'AUSENTE', 'AUTO_CIERRE', 'exc-vieja'),
+ ('rec-rec', 'EST-P3', 'Sofía Prueba3', '888001', '9°1', '${RECENT}', '08:00', 'AUSENTE', 'AUTO_CIERRE', 'exc-reciente');
+EOF
+npx wrangler d1 execute inas_attendance_db --local --file=/tmp/seed_p4.sql -y >/dev/null 2>&1
+R=$(B GET /api/excuses)
+assert "GET dispara el sweep de retención y purga la excusa >12 meses" "$R" "d['success']==True and d.get('purgedThisSweep',0)>=1"
+N=$(npx wrangler d1 execute inas_attendance_db --local --command "SELECT COUNT(*) AS n FROM student_excuses WHERE id='exc-vieja'" -y --json 2>/dev/null | python3 -c "import json,sys; print(json.load(sys.stdin)[0]['results'][0]['n'])")
+assert "excusa vieja eliminada de D1 (con su attachment)" "$N" "int('$N')==0"
+N=$(npx wrangler d1 execute inas_attendance_db --local --command "SELECT COUNT(*) AS n FROM student_excuses WHERE id='exc-reciente'" -y --json 2>/dev/null | python3 -c "import json,sys; print(json.load(sys.stdin)[0]['results'][0]['n'])")
+assert "excusa reciente (dentro de retención) SE CONSERVA" "$N" "int('$N')==1"
+N=$(npx wrangler d1 execute inas_attendance_db --local --command "SELECT COUNT(*) AS n FROM attendance_records WHERE id='rec-vieja' AND excuse_id IS NULL" -y --json 2>/dev/null | python3 -c "import json,sys; print(json.load(sys.stdin)[0]['results'][0]['n'])")
+assert "registro de la excusa purgada desvinculado (sin excuse_id huérfano)" "$N" "int('$N')==1"
+N=$(npx wrangler d1 execute inas_attendance_db --local --command "SELECT COUNT(*) AS n FROM attendance_records WHERE id='rec-rec' AND excuse_id='exc-reciente'" -y --json 2>/dev/null | python3 -c "import json,sys; print(json.load(sys.stdin)[0]['results'][0]['n'])")
+assert "overlay de la excusa vigente intacto" "$N" "int('$N')==1"
+
 say "Resumen P3"
 echo "-------------------------------------"
 echo "  PASS: $PASS   FAIL: $FAIL"

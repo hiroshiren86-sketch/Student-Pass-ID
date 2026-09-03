@@ -91,7 +91,8 @@ export const StudentsManagerView: React.FC<StudentsManagerViewProps> = ({ onGene
     grade: '6°3',
     documentType: 'TI' as DocumentType,
     documentId: '',
-    photoUrl: ''
+    photoUrl: '',
+    excuseDataConsent: false // Ronda 22 (P4): cláusula Ley 1581 art. 7 — consentimiento del representante legal
   });
   const [formError, setFormError] = useState<string | null>(null);
 
@@ -122,7 +123,8 @@ export const StudentsManagerView: React.FC<StudentsManagerViewProps> = ({ onGene
       grade: uniqueGrades[0] || '6°3',
       documentType: 'TI',
       documentId: '',
-      photoUrl: ''
+      photoUrl: '',
+      excuseDataConsent: false
     });
     setFormError(null);
     setShowDrawer(true);
@@ -136,7 +138,8 @@ export const StudentsManagerView: React.FC<StudentsManagerViewProps> = ({ onGene
       grade: student.grade,
       documentType: student.documentType || 'TI',
       documentId: student.documentId,
-      photoUrl: student.photoUrl || ''
+      photoUrl: student.photoUrl || '',
+      excuseDataConsent: !!student.excuseDataConsent
     });
     setFormError(null);
     setShowDrawer(true);
@@ -183,7 +186,12 @@ export const StudentsManagerView: React.FC<StudentsManagerViewProps> = ({ onGene
         documentId: cleanDocumentId,
         documentType: formData.documentType,
         grade,
-        photoUrl: formData.photoUrl || undefined
+        photoUrl: formData.photoUrl || undefined,
+        // Ronda 22 (P4): el consentimiento art. 7 también se actualiza en la ficha
+        excuseDataConsent: formData.excuseDataConsent,
+        excuseDataConsentAt: formData.excuseDataConsent
+          ? (editingStudent.excuseDataConsentAt || new Date().toISOString())
+          : undefined
       });
       refreshList();
       setShowDrawer(false);
@@ -201,7 +209,10 @@ export const StudentsManagerView: React.FC<StudentsManagerViewProps> = ({ onGene
         photoUrl: formData.photoUrl || undefined,
         active: true,
         createdAt: new Date().toISOString(),
-        tempPassword: `SJ-${cleanDocumentId.slice(-4) || '2026'}`
+        tempPassword: `SJ-${cleanDocumentId.slice(-4) || '2026'}`,
+        // Ronda 22 (P4): consentimiento específico del representante legal (Ley 1581 arts. 7 y 9)
+        excuseDataConsent: formData.excuseDataConsent,
+        excuseDataConsentAt: formData.excuseDataConsent ? new Date().toISOString() : undefined
       };
 
       const res = AttendanceStorageService.addStudent(newStudent);
@@ -656,6 +667,24 @@ export const StudentsManagerView: React.FC<StudentsManagerViewProps> = ({ onGene
                       />
                     </label>
                   </div>
+                </div>
+
+                {/* Ronda 22 (P4): cláusula de consentimiento art. 7 Ley 1581 — dato especial de salud */}
+                <div className="space-y-1.5 p-3 rounded-2xl bg-amber-50/60 dark:bg-amber-950/20 border border-amber-200/70 dark:border-amber-900/40">
+                  <label className="flex items-start gap-2.5 cursor-pointer select-none">
+                    <input
+                      type="checkbox"
+                      checked={formData.excuseDataConsent}
+                      onChange={(e) => setFormData({ ...formData, excuseDataConsent: e.target.checked })}
+                      className="mt-0.5 w-4 h-4 rounded accent-amber-600"
+                    />
+                    <span className="text-[10.5px] text-slate-600 dark:text-slate-300 leading-snug">
+                      <span className="font-black">Consentimiento del representante legal (opcional): </span>
+                      autoriza el tratamiento del <span className="font-bold">soporte fotográfico de incapacidades/citas médicas</span> radicadas en el Buzón de Justificaciones (dato especial de salud — Ley 1581 de 2012, arts. 7 y 9).
+                      La foto viaja cifrada (AES-GCM), solo la ven Rectoría y el estudiante, y se purga al final del término +1 año.
+                      Sin esta autorización, el soporte puede presentarse exclusivamente de forma física.
+                    </span>
+                  </label>
                 </div>
 
                 <div className="p-3.5 rounded-2xl bg-indigo-50/50 dark:bg-indigo-950/30 border border-indigo-100 dark:border-indigo-900/50 text-[11px] text-slate-600 dark:text-slate-300 space-y-1">

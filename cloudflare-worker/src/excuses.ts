@@ -155,6 +155,33 @@ async function sweepAutoApprovals(env: Env): Promise<number> {
 
 // ============================== RUTAS ========================================
 
+// ====================== Ronda 22 — FASE P4: RETENCIÓN =========================
+// Purga de minimización (Ley 1581 art. 9, principio de temporalidad): las excusas y
+// sus soportes cifrados se eliminan EXCUSE_RETENTION_MONTHS (default 12, "término+1
+// año") después de su end_date. El audit_log NO se purga (es la evidencia del
+// tratamiento, no un dato especial). Lazy sweep como el R8. 0 = desactivado.
+async function sweepRetention(env: Env): Promise<number> {
+  if (!env.DB) return 0;
+  const monthsRaw = (env.EXCUSE_RETENTION_MONTHS || '12').trim();
+  const months = Number(monthsRaw);
+  if (!Number.isFinite(months) || months <= 0) return 0; // colegio desactivó la purga
+  try {
+    // 1) Desvincular registros de asistencia (evita excuse_id huérfanos)
+    const unlink = await env.DB.prepare(
+      `UPDATE attendance_records SET excuse_id = NULL WHERE excuse_id IN
+        (SELECT id FROM student_excuses WHERE end_date < date('now', '-${Math.floor(months)} months'))`
+    ).run();
+    // 2) Purgar las excusas expiradas (incluye attachment_path cifrado)
+    const del = await env.DB.prepare(
+      `DELETE FROM student_excuses WHERE end_date < date('now', '-${Math.floor(months)} months')`
+    ).run();
+    return (del as any)?.meta?.changes ?? 0;
+  } catch {
+    return 0; // la purga jamás rompe la operación principal
+  }
+}
+
+
 // ====================== Ronda 22 — FASE P3: EVIDENCIA =========================
 // Soporte fotográfico del documento físico (Ley 1581 art. 3(o): dato especial de salud).
 // Cifrado AES-GCM-256 SERVER-SIDE (WebCrypto): la foto nunca se persiste en claro en D1.
@@ -382,6 +409,7 @@ export async function handleExcusesRoutes(request: Request, env: Env, url: URL, 
     // ---------- GET /api/excuses (listar con filtros) ----------
     if (path === '/api/excuses' && request.method === 'GET') {
       const autoApproved = await sweepAutoApprovals(env); // R8 lazy
+      const purged = await sweepRetention(env); // P4 lazy (retención término+1 año)
       const studentCode = url.searchParams.get('studentCode');
       const status = url.searchParams.get('status');
       const grade = url.searchParams.get('grade');
@@ -397,7 +425,7 @@ export async function handleExcusesRoutes(request: Request, env: Env, url: URL, 
       const rows = await env.DB.prepare(
         `SELECT * FROM student_excuses ${where} ORDER BY created_at DESC LIMIT 200`
       ).bind(...binds).all();
-      return jsonOk({ success: true, excuses: rows.results || [], autoApprovedThisSweep: autoApproved });
+      return jsonOk({ success: true, excuses: rows.results || [], autoApprovedThisSweep: autoApproved, purgedThisSweep: purged });
     }
 
     // ---------- GET/PATCH /api/excuses/:id y attachment ----------

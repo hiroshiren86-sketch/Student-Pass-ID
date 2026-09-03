@@ -54,6 +54,9 @@ export interface Env {
   // (fallback: EXCUSE_CHAIN_SECRET → AUTH_TOKEN). Sin secret → uploads rechazados 503 (jamás se
   // guarda un soporte sin cifrar).
   EXCUSE_ATTACHMENT_SECRET?: string;
+  // Ronda 22 (Fase P4 — retención Ley 1581): meses de conservación de las excusas (y sus
+  // soportes) tras su fecha final. Default 12 ("término +1 año"). 0 = sin purga automática.
+  EXCUSE_RETENTION_MONTHS?: string;
 }
 
 // Encabezados de CORS para permitir conexiones seguras desde cualquier frontend o app móvil
