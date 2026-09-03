@@ -184,23 +184,42 @@ export async function handleExcusesRoutes(request: Request, env: Env, url: URL, 
         prev = d.hash;
         checked++;
       }
-      // Segunda pasada (§10.10): el estado ACTUAL de cada excusa debe coincidir con su
-      // último evento de decisión (status, revisor y audit_hash). Alterar la fila en D1
-      // fuera del API rompe la verificación aunque el log quede intacto.
+      // Segunda pasada (§10.10, endurecida Ronda 22): el estado ACTUAL de cada excusa debe
+      // coincidir con sus eventos — alterar la fila en D1 fuera del API la caza aunque el
+      // log quede intacto. Se compara: (a) status + audit_hash vs el ÚLTIMO evento de
+      // decisión; (b) reviewed_by vs performed_by del último evento (APROBADA/RECHAZADA);
+      // (c) reason/startDate/endDate/notes vs el evento EXCUSE_CREATED (la API jamás los
+      // edita post-creación). Compatibilidad: los campos ausentes en eventos anteriores a
+      // Ronda 22 se omiten (jamás se rompe la cadena por datos que no estaban firmados).
       let stateBroken: string | null = null;
       if (firstBroken === null) {
         const excuses = await env.DB.prepare(
-          `SELECT e.id, e.status, e.reviewed_by, e.audit_hash,
+          `SELECT e.id, e.status, e.reviewed_by, e.audit_hash, e.reason, e.start_date, e.end_date, e.notes, e.reject_reason,
              (SELECT a.details_json FROM audit_logs a WHERE a.event_type LIKE 'EXCUSE_%'
               AND a.details_json LIKE ('%"excuseId":"' || e.id || '"%')
-              ORDER BY a.created_at DESC, a.id DESC LIMIT 1) AS last_event
+              ORDER BY a.created_at DESC, a.id DESC LIMIT 1) AS last_event,
+             (SELECT a.performed_by FROM audit_logs a WHERE a.event_type LIKE 'EXCUSE_%'
+              AND a.details_json LIKE ('%"excuseId":"' || e.id || '"%')
+              ORDER BY a.created_at DESC, a.id DESC LIMIT 1) AS last_performed_by,
+             (SELECT a.details_json FROM audit_logs a WHERE a.event_type = 'EXCUSE_CREATED'
+              AND a.details_json LIKE ('%"excuseId":"' || e.id || '"%')
+              ORDER BY a.created_at ASC, a.id ASC LIMIT 1) AS created_event
            FROM student_excuses e`
-        ).all<{ id: string; status: string; reviewed_by: string | null; audit_hash: string | null; last_event: string | null }>();
+        ).all<any>();
         for (const ex of (excuses.results || [])) {
           if (!ex.last_event) { stateBroken = ex.id; break; }
           try {
             const d = JSON.parse(ex.last_event);
             if (d.status !== ex.status || (d.hash || null) !== (ex.audit_hash || null)) { stateBroken = ex.id; break; }
+            if ((ex.status === 'APROBADA' || ex.status === 'RECHAZADA') && ex.last_performed_by && ex.reviewed_by !== ex.last_performed_by) { stateBroken = ex.id; break; }
+            if (ex.status === 'RECHAZADA' && 'rejectReason' in d && (d.rejectReason || null) !== (ex.reject_reason || null)) { stateBroken = ex.id; break; }
+            if (ex.created_event) {
+              const cd = JSON.parse(ex.created_event);
+              if (('reason' in cd) && cd.reason !== ex.reason) { stateBroken = ex.id; break; }
+              if (('startDate' in cd) && cd.startDate !== ex.start_date) { stateBroken = ex.id; break; }
+              if (('endDate' in cd) && cd.endDate !== ex.end_date) { stateBroken = ex.id; break; }
+              if (('notes' in cd) && (cd.notes || null) !== (ex.notes || null)) { stateBroken = ex.id; break; }
+            }
           } catch { stateBroken = ex.id; break; }
         }
       }
@@ -314,7 +333,7 @@ export async function handleExcusesRoutes(request: Request, env: Env, url: URL, 
 
       const hash = await writeExcuseAudit(env, {
         eventType: 'EXCUSE_CREATED', performedBy: submittedBy, excuseId,
-        studentCode, status, extra: { reason, startDate, endDate, postHoc: !!sourceAttendanceId, recordsLinked: recordsToLink.length }
+        studentCode, status, extra: { reason, startDate, endDate, notes: notes || null, postHoc: !!sourceAttendanceId, recordsLinked: recordsToLink.length }
       });
       await env.DB.prepare(`UPDATE student_excuses SET audit_hash = ? WHERE id = ?`).bind(hash, excuseId).run();
 
