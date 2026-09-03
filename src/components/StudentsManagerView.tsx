@@ -18,7 +18,8 @@ import {
   Sparkles,
   CheckCircle,
   ShieldCheck,
-  Crown
+  Crown,
+  Settings as GearIcon
 } from 'lucide-react';
 import { Student, SchoolSettings, DocumentType, UserRole } from '../types/attendance';
 import { AttendanceStorageService } from '../services/attendanceStorage';
@@ -38,6 +39,17 @@ interface StudentsManagerViewProps {
 export const StudentsManagerView: React.FC<StudentsManagerViewProps> = ({ onGenerateCard, currentRole = 'ADMIN' }) => {
   const [students, setStudents] = useState<Student[]>(AttendanceStorageService.getStudents());
   const [settings, setSettings] = useState<SchoolSettings>(AttendanceStorageService.getSettings());
+
+  // Ronda 21 — UI-2 (petición del propietario): la fila de botones dispersos (lapicito,
+  // basurita, ojo, PDF) se convierte en UNA tuerca de ajustes que despliega mini-tarjetas
+  // alargadas, una por acción. Una sola abierta a la vez; clic-fuera/Escape la cierran.
+  const [actionsMenuFor, setActionsMenuFor] = useState<string | null>(null);
+  useEffect(() => {
+    if (!actionsMenuFor) return;
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setActionsMenuFor(null); };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [actionsMenuFor]);
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedGrade, setSelectedGrade] = useState('all');
   const [showDrawer, setShowDrawer] = useState(false);
@@ -387,39 +399,82 @@ export const StudentsManagerView: React.FC<StudentsManagerViewProps> = ({ onGene
                       </button>
                     )}
                   </td>
-                  <td className="py-3 px-3 text-right space-x-1">
+                  <td className="py-3 px-3 text-right relative">
+                    {/* Ronda 21 UI-2: tuerca de ajustes → mini-tarjetas alargadas.
+                        El clic-fuera se captura con un overlay transparente (z-20) para
+                        no necesitar un ref por fila. */}
                     <button
-                      onClick={() => setInspectStudent(std)}
-                      className="p-2 hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-600 dark:text-slate-300 rounded-xl transition-all inline-flex items-center gap-1 font-bold text-[11px]"
-                      title="Previsualizar Carné Digital"
+                      onClick={() => setActionsMenuFor(actionsMenuFor === std.code ? null : std.code)}
+                      aria-expanded={actionsMenuFor === std.code}
+                      aria-haspopup="menu"
+                      aria-label={`Acciones de ${std.firstName} ${std.lastName}`}
+                      title="Acciones"
+                      className={`p-2 rounded-xl transition-all inline-flex items-center justify-center ${
+                        actionsMenuFor === std.code
+                          ? 'bg-indigo-600 text-white shadow-md shadow-indigo-600/25'
+                          : 'text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-800 hover:text-indigo-600 dark:hover:text-indigo-400'
+                      }`}
                     >
-                      <Eye className="w-3.5 h-3.5 text-indigo-600 dark:text-indigo-400" />
-                      <span className="hidden md:inline">Ver Carné</span>
+                      <GearIcon className="w-4 h-4" />
                     </button>
-                    <button
-                      onClick={() => handleDownloadPdf(std)}
-                      className="p-2 hover:bg-indigo-600 hover:text-white text-indigo-600 dark:text-indigo-400 rounded-xl transition-all inline-flex items-center gap-1 font-bold text-[11px]"
-                      title="Descargar Carné PDF"
-                    >
-                      <Download className="w-3.5 h-3.5" />
-                      <span className="hidden sm:inline">PDF</span>
-                    </button>
-                    {currentRole === 'ADMIN' && (
+
+                    {actionsMenuFor === std.code && (
                       <>
-                        <button
-                          onClick={() => handleOpenEdit(std)}
-                          className="p-2 hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-500 rounded-xl transition-all inline-block"
-                          title="Editar"
+                        <div className="fixed inset-0 z-20" onClick={() => setActionsMenuFor(null)} aria-hidden="true" />
+                        <div
+                          role="menu"
+                          aria-label={`Acciones para ${std.firstName} ${std.lastName}`}
+                          className="absolute right-2 top-full mt-1 z-30 w-52 p-1.5 rounded-2xl bg-white dark:bg-zinc-950 border border-slate-200 dark:border-zinc-800/60 shadow-2xl shadow-slate-900/10 space-y-1 text-left animate-fadeIn"
                         >
-                          <Edit2 className="w-3.5 h-3.5" />
-                        </button>
-                        <button
-                          onClick={() => handleDelete(std.code, `${std.firstName} ${std.lastName}`)}
-                          className="p-2 hover:bg-rose-50 dark:hover:bg-rose-950/40 text-slate-400 hover:text-rose-600 rounded-xl transition-all inline-block"
-                          title="Eliminar"
-                        >
-                          <Trash2 className="w-3.5 h-3.5" />
-                        </button>
+                          <button
+                            role="menuitem"
+                            onClick={() => { setActionsMenuFor(null); setInspectStudent(std); }}
+                            className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl bg-slate-50 dark:bg-black/40 border border-slate-100 dark:border-zinc-800/60 hover:border-indigo-300 dark:hover:border-indigo-800 hover:shadow-sm transition-all"
+                          >
+                            <Eye className="w-3.5 h-3.5 text-indigo-600 dark:text-indigo-400 shrink-0" />
+                            <span className="min-w-0">
+                              <span className="block text-[11px] font-black text-slate-800 dark:text-slate-100">Ver carné</span>
+                              <span className="block text-[9px] text-slate-400">Previsualizar digital</span>
+                            </span>
+                          </button>
+                          <button
+                            role="menuitem"
+                            onClick={() => { setActionsMenuFor(null); handleDownloadPdf(std); }}
+                            className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl bg-slate-50 dark:bg-black/40 border border-slate-100 dark:border-zinc-800/60 hover:border-indigo-300 dark:hover:border-indigo-800 hover:shadow-sm transition-all"
+                          >
+                            <Download className="w-3.5 h-3.5 text-indigo-600 dark:text-indigo-400 shrink-0" />
+                            <span className="min-w-0">
+                              <span className="block text-[11px] font-black text-slate-800 dark:text-slate-100">Descargar PDF</span>
+                              <span className="block text-[9px] text-slate-400">Carné imprimible CR80</span>
+                            </span>
+                          </button>
+                          {currentRole === 'ADMIN' && (
+                            <>
+                              <button
+                                role="menuitem"
+                                onClick={() => { setActionsMenuFor(null); handleOpenEdit(std); }}
+                                className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl bg-slate-50 dark:bg-black/40 border border-slate-100 dark:border-zinc-800/60 hover:border-indigo-300 dark:hover:border-indigo-800 hover:shadow-sm transition-all"
+                              >
+                                <Edit2 className="w-3.5 h-3.5 text-slate-600 dark:text-slate-300 shrink-0" />
+                                <span className="min-w-0">
+                                  <span className="block text-[11px] font-black text-slate-800 dark:text-slate-100">Editar ficha</span>
+                                  <span className="block text-[9px] text-slate-400">Datos, foto y rol en aula</span>
+                                </span>
+                              </button>
+                              <button
+                                role="menuitem"
+                                onClick={() => { setActionsMenuFor(null); handleDelete(std.code, `${std.firstName} ${std.lastName}`); }}
+                                className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl bg-rose-50/80 dark:bg-rose-950/30 border border-rose-100 dark:border-rose-900/60 hover:border-rose-300 dark:hover:border-rose-800 hover:shadow-sm transition-all"
+                              >
+                                <Trash2 className="w-3.5 h-3.5 text-rose-600 dark:text-rose-400 shrink-0" />
+                                <span className="min-w-0">
+                                  <span className="block text-[11px] font-black text-rose-700 dark:text-rose-300">Eliminar</span>
+                                  <span className="block text-[9px] text-rose-400/80">Quitar de la matrícula</span>
+                                </span>
+                              </button>
+                            </>
+                          )}
+                        </div>
                       </>
                     )}
                   </td>
