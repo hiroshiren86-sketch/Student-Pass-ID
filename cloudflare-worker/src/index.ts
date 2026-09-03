@@ -67,9 +67,12 @@ export interface Env {
 }
 
 // Encabezados de CORS para permitir conexiones seguras desde cualquier frontend o app móvil
+// Ronda 24 (fix crítico): PATCH faltaba → el preflight rechazaba TODA decisión de
+// excusas (aprobar/rechazar) desde el navegador con "Failed to fetch" — el rector no
+// podía decidir ninguna excusa radicada desde otro dispositivo.
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
+  'Access-Control-Allow-Methods': 'GET, POST, PUT, PATCH, DELETE, OPTIONS',
   'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-School-Code, X-Requested-With',
   'Access-Control-Max-Age': '86400',
 };
