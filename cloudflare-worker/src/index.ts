@@ -6,6 +6,8 @@
  * ==============================================================================
  */
 
+import { handleExcusesRoutes } from './excuses';
+
 // Tipos autocontenidos para Cloudflare Worker Runtime
 export interface D1PreparedStatement {
   bind(...values: any[]): D1PreparedStatement;
@@ -42,6 +44,12 @@ export interface Env {
 
   // Secretos institucionales configurados con `wrangler secret put`
   AUTH_TOKEN?: string;
+
+  // Ronda 21 (Excusas, spec-excusas-2026) — configuración opcional:
+  EXCUSE_CHAIN_SECRET?: string;       // secret de la cadena de auditoría HMAC (fallback: AUTH_TOKEN)
+  EXCUSE_AUTO_APPROVE_HOURS?: string; // ventana R8 en horas (default 72; 0 desactiva el auto-aprobo)
+  SCHOOL_TERM_START?: string;         // YYYY-MM-DD — inicio del término (R3: máx. 10 días justificados)
+  SCHOOL_TERM_END?: string;           // YYYY-MM-DD — fin del término (R10: fin de vigencia de excusas)
 }
 
 // Encabezados de CORS para permitir conexiones seguras desde cualquier frontend o app móvil
@@ -321,6 +329,14 @@ export default {
 
         return jsonResponse({ success: true, id, message: 'Asistencia registrada en Cloudflare D1' });
       }
+
+      // =========================================================================
+      // RUTAS: EXCUSAS JUSTIFICADAS (Ronda 21 — spec-excusas-2026, fases P0–P3)
+      // Anticipada (Escudo) + post-hoc (1 toque) en una entidad; reglas R1–R10,
+      // audit_logs EXCUSE_* con cadena HMAC tamper-evidente. Ver src/excuses.ts
+      // =========================================================================
+      const excusesResponse = await handleExcusesRoutes(request, env, url, path);
+      if (excusesResponse) return excusesResponse;
 
       return errorResponse(`Ruta no encontrada: ${path}`, 404);
     } catch (err: any) {

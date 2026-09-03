@@ -39,6 +39,7 @@ CREATE TABLE IF NOT EXISTS attendance_records (
   subject TEXT,
   slot_id TEXT,
   notes TEXT,
+  excuse_id TEXT REFERENCES student_excuses(id) ON DELETE SET NULL, -- Ronda 21: overlay de excusa (overlay, no nuevo estado)
   created_at TEXT DEFAULT (datetime('now')),
   FOREIGN KEY (student_code) REFERENCES students(code) ON DELETE CASCADE
 );
@@ -47,6 +48,7 @@ CREATE INDEX IF NOT EXISTS idx_attendance_date ON attendance_records(date);
 CREATE INDEX IF NOT EXISTS idx_attendance_student_date ON attendance_records(student_code, date);
 CREATE INDEX IF NOT EXISTS idx_attendance_grade_date ON attendance_records(grade, date);
 CREATE INDEX IF NOT EXISTS idx_attendance_status ON attendance_records(status);
+CREATE INDEX IF NOT EXISTS idx_attendance_excuse ON attendance_records(excuse_id);
 
 -- 3. Tabla de Docentes y Personal Institucional
 CREATE TABLE IF NOT EXISTS teachers (
@@ -97,6 +99,9 @@ CREATE TABLE IF NOT EXISTS sync_snapshots (
 );
 
 -- 7. Tabla de Excusas Médicas y Justificaciones de Inasistencia (Buzón Escolar)
+-- Ronda 21 (spec-excusas-2026 §2): dos temporalidades en UNA entidad —
+-- anticipada (Escudo, fechas futuras, sin source_attendance_id) y post-hoc
+-- (justificación 1 toque sobre el AUSENTE, con source_attendance_id).
 CREATE TABLE IF NOT EXISTS student_excuses (
   id TEXT PRIMARY KEY,
   student_code TEXT NOT NULL,
@@ -106,14 +111,24 @@ CREATE TABLE IF NOT EXISTS student_excuses (
   end_date TEXT NOT NULL,   -- YYYY-MM-DD
   reason TEXT NOT NULL,     -- CITA_MEDICA, INCAPACIDAD, CALAMIDAD, DEPORTIVA, OTRA
   notes TEXT,
-  status TEXT DEFAULT 'APROBADA', -- PENDIENTE, APROBADA, RECHAZADA
+  status TEXT DEFAULT 'PENDIENTE', -- PENDIENTE (default Ronda 21), APROBADA, RECHAZADA
   submitted_by TEXT DEFAULT 'PORTAL_ESTUDIANTE',
+  source_attendance_id TEXT REFERENCES attendance_records(id) ON DELETE SET NULL, -- post-hoc: el AUSENTE ancla
+  attachment_path TEXT,     -- foto cifrada del soporte (P3)
+  reviewed_by TEXT,         -- Rectoría que decidió
+  reviewed_at TEXT,         -- timestamp de la decisión
+  reject_reason TEXT,       -- obligatoria si RECHAZADA (R6)
+  auto_approved INTEGER DEFAULT 0, -- 1 = ventana 72h (R8)
+  audit_hash TEXT,          -- cadena HMAC tamper-evidente (§6.2)
   created_at TEXT DEFAULT (datetime('now')),
   FOREIGN KEY (student_code) REFERENCES students(code) ON DELETE CASCADE
 );
 
 CREATE INDEX IF NOT EXISTS idx_excuses_student_date ON student_excuses(student_code, start_date, end_date);
 CREATE INDEX IF NOT EXISTS idx_excuses_dates ON student_excuses(start_date, end_date);
+CREATE INDEX IF NOT EXISTS idx_excuses_attendance ON student_excuses(source_attendance_id);
+-- R2: 1 excusa por AUSENTE (índice único parcial)
+CREATE UNIQUE INDEX IF NOT EXISTS uq_excuses_attendance ON student_excuses(source_attendance_id) WHERE source_attendance_id IS NOT NULL;
 
 -- 8. Tabla de Registro de Auditoría
 CREATE TABLE IF NOT EXISTS audit_logs (
