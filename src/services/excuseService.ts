@@ -352,4 +352,58 @@ export class ExcuseService {
       return { ok: false, error: err?.message || 'Fallo de red al verificar la cadena.' };
     }
   }
+
+  // ==================== Ronda 22 — FASE P3: EVIDENCIA (foto cifrada) ====================
+
+  /**
+   * POST /api/excuses/:id/attachment — sube el soporte fotográfico del documento físico.
+   * El Worker lo cifra AES-GCM-256 antes de persistir (la foto jamás queda en claro).
+   * El caller debe pasar la foto YA COMPRIMIDA en base64 (imageCompressor, ~30-90 KB).
+   */
+  static async uploadAttachment(id: string, payload: {
+    studentCode: string;         // dueño de la excusa (o role:'RECTORIA' desde el buzón)
+    dataBase64: string;
+    mime?: 'image/jpeg' | 'image/png' | 'image/webp';
+  }): Promise<{ ok: boolean; error?: string }> {
+    const baseUrl = this.getWorkerBaseUrl();
+    if (!baseUrl) return { ok: false, error: 'URL del Cloudflare Worker no configurada.' };
+    try {
+      const res = await fetch(`${baseUrl}/api/excuses/${encodeURIComponent(id)}/attachment`, {
+        method: 'POST',
+        headers: this.workerHeaders(),
+        body: JSON.stringify(payload)
+      });
+      const data = await res.json().catch(() => null);
+      if (!res.ok || !data?.success) return { ok: false, error: data?.error || `HTTP ${res.status}` };
+      return { ok: true };
+    } catch (err: any) {
+      return { ok: false, error: err?.message || 'Fallo de red al subir el soporte.' };
+    }
+  }
+
+  /**
+   * GET /api/excuses/:id/attachment — descifra y devuelve el soporte. El Worker solo
+   * responde a RECTORÍA o al estudiante dueño (Ley 1581 dato especial); la planilla
+   * JAMÁS llama este método (minimización §5).
+   */
+  static async fetchAttachment(id: string, viewer: {
+    role?: string;               // 'RECTORIA' desde el buzón
+    studentCode?: string;        // dueño, desde su portal
+  }): Promise<{ ok: boolean; dataBase64?: string; mime?: string; error?: string }> {
+    const baseUrl = this.getWorkerBaseUrl();
+    if (!baseUrl) return { ok: false, error: 'URL del Cloudflare Worker no configurada.' };
+    try {
+      const qs = new URLSearchParams();
+      if (viewer.role) qs.set('role', viewer.role);
+      if (viewer.studentCode) qs.set('requestBy', viewer.studentCode);
+      const res = await fetch(`${baseUrl}/api/excuses/${encodeURIComponent(id)}/attachment${qs.toString() ? `?${qs}` : ''}`, {
+        method: 'GET', headers: this.workerHeaders()
+      });
+      const data = await res.json().catch(() => null);
+      if (!res.ok || !data?.success) return { ok: false, error: data?.error || `HTTP ${res.status}` };
+      return { ok: true, dataBase64: data.dataBase64, mime: data.mime || 'image/jpeg' };
+    } catch (err: any) {
+      return { ok: false, error: err?.message || 'Fallo de red al descargar el soporte.' };
+    }
+  }
 }

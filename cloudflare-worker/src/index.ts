@@ -50,6 +50,10 @@ export interface Env {
   EXCUSE_AUTO_APPROVE_HOURS?: string; // ventana R8 en horas (default 72; 0 desactiva el auto-aprobo)
   SCHOOL_TERM_START?: string;         // YYYY-MM-DD — inicio del término (R3: máx. 10 días justificados)
   SCHOOL_TERM_END?: string;           // YYYY-MM-DD — fin del término (R10: fin de vigencia de excusas)
+  // Ronda 22 (Fase P3 — evidencia): secret de cifrado AES-GCM de los soportes fotográficos
+  // (fallback: EXCUSE_CHAIN_SECRET → AUTH_TOKEN). Sin secret → uploads rechazados 503 (jamás se
+  // guarda un soporte sin cifrar).
+  EXCUSE_ATTACHMENT_SECRET?: string;
 }
 
 // Encabezados de CORS para permitir conexiones seguras desde cualquier frontend o app móvil

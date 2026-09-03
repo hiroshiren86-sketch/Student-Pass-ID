@@ -155,6 +155,40 @@ async function sweepAutoApprovals(env: Env): Promise<number> {
 
 // ============================== RUTAS ========================================
 
+// ====================== Ronda 22 — FASE P3: EVIDENCIA =========================
+// Soporte fotográfico del documento físico (Ley 1581 art. 3(o): dato especial de salud).
+// Cifrado AES-GCM-256 SERVER-SIDE (WebCrypto): la foto nunca se persiste en claro en D1.
+// Formato almacenado en attachment_path: "AESGCM:v1:<ivB64>:<ctB64>" (texto, sin migración).
+// La clave se deriva con SHA-256 del secret institucional (EXCUSE_ATTACHMENT_SECRET →
+// EXCUSE_CHAIN_SECRET → AUTH_TOKEN). Sin secret → uploads 503 (jamás se guarda sin cifrar).
+// Lectura SOLO para RECTORÍA o el estudiante dueño de la excusa (la planilla jamás llama aquí).
+const ATTACHMENT_FORMAT = 'AESGCM:v1:';
+const ATTACHMENT_MAX_B64 = 400_000; // ~300 KB binarios: foto comprimida del soporte (imagenCompressor)
+
+function attachmentSecret(env: Env): string {
+  return (env.EXCUSE_ATTACHMENT_SECRET || env.EXCUSE_CHAIN_SECRET || env.AUTH_TOKEN || '').trim();
+}
+
+async function importAttachmentKey(env: Env): Promise<CryptoKey | null> {
+  const secret = attachmentSecret(env);
+  if (!secret) return null;
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode('INAS-ATTACH-V1|' + secret));
+  return crypto.subtle.importKey('raw', digest, { name: 'AES-GCM' }, false, ['encrypt', 'decrypt']);
+}
+
+function b64encode(bytes: Uint8Array): string {
+  let s = '';
+  for (let i = 0; i < bytes.length; i++) s += String.fromCharCode(bytes[i]);
+  return btoa(s);
+}
+
+function b64decode(s: string): Uint8Array {
+  const bin = atob(s);
+  const out = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+  return out;
+}
+
 export async function handleExcusesRoutes(request: Request, env: Env, url: URL, path: string): Promise<Response | null> {
   if (!path.startsWith('/api/excuses')) return null;
   if (!env.DB) return jsonErr('Base de datos D1 no configurada en el Worker.', 503);
@@ -375,10 +409,54 @@ export async function handleExcusesRoutes(request: Request, env: Env, url: URL, 
       const excuse = await env.DB.prepare(`SELECT * FROM student_excuses WHERE id = ?`).bind(excuseId).first<any>();
       if (!excuse) return jsonErr(`No existe la excusa ${excuseId}.`, 404);
 
+      if (isAttachment && request.method === 'POST') {
+        // P3 upload: el estudiante (dueño) o Rectoría adjunta la foto del soporte.
+        const secret = attachmentSecret(env);
+        if (!secret) return jsonErr('El colegio no tiene configurado el secret de cifrado de soportes (EXCUSE_ATTACHMENT_SECRET). El sistema NO almacena soportes sin cifrar.', 503);
+        let body: any;
+        try { body = await request.json(); } catch { return jsonErr('JSON inválido en el cuerpo de la petición.'); }
+        const dataBase64 = String(body.dataBase64 || '').trim();
+        const requestBy = String(body.studentCode || '').trim();
+        const mime = String(body.mime || 'image/jpeg').toLowerCase();
+        if (!/^image\/(jpeg|png|webp)$/.test(mime)) return jsonErr('El soporte debe ser una imagen JPEG, PNG o WebP.', 400);
+        if (!dataBase64) return jsonErr('Falta el contenido del soporte (dataBase64).', 400);
+        if (dataBase64.length > ATTACHMENT_MAX_B64) return jsonErr(`El soporte pesa demasiado (${Math.round(dataBase64.length / 1.37 / 1024)} KB). Comprime la foto e intenta de nuevo (máx. ~290 KB).`, 413);
+        // Dueño o Rectoría: solo el estudiante de la excusa (o Rectoría) puede adjuntar su soporte
+        if (requestBy !== excuse.student_code && String(body.role || '') !== 'RECTORIA') {
+          return jsonErr('Solo el estudiante dueño de la excusa (o Rectoría) puede adjuntar el soporte.', 403);
+        }
+        const key = await importAttachmentKey(env);
+        if (!key) return jsonErr('Secret de cifrado no disponible.', 503);
+        const iv = crypto.getRandomValues(new Uint8Array(12));
+        const ct = new Uint8Array(await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, b64decode(dataBase64)));
+        const stored = `${ATTACHMENT_FORMAT}${b64encode(iv)}:${b64encode(ct)}`;
+        await env.DB.prepare(`UPDATE student_excuses SET attachment_path = ? WHERE id = ?`).bind(stored, excuseId).run();
+        return jsonOk({ success: true, message: 'Soporte guardado y cifrado (AES-GCM-256). Solo Rectoría y tú podrán verlo.' });
+      }
+
       if (isAttachment && request.method === 'GET') {
-        // P3 (fotos cifradas AES-GCM): endpoint explícito, sin simulación (Regla 6)
+        // P3 descarga: SOLO RECTORÍA o el estudiante dueño; la planilla jamás llama aquí (§5 minimización).
         if (!excuse.attachment_path) return jsonErr('Esta excusa no tiene soporte fotográfico adjunto.', 404);
-        return jsonErr('La descarga cifrada de soportes se implementa en la Fase P3 (almacenamiento R2 + AES-GCM). El path está registrado.', 501);
+        if (!excuse.attachment_path.startsWith(ATTACHMENT_FORMAT)) {
+          return jsonErr('El soporte registrado no está cifrado en el formato interno (instalación legacy/R2).', 501);
+        }
+        const role = url.searchParams.get('role') || '';
+        const requestBy = url.searchParams.get('requestBy') || '';
+        if (role !== 'RECTORIA' && requestBy !== excuse.student_code) {
+          return jsonErr('El soporte solo puede ser visto por Rectoría o el estudiante dueño de la excusa (Ley 1581, dato especial).', 403);
+        }
+        const key = await importAttachmentKey(env);
+        if (!key) return jsonErr('Secret de cifrado no disponible: no se puede descifrar el soporte.', 503);
+        try {
+          const parts = excuse.attachment_path.slice(ATTACHMENT_FORMAT.length).split(':');
+          const iv = b64decode(parts[0]);
+          const ct = b64decode(parts[1]);
+          const plain = await crypto.subtle.decrypt({ name: 'AES-GCM', iv }, key, ct);
+          const b64 = b64encode(new Uint8Array(plain));
+          return jsonOk({ success: true, mime: 'image/jpeg', dataBase64: b64, sizeBytes: plain.byteLength });
+        } catch {
+          return jsonErr('El soporte no pudo descifrarse (clave cambiada o datos corruptos).', 500);
+        }
       }
 
       if (!isAttachment && request.method === 'GET') {

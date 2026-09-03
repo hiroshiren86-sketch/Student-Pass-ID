@@ -1,10 +1,11 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { ShieldCheck, Plus, Hourglass, BadgeCheck, FileWarning, Ban, CalendarDays } from 'lucide-react';
+import { ShieldCheck, Plus, Hourglass, BadgeCheck, FileWarning, Ban, CalendarDays, Camera } from 'lucide-react';
 import {
   StudentExcuse, ExcuseReason, ExcuseStatus, EXCUSE_REASON_LABELS
 } from '../types/attendance';
 import { ExcuseService } from '../services/excuseService';
 import { bogotaToday } from '../utils/bogotaDate';
+import { compressImageFile } from '../utils/imageCompressor';
 
 /**
  * ==============================================================================
@@ -14,7 +15,9 @@ import { bogotaToday } from '../utils/bogotaDate';
  * R4: una vez radicada NO se edita ni retira (solo Rectoría decide).
  * La protección provisional rige desde el primer segundo (§1.1): el aviso lo dice
  * con la verdad — "protegida mientras Rectoría no la rechace".
- * Foto del soporte: Fase P3 (upload cifrado AES-GCM) — no se pide aquí todavía.
+ * Ronda 22 (P3): foto del soporte OPCIONAL (WCAG 3.3.7) — se comprime en el
+ * dispositivo y se sube tras radicar; el Worker la cifra AES-GCM-256 y solo la
+ * ven Rectoría y el estudiante (Ley 1581 art. 3(o)).
  * ==============================================================================
  */
 
@@ -42,6 +45,9 @@ export const PortalExcusesSection: React.FC<PortalExcusesSectionProps> = ({ stud
   const [rangeEnd, setRangeEnd] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [feedback, setFeedback] = useState<{ ok: boolean; msg: string } | null>(null);
+  // Ronda 22 (P3): soporte fotográfico opcional — comprimido en el dispositivo
+  const [photoFile, setPhotoFile] = useState<File | null>(null);
+  const [photoName, setPhotoName] = useState('');
 
   const tomorrow = bogotaToday(1);
 
@@ -61,6 +67,7 @@ export const PortalExcusesSection: React.FC<PortalExcusesSectionProps> = ({ stud
   const resetForm = () => {
     setReason(null); setNotes(''); setRangeMode(false);
     setSingleDate(''); setRangeStart(''); setRangeEnd('');
+    setPhotoFile(null); setPhotoName('');
   };
 
   const canSubmit = !!reason && (reason !== 'OTRA' || notes.trim().length > 0) &&
@@ -85,7 +92,22 @@ export const PortalExcusesSection: React.FC<PortalExcusesSectionProps> = ({ stud
       setFeedback({ ok: false, msg: res.errors?.map(e => e.message_es).join(' ') || res.error || 'No fue posible radicar la excusa.' });
       return;
     }
-    setFeedback({ ok: true, msg: 'Excusa radicada. Rectoría la revisará en un máximo de 72 h: tu registro queda protegido mientras no sea rechazada.' });
+    // Ronda 22 (P3): si hay foto del soporte, se comprime y se sube cifrada (best-effort:
+    // la excusa ya está radicada y protegida; un fallo de la foto NO revierte nada)
+    let photoMsg = '';
+    if (photoFile) {
+      try {
+        const dataUrl = await compressImageFile(photoFile, 780, 1040, 0.6);
+        const b64 = dataUrl.split(',')[1] || '';
+        const up = await ExcuseService.uploadAttachment(res.excuse.id, {
+          studentCode, dataBase64: b64, mime: 'image/jpeg'
+        });
+        photoMsg = up.ok ? ' Foto del soporte adjuntada y cifrada.' : ` La excusa está radicada, pero la foto no se pudo subir: ${up.error}`;
+      } catch {
+        photoMsg = ' La excusa está radicada, pero la foto no se pudo procesar.';
+      }
+    }
+    setFeedback({ ok: true, msg: 'Excusa radicada. Rectoría la revisará en un máximo de 72 h: tu registro queda protegido mientras no sea rechazada.' + photoMsg });
     resetForm();
     setShowNew(false);
     load();
@@ -209,6 +231,21 @@ export const PortalExcusesSection: React.FC<PortalExcusesSectionProps> = ({ stud
               <CalendarDays className="w-3 h-3" /> Solo fechas futuras: la justificación de una ausencia
               ya registrada la hace Rectoría desde la planilla.
             </p>
+          </div>
+
+          {/* Ronda 22 (P3): soporte fotográfico opcional — cifrado en el Worker */}
+          <div className="space-y-1.5">
+            <label htmlFor="portal-excuse-photo" className="text-xs font-black text-slate-600 dark:text-slate-300 flex items-center gap-1.5">
+              <Camera className="w-3.5 h-3.5" /> Foto del soporte (opcional)
+            </label>
+            <input
+              id="portal-excuse-photo"
+              type="file"
+              accept="image/jpeg,image/png,image/webp"
+              onChange={e => { const f = e.target.files?.[0] || null; setPhotoFile(f); setPhotoName(f ? f.name : ''); }}
+              className="block w-full text-[11px] text-slate-500 dark:text-slate-400 file:mr-3 file:py-2 file:px-3 file:rounded-xl file:border-0 file:text-[11px] file:font-bold file:bg-indigo-50 dark:file:bg-indigo-950/60 file:text-indigo-700 dark:file:text-indigo-300 hover:file:bg-indigo-100 cursor-pointer"
+            />
+            {photoName && <p className="text-[10px] text-slate-400">Seleccionada: {photoName} — se cifra en el servidor; solo Rectoría y tú pueden verla.</p>}
           </div>
 
           {/* Paso 3 — radicar */}

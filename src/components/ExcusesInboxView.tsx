@@ -1,7 +1,8 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import {
   ShieldCheck, RefreshCw, Check, X, Search, BadgeCheck,
-  AlertTriangle, Hourglass, FileWarning, CheckCircle2, Fingerprint, Inbox
+  AlertTriangle, Hourglass, FileWarning, CheckCircle2, Fingerprint, Inbox,
+  Image as ImageIcon, CheckCheck, Loader2
 } from 'lucide-react';
 import { ExcuseStatus, StudentExcuse, EXCUSE_REASON_LABELS } from '../types/attendance';
 import { ExcuseService } from '../services/excuseService';
@@ -44,6 +45,12 @@ export const ExcusesInboxView: React.FC<ExcusesInboxViewProps> = ({ reviewedBy }
   const [feedback, setFeedback] = useState('');
   const [confirmReject, setConfirmReject] = useState<{ id: string; name: string } | null>(null);
   const [chain, setChain] = useState<{ intact?: boolean; signed?: boolean; checked?: number; firstBroken?: string; error?: string } | null>(null);
+  // Ronda 22 (P3): visor del soporte fotográfico descifrado (solo RECTORÍA lo pide al Worker)
+  const [photo, setPhoto] = useState<{ id: string; name: string; dataUrl: string } | null>(null);
+  const [photoLoading, setPhotoLoading] = useState<string | null>(null);
+  // Ronda 22 (P3): aprobación por lote (spec §7.3 "1 toque por lote, con confirmación")
+  const [bulkBusy, setBulkBusy] = useState(false);
+  const [confirmBulk, setConfirmBulk] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -108,6 +115,39 @@ export const ExcusesInboxView: React.FC<ExcusesInboxViewProps> = ({ reviewedBy }
     setChain(res);
   };
 
+  // Ronda 22 (P3): pedir el soporte descifrado al Worker (rol RECTORÍA) y mostrarlo
+  const handleViewPhoto = async (ex: StudentExcuse) => {
+    setPhotoLoading(ex.id);
+    const res = await ExcuseService.fetchAttachment(ex.id, { role: 'RECTORIA' });
+    setPhotoLoading(null);
+    if (res.ok && res.dataBase64) {
+      setPhoto({ id: ex.id, name: ex.studentName, dataUrl: `data:${res.mime};base64,${res.dataBase64}` });
+      setFeedback(`Soporte de ${ex.studentName} descifrado y mostrado (AES-GCM, Ley 1581: acceso restringido a Rectoría).`);
+    } else {
+      setFeedback(`No se pudo ver el soporte: ${res.error}`);
+    }
+  };
+
+  // Ronda 22 (P3): aprobar en lote todas las PENDIENTE del filtro actual (con confirmación)
+  const bulkApproveAction = async () => {
+    setConfirmBulk(false);
+    const targets = filtered.filter(e => e.status === 'PENDIENTE');
+    if (targets.length === 0) return;
+    setBulkBusy(true);
+    let ok = 0; const fails: string[] = [];
+    for (const ex of targets) {
+      const res = await ExcuseService.decideExcuse(ex.id, {
+        status: 'APROBADA', reviewedBy, reviewedByRole: 'RECTORIA', physicalDocumentVerified: !!physical[ex.id]
+      });
+      if (res.ok) ok++; else fails.push(`${ex.studentName}: ${res.errors?.map(e => e.message_es).join(' ') || res.error}`);
+    }
+    setBulkBusy(false);
+    setFeedback(fails.length
+      ? `Lote completado: ${ok} aprobadas, ${fails.length} fallidas — ${fails.join(' | ')}`
+      : `Lote completado: ${ok} excusa(s) aprobadas y marcadas "Excusada (verificada)".`);
+    load();
+  };
+
   const filtered = excuses
     .filter(e => filter === 'ALL' || e.status === filter)
     .filter(e => {
@@ -140,6 +180,17 @@ export const ExcusesInboxView: React.FC<ExcusesInboxViewProps> = ({ reviewedBy }
           </p>
         </div>
         <div className="flex items-center gap-2">
+          {pendingCount >= 2 && (
+            <button
+              onClick={() => setConfirmBulk(true)}
+              disabled={bulkBusy}
+              className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-60 text-white rounded-xl text-xs font-bold transition-all flex items-center gap-2 shadow-md shadow-emerald-600/20"
+              title="Aprueba en lote todas las excusas bajo revisión del filtro actual (con confirmación)"
+            >
+              {bulkBusy ? <Loader2 className="w-4 h-4 animate-spin" /> : <CheckCheck className="w-4 h-4" />}
+              Aprobar pendientes ({pendingCount})
+            </button>
+          )}
           <button
             onClick={handleVerifyChain}
             className="px-4 py-2 bg-slate-900 dark:bg-white text-white dark:text-slate-900 rounded-xl text-xs font-bold transition-all hover:opacity-90 flex items-center gap-2"
@@ -260,9 +311,19 @@ export const ExcusesInboxView: React.FC<ExcusesInboxViewProps> = ({ reviewedBy }
                   </div>
                   <div>
                     <span className="block text-slate-400 font-bold uppercase text-[9px]">Soporte foto</span>
-                    <span className="text-slate-700 dark:text-slate-200 font-bold">
-                      {ex.attachmentPath ? 'Adjunta (fase P3 para verla)' : 'No adjunta'}
-                    </span>
+                    {ex.attachmentPath ? (
+                      <button
+                        onClick={() => handleViewPhoto(ex)}
+                        disabled={photoLoading === ex.id}
+                        className="text-indigo-600 dark:text-indigo-400 font-bold hover:underline inline-flex items-center gap-1 disabled:opacity-60"
+                        aria-label={`Ver soporte fotográfico de ${ex.studentName} (descifrado en el servidor)`}
+                      >
+                        {photoLoading === ex.id ? <Loader2 className="w-3 h-3 animate-spin" /> : <ImageIcon className="w-3 h-3" />}
+                        Ver soporte (cifrado)
+                      </button>
+                    ) : (
+                      <span className="text-slate-700 dark:text-slate-200 font-bold">No adjunta</span>
+                    )}
                   </div>
                 </div>
 
@@ -349,6 +410,42 @@ export const ExcusesInboxView: React.FC<ExcusesInboxViewProps> = ({ reviewedBy }
               </div>
             );
           })}
+        </div>
+      )}
+
+      {confirmBulk && (
+        <ConfirmDialog
+          open
+          title="Aprobación por lote"
+          message={`¿Aprobar las ${pendingCount} excusa(s) bajo revisión del filtro actual?\n\nCada una queda "Excusada (verificada)" con tu usuario en el expediente (auditoría por excusa). Sin reversas.`}
+          confirmLabel={`Sí, aprobar ${pendingCount}`}
+          onConfirm={bulkApproveAction}
+          onCancel={() => setConfirmBulk(false)}
+        />
+      )}
+
+      {photo && (
+        <div
+          className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4"
+          role="dialog"
+          aria-modal="true"
+          aria-label={`Soporte fotográfico de ${photo.name}`}
+          onClick={() => setPhoto(null)}
+          onKeyDown={e => { if (e.key === 'Escape') setPhoto(null); }}
+          tabIndex={-1}
+          ref={el => el?.focus()}
+        >
+          <div className="max-w-2xl w-full space-y-3" onClick={e => e.stopPropagation()}>
+            <img src={photo.dataUrl} alt={`Soporte fotográfico de la excusa de ${photo.name}`} className="w-full max-h-[75vh] object-contain rounded-2xl bg-white" />
+            <p className="text-[10px] text-slate-300 text-center font-mono">
+              Descifrado en memoria (AES-GCM-256) · Solo Rectoría y el estudiante (Ley 1581 art. 3(o)) · La planilla nunca lo muestra
+            </p>
+            <div className="text-center">
+              <button onClick={() => setPhoto(null)} className="px-4 py-2 rounded-xl bg-white/10 hover:bg-white/20 text-white text-xs font-bold border border-white/20">
+                Cerrar (Escape)
+              </button>
+            </div>
+          </div>
         </div>
       )}
 
