@@ -72,10 +72,16 @@ export const PortalExcusesSection: React.FC<PortalExcusesSectionProps> = ({ stud
 
   // Ronda 23: el expediente también se refresca al volver a primer plano (la
   // decisión de Rectoría llega por push, pero la lista siempre refleja al Worker).
+  // Ronda 24: además sondeo cada 30 s — si el estudiante deja la pestaña abierta,
+  // el veredicto de Rectoría aparece sin tocar nada (misma cadencia que el buzón).
   useEffect(() => {
     const onVisible = () => { if (document.visibilityState === 'visible') load(); };
     document.addEventListener('visibilitychange', onVisible);
-    return () => document.removeEventListener('visibilitychange', onVisible);
+    const interval = window.setInterval(() => { load(); }, 30_000);
+    return () => {
+      document.removeEventListener('visibilitychange', onVisible);
+      window.clearInterval(interval);
+    };
   }, [load]);
 
   const resetForm = () => {
