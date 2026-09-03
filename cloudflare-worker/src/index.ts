@@ -73,6 +73,7 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-School-Code, X-Requested-With',
   'Access-Control-Max-Age': '86400',
 };
+export { corsHeaders }; // Ronda 24: compartido con push.ts (sus rutas Cross-Origin)
 
 function jsonResponse(data: any, status = 200) {
   return new Response(JSON.stringify(data), {

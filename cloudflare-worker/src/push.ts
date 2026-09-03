@@ -20,6 +20,7 @@
  * ==============================================================================
  */
 import type { Env } from './index';
+import { corsHeaders } from './index';
 
 const B64URL_RE = /^[A-Za-z0-9_-]+$/;
 
@@ -217,20 +218,15 @@ export async function sendPushTo(env: Env, opts: {
 
 export async function handlePushRoutes(request: Request, env: Env, url: URL, path: string): Promise<Response | null> {
   if (!path.startsWith('/api/push')) return null;
-  if (!env.DB) return new Response(JSON.stringify({ success: false, error: 'D1 no configurada.' }), { status: 503, headers: { 'Content-Type': 'application/json' } });
+  if (!env.DB) return err('D1 no configurada.', 503);
 
   // GET /api/push/public-key — el navegador necesita la clave VAPID para suscribirse
   if (path === '/api/push/public-key' && request.method === 'GET') {
     const keys = getVapidKeys(env);
     if (!keys) {
-      return new Response(JSON.stringify({
-        success: false,
-        error: 'El servidor no tiene claves VAPID configuradas (VAPID_PUBLIC_KEY/VAPID_PRIVATE_KEY). Las notificaciones push no están activas.'
-      }), { status: 503, headers: { 'Content-Type': 'application/json' } });
+      return err('El servidor no tiene claves VAPID configuradas (VAPID_PUBLIC_KEY/VAPID_PRIVATE_KEY). Las notificaciones push no están activas.', 503);
     }
-    return new Response(JSON.stringify({ success: true, publicKey: keys.publicKey }), {
-      headers: { 'Content-Type': 'application/json' }
-    });
+    return ok({ success: true, publicKey: keys.publicKey });
   }
 
   // POST /api/push/subscribe — registra/renueva la suscripción del navegador
@@ -271,8 +267,11 @@ export async function handlePushRoutes(request: Request, env: Env, url: URL, pat
 }
 
 function ok(data: any): Response {
-  return new Response(JSON.stringify(data), { status: 200, headers: { 'Content-Type': 'application/json' } });
+  // Ronda 24: CORS obligatorio — el navegador del frontend (pages.dev) consume el
+  // worker (workers.dev) cross-origin; sin estas cabeceras toda la activación de
+  // notificaciones moría con "Failed to fetch" ANTES de pedir permiso.
+  return new Response(JSON.stringify(data), { status: 200, headers: { 'Content-Type': 'application/json', ...corsHeaders } });
 }
 function err(message: string, status = 400): Response {
-  return new Response(JSON.stringify({ success: false, error: message }), { status, headers: { 'Content-Type': 'application/json' } });
+  return new Response(JSON.stringify({ success: false, error: message }), { status, headers: { 'Content-Type': 'application/json', ...corsHeaders } });
 }

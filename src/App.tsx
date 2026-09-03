@@ -74,6 +74,10 @@ export default function App() {
     FirebaseService.ensureAnonymousAuth().catch(() => {}); // Ronda 16: fire-and-forget, nunca bloquea
     AttendanceStorageService.initCloudSettingsSync();
     CloudflareSyncService.initAutoSync();
+    // Ronda 24: la app ARRANCA como Rectoría implícita (sin login). Persistir la
+    // sesión desde el primer frame: si el rector activa notificaciones sin haber
+    // pasado por login, la suscripción debe saber que es RECTORIA.
+    persistSession('ADMIN', { username: 'Rectoría / Administrador General' });
     const unsubscribe = AttendanceStorageService.subscribe(() => {
       setSettings(AttendanceStorageService.getSettings());
     });

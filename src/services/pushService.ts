@@ -51,19 +51,25 @@ function urlBase64ToUint8Array(base64String: string): Uint8Array {
  * Ronda 24 (fix crítico): la sesión `inas_user_session_v5` históricamente NUNCA se
  * escribía (saveCurrentSession sin llamadores) → toda suscripción se registraba como
  * PORTAL y el push de "nueva excusa" (dirigido a RECTORIA) jamás tenía destinatarios.
- * Ahora el rol vive en DOS fuentes, en orden de confianza:
+ * Ahora el rol vive en TRES fuentes, en orden de confianza:
  *   1. `inas_push_role_v1` — escrito por App.tsx en cada login/cambio de rol.
  *   2. `inas_user_session_v5` — respaldo (persistida desde Ronda 24).
+ *   3. DEFAULT 'RECTORIA' — la app arranca como Rectoría implícita (isAuthenticated
+ *      por defecto, SIN pasar por login): si el rector activa notificaciones sin
+ *      haber hecho login, su suscripción DEBE ser RECTORIA. Sin este default, la
+ *      suscripción del terminal de Rectoría se registraba PORTAL y jamás recibía
+ *      "nueva excusa" (comprobado E2E en producción, Ronda 24).
  */
 function currentRole(): 'RECTORIA' | 'PORTAL' {
   try {
     const flag = localStorage.getItem('inas_push_role_v1');
     if (flag === 'RECTORIA' || flag === 'PORTAL') return flag;
     const raw = localStorage.getItem('inas_user_session_v5');
-    const session = raw ? JSON.parse(raw) : {};
-    return session?.role === 'ADMIN' ? 'RECTORIA' : 'PORTAL';
+    const session = raw ? JSON.parse(raw) : null;
+    if (session?.role) return session.role === 'ADMIN' ? 'RECTORIA' : 'PORTAL';
+    return 'RECTORIA'; // terminal recién abierto: Rectoría implícita (arranque por defecto)
   } catch {
-    return 'PORTAL';
+    return 'RECTORIA';
   }
 }
 
