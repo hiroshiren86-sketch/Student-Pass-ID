@@ -22,7 +22,9 @@ import {
   Eye,
   EyeOff,
   Server,
-  Globe
+  Globe,
+  BrainCircuit,
+  School as SchoolIcon
 } from 'lucide-react';
 import { SchoolSettings } from '../types/attendance';
 import { AttendanceStorageService } from '../services/attendanceStorage';
@@ -43,6 +45,14 @@ interface SettingsModalProps {
 export const SettingsModal: React.FC<SettingsModalProps> = ({ onClose }) => {
   const [settings, setSettings] = useState<SchoolSettings>(AttendanceStorageService.getSettings());
   const [showSavedToast, setShowSavedToast] = useState(false);
+  // Ronda 25 (P1 del informe QA externo): 3 pestañas internas — los inputs PERMANECEN
+  // montados (solo se ocultan con CSS) → cero cambios de estado, validaciones ni save.
+  const [settingsTab, setSettingsTab] = useState<'institucion' | 'ia' | 'sync'>('institucion');
+  const settingsTabs: Array<{ id: 'institucion' | 'ia' | 'sync'; label: string; icon: React.ComponentType<{ className?: string }> }> = [
+    { id: 'institucion', label: 'Institución y Jornada', icon: SchoolIcon },
+    { id: 'ia', label: 'Inteligencia Artificial', icon: BrainCircuit },
+    { id: 'sync', label: 'Sync y Seguridad', icon: Server },
+  ];
   const [isSyncingCloud, setIsSyncingCloud] = useState(false);
   // Ronda 23 (P4): notificaciones push de excusas (por dispositivo)
   const [pushStatus, setPushStatus] = useState<{ supported: boolean; permission: string; subscribed: boolean } | null>(null);
@@ -317,6 +327,34 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ onClose }) => {
         </div>
 
         <form onSubmit={handleSave} className="space-y-4">
+          {/* Ronda 25 (P1): barra de pestañas — cada pestaña responde a UNA pregunta
+              (¿cómo opera mi colegio? / ¿cómo está la IA? / ¿cómo está conectado y
+              seguro este dispositivo?). Los 3 secretos quedan agrupados en Sync y Seguridad. */}
+          <div role="tablist" aria-label="Secciones de configuración" className="flex gap-1.5 p-1 rounded-2xl bg-slate-100 dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800/60">
+            {settingsTabs.map(t => {
+              const Icon = t.icon;
+              const active = settingsTab === t.id;
+              return (
+                <button
+                  key={t.id}
+                  type="button"
+                  role="tab"
+                  aria-selected={active}
+                  onClick={() => setSettingsTab(t.id)}
+                  className={`flex-1 px-2 py-2 rounded-xl text-[10px] sm:text-[11px] font-black transition-all inline-flex items-center justify-center gap-1.5 ${
+                    active
+                      ? 'bg-white dark:bg-zinc-950 text-indigo-600 dark:text-indigo-400 shadow-sm border border-slate-200 dark:border-zinc-800'
+                      : 'text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200'
+                  }`}
+                >
+                  <Icon className="w-3.5 h-3.5 shrink-0" />
+                  <span className="truncate">{t.label}</span>
+                </button>
+              );
+            })}
+          </div>
+
+          <div className={settingsTab === 'institucion' ? 'space-y-4' : 'hidden'}>
           {/* School Name */}
           <div>
             <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 uppercase tracking-wider mb-1.5">
@@ -427,6 +465,9 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ onClose }) => {
             </div>
           </div>
 
+          </div>
+
+          <div className={settingsTab === 'ia' ? 'space-y-4' : 'hidden'}>
           {/* AI Engine & Multi-Provider Configuration */}
           <div className="p-4 rounded-2xl bg-slate-100 dark:bg-zinc-950/90 border border-slate-200 dark:border-zinc-800/50 space-y-3">
             <div className="flex items-center justify-between">
@@ -588,6 +629,9 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ onClose }) => {
             </div>
           </div>
 
+          </div>
+
+          <div className={settingsTab === 'sync' ? 'space-y-4' : 'hidden'}>
           {/* Cloudflare D1 & Worker Automated Connection */}
           <div className="p-4 rounded-2xl bg-amber-50/70 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-900/60 space-y-3">
             <div className="flex items-center justify-between">
@@ -850,6 +894,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ onClose }) => {
                 {cloudSyncMsg}
               </p>
             )}
+          </div>
+
           </div>
 
           {/* Actions */}

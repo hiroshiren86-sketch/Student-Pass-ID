@@ -373,14 +373,18 @@ export const StudentsManagerView: React.FC<StudentsManagerViewProps> = ({ onGene
                       {std.grade}
                     </span>
                   </td>
-                  <td className="py-3 px-3 font-mono text-slate-700 dark:text-slate-300">
-                    <span className="text-[10px] px-1.5 py-0.5 rounded bg-slate-100 dark:bg-slate-800 text-slate-500 font-bold mr-1.5">
-                      {std.documentType || 'TI'}
+                  {/* Ronda 25 (P5.2): truncate + title en móvil — el código/documento ya no se
+                      cortan en seco (el QA externo vio "100" por un "1000000999" truncado). */}
+                  <td className="py-3 px-3 font-mono text-slate-700 dark:text-slate-300 max-w-[150px]">
+                    <span className="block truncate" title={`${std.documentType || 'TI'} ${std.documentId}`}>
+                      <span className="text-[10px] px-1.5 py-0.5 rounded bg-slate-100 dark:bg-slate-800 text-slate-500 font-bold mr-1.5">
+                        {std.documentType || 'TI'}
+                      </span>
+                      {std.documentId}
                     </span>
-                    {std.documentId}
                   </td>
-                  <td className="py-3 px-3 font-mono text-indigo-600 dark:text-indigo-400 font-bold">
-                    {std.code}
+                  <td className="py-3 px-3 font-mono text-indigo-600 dark:text-indigo-400 font-bold max-w-[120px]">
+                    <span className="block truncate" title={std.code}>{std.code}</span>
                   </td>
                   <td className="py-3 px-3">
                     {std.isRepresentative ? (

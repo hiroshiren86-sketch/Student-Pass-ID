@@ -71,6 +71,29 @@ export const AttendanceReportsView: React.FC<AttendanceReportsViewProps> = ({ cu
     AttendanceStorageService.exportAttendanceCsv(selectedDate, filteredRecords);
   };
 
+  // Ronda 25 (P2 del informe QA externo): píldora de estado extraída — la usan la tabla
+  // (md+) y las tarjetas móviles, sin duplicar la lógica del overlay de excusas (§4.2/§5).
+  const StatusPill: React.FC<{ r: AttendanceRecord }> = ({ r }) => {
+    if (r.status === 'PUNTUAL') {
+      return <span className="px-2.5 py-0.5 rounded-full font-bold text-[10px] bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 border border-emerald-500/30">Puntual</span>;
+    }
+    if (r.status === 'AUSENTE') {
+      /* Ronda 21 (spec §4.2): etiqueta derivada del overlay de excusas.
+         La planilla JAMÁS muestra el motivo ni la foto (minimización §5). */
+      if (r.excuseId) {
+        return (
+          <span className="px-2.5 py-0.5 rounded-full font-bold text-[10px] bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 border border-emerald-500/30 inline-flex items-center gap-1"
+            title="Ausencia protegida por excusa — la decisión es de Rectoría">
+            <ShieldCheck className="w-3 h-3" />
+            {r.excuseStatus === 'APROBADA' ? 'Excusada (verificada)' : 'Excusada (bajo revisión)'}
+          </span>
+        );
+      }
+      return <span className="px-2.5 py-0.5 rounded-full font-bold text-[10px] bg-rose-500/15 text-rose-700 dark:text-rose-300 border border-rose-500/30">Ausente</span>;
+    }
+    return <span className="px-2.5 py-0.5 rounded-full font-bold text-[10px] bg-amber-500/15 text-amber-700 dark:text-amber-300 border border-amber-500/30">Tardanza</span>;
+  };
+
   return (
     <div className="space-y-6 animate-fadeIn" id="attendance-reports-view">
       {/* Top Controls & Export */}
@@ -202,7 +225,10 @@ export const AttendanceReportsView: React.FC<AttendanceReportsViewProps> = ({ cu
             No se encontraron registros de asistencia para los filtros seleccionados.
           </div>
         ) : (
-          <div className="w-full overflow-x-auto rounded-xl border border-slate-200 dark:border-zinc-800/50">
+          <>
+          {/* Ronda 25 (P2, WCAG 1.4.10 Reflow): la tabla de 11 columnas vive solo en md+;
+              en móvil las tarjetas de abajo son la vista de consulta rápida. */}
+          <div className="hidden md:block w-full overflow-x-auto rounded-xl border border-slate-200 dark:border-zinc-800/50">
             <table className="w-full text-left text-xs min-w-[780px]">
               <thead>
                 <tr className="border-b border-slate-100 dark:border-zinc-800/50 text-slate-400 font-bold uppercase">
@@ -262,29 +288,7 @@ export const AttendanceReportsView: React.FC<AttendanceReportsViewProps> = ({ cu
                       </span>
                     </td>
                     <td className="py-3 px-3">
-                      {r.status === 'PUNTUAL' ? (
-                        <span className="px-2.5 py-0.5 rounded-full font-bold text-[10px] bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 border border-emerald-500/30">
-                          Puntual
-                        </span>
-                      ) : r.status === 'AUSENTE' ? (
-                        /* Ronda 21 (spec §4.2): etiqueta derivada del overlay de excusas.
-                           La planilla JAMÁS muestra el motivo ni la foto (minimización §5). */
-                        r.excuseId ? (
-                          <span className="px-2.5 py-0.5 rounded-full font-bold text-[10px] bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 border border-emerald-500/30 inline-flex items-center gap-1"
-                            title="Ausencia protegida por excusa — la decisión es de Rectoría">
-                            <ShieldCheck className="w-3 h-3" />
-                            {r.excuseStatus === 'APROBADA' ? 'Excusada (verificada)' : 'Excusada (bajo revisión)'}
-                          </span>
-                        ) : (
-                          <span className="px-2.5 py-0.5 rounded-full font-bold text-[10px] bg-rose-500/15 text-rose-700 dark:text-rose-300 border border-rose-500/30">
-                            Ausente
-                          </span>
-                        )
-                      ) : (
-                        <span className="px-2.5 py-0.5 rounded-full font-bold text-[10px] bg-amber-500/15 text-amber-700 dark:text-amber-300 border border-amber-500/30">
-                          Tardanza
-                        </span>
-                      )}
+                      <StatusPill r={r} />
                     </td>
                     <td className="py-3 px-3 text-slate-500 font-mono text-[11px]">
                       {r.method}
@@ -315,6 +319,38 @@ export const AttendanceReportsView: React.FC<AttendanceReportsViewProps> = ({ cu
               </tbody>
             </table>
           </div>
+
+          {/* Ronda 25 (P2): tarjetas móviles de la Planilla — la consulta en el teléfono es
+              "¿quién no ha escaneado?" (nombre + curso + hora + estado + acción 1 toque R5).
+              Las 11 columnas completas siguen en la tabla md+ y en el CSV/Excel (nada se pierde). */}
+          <div className="md:hidden space-y-2.5" aria-label="Planilla de asistencia (vista móvil)">
+            {filteredRecords.map((r) => (
+              <div key={r.id} className="rounded-2xl border border-slate-200 dark:border-zinc-800/50 bg-white dark:bg-zinc-950/60 p-3.5 shadow-sm">
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <p className="text-sm font-black text-slate-900 dark:text-white truncate" title={r.studentName}>{r.studentName}</p>
+                    <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5 flex items-center gap-1.5 flex-wrap">
+                      <span className="px-1.5 py-0.5 rounded-md font-bold text-[10px] bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300">{r.studentGrade}</span>
+                      <span className="font-mono font-bold text-slate-700 dark:text-slate-300">{r.time}</span>
+                      {r.subject && <span className="text-indigo-700 dark:text-indigo-300 font-bold">· {r.subject}</span>}
+                    </p>
+                  </div>
+                  <StatusPill r={r} />
+                </div>
+                {isAdmin && r.status === 'AUSENTE' && !r.excuseId && (
+                  <button
+                    onClick={() => setJustifyRecord(r)}
+                    aria-label={`Justificar ausencia de ${r.studentName} el ${r.date}`}
+                    className="mt-3 w-full px-3 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-[11px] font-black transition-all shadow-sm shadow-emerald-600/20 inline-flex items-center justify-center gap-1"
+                  >
+                    <ShieldCheck className="w-3.5 h-3.5" />
+                    Justificar
+                  </button>
+                )}
+              </div>
+            ))}
+          </div>
+          </>
         )}
       </div>
 

@@ -184,15 +184,18 @@ export default function App() {
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
 
+  // Ronda 25 (P3-B del informe QA externo): orden por FRECUENCIA DE USO — los 2 workflows
+  // calientes primero (Planilla y Buzón de Justificaciones para Rectoría; la decision de
+  // excusas es el flujo estrella). El badge rojo del Buzón viaja con el item, no con la posición.
   const navItems = [
+    { id: 'attendance' as ActiveTab, label: 'Planilla de Asistencia', icon: FileSpreadsheet, badge: 'Reportes', primary: false, roles: ['ADMIN', 'DOCENTE'] },
+    { id: 'excuses' as ActiveTab, label: 'Buzón de Justificaciones', icon: ShieldCheck, badge: 'Excusas', primary: false, roles: ['ADMIN'] },
     { id: 'scan' as ActiveTab, label: 'Escanear Asistencia', icon: ScanLine, badge: 'En vivo', primary: true, roles: ['ADMIN', 'DOCENTE'] },
     { id: 'students' as ActiveTab, label: 'Directorio Estudiantes', icon: Users, badge: 'Matrícula', primary: true, roles: ['ADMIN', 'DOCENTE'] },
     { id: 'schedules' as ActiveTab, label: 'Horarios Escolares', icon: Calendar, badge: 'Plantillas', primary: true, roles: ['ADMIN'] },
     { id: 'teachers' as ActiveTab, label: 'Gestión Docentes', icon: Key, badge: 'Credenciales', primary: false, roles: ['ADMIN'] },
-    { id: 'teacher' as ActiveTab, label: 'Portal Docente (Aula)', icon: BookOpen, badge: 'Clases', primary: true, roles: ['ADMIN', 'DOCENTE'] },
     { id: 'cards' as ActiveTab, label: 'Generador de Carnés PDF', icon: CreditCard, badge: 'CR80 PVC', primary: false, roles: ['ADMIN'] },
-    { id: 'attendance' as ActiveTab, label: 'Planilla de Asistencia', icon: FileSpreadsheet, badge: 'Reportes', primary: false, roles: ['ADMIN', 'DOCENTE'] },
-    { id: 'excuses' as ActiveTab, label: 'Buzón de Justificaciones', icon: ShieldCheck, badge: 'Excusas', primary: false, roles: ['ADMIN'] },
+    { id: 'teacher' as ActiveTab, label: 'Portal Docente (Aula)', icon: BookOpen, badge: 'Clases', primary: true, roles: ['ADMIN', 'DOCENTE'] },
     { id: 'ai-grades' as ActiveTab, label: 'Analítica e IA por Grado', icon: BrainCircuit, badge: 'IA Global', primary: false, roles: ['ADMIN', 'DOCENTE'] },
     { id: 'portal' as ActiveTab, label: 'Portal Estudiante / Acudiente', icon: UserCheck, badge: 'Consulta', primary: false, roles: ['ADMIN', 'ESTUDIANTE_ACUDIENTE'] },
   ];
@@ -222,7 +225,9 @@ export default function App() {
             </div>
             <div className="min-w-0">
               <div className="flex items-center gap-2">
-                <h1 className="text-sm sm:text-base font-black tracking-tight text-slate-900 dark:text-white truncate max-w-[180px] sm:max-w-[280px] md:max-w-md" title={settings.schoolName}>
+                {/* Ronda 25 (P5.1): el nombre completo cabe en pantallas grandes (lg) sin
+                    recortarse; el truncado sigue protegiendo móviles/tablets. */}
+                <h1 className="text-sm sm:text-base font-black tracking-tight text-slate-900 dark:text-white truncate max-w-[180px] sm:max-w-[280px] md:max-w-md lg:max-w-xl" title={settings.schoolName}>
                   {settings.schoolName}
                 </h1>
                 <span className="text-[10px] font-mono px-2 py-0.5 rounded-full font-bold bg-indigo-50 text-indigo-700 dark:bg-indigo-950 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800 shrink-0">
