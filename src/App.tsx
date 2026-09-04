@@ -187,17 +187,19 @@ export default function App() {
   // Ronda 25 (P3-B del informe QA externo): orden por FRECUENCIA DE USO — los 2 workflows
   // calientes primero (Planilla y Buzón de Justificaciones para Rectoría; la decision de
   // excusas es el flujo estrella). El badge rojo del Buzón viaja con el item, no con la posición.
+  // `short` = etiqueta compacta para la barra segmentada del header (el dropdown mantiene
+  // el nombre completo); libera espacio y evita exprimir el nombre del colegio (P5.1).
   const navItems = [
-    { id: 'attendance' as ActiveTab, label: 'Planilla de Asistencia', icon: FileSpreadsheet, badge: 'Reportes', primary: false, roles: ['ADMIN', 'DOCENTE'] },
-    { id: 'excuses' as ActiveTab, label: 'Buzón de Justificaciones', icon: ShieldCheck, badge: 'Excusas', primary: false, roles: ['ADMIN'] },
-    { id: 'scan' as ActiveTab, label: 'Escanear Asistencia', icon: ScanLine, badge: 'En vivo', primary: true, roles: ['ADMIN', 'DOCENTE'] },
-    { id: 'students' as ActiveTab, label: 'Directorio Estudiantes', icon: Users, badge: 'Matrícula', primary: true, roles: ['ADMIN', 'DOCENTE'] },
-    { id: 'schedules' as ActiveTab, label: 'Horarios Escolares', icon: Calendar, badge: 'Plantillas', primary: true, roles: ['ADMIN'] },
-    { id: 'teachers' as ActiveTab, label: 'Gestión Docentes', icon: Key, badge: 'Credenciales', primary: false, roles: ['ADMIN'] },
-    { id: 'cards' as ActiveTab, label: 'Generador de Carnés PDF', icon: CreditCard, badge: 'CR80 PVC', primary: false, roles: ['ADMIN'] },
-    { id: 'teacher' as ActiveTab, label: 'Portal Docente (Aula)', icon: BookOpen, badge: 'Clases', primary: true, roles: ['ADMIN', 'DOCENTE'] },
-    { id: 'ai-grades' as ActiveTab, label: 'Analítica e IA por Grado', icon: BrainCircuit, badge: 'IA Global', primary: false, roles: ['ADMIN', 'DOCENTE'] },
-    { id: 'portal' as ActiveTab, label: 'Portal Estudiante / Acudiente', icon: UserCheck, badge: 'Consulta', primary: false, roles: ['ADMIN', 'ESTUDIANTE_ACUDIENTE'] },
+    { id: 'attendance' as ActiveTab, label: 'Planilla de Asistencia', short: 'Planilla', icon: FileSpreadsheet, badge: 'Reportes', primary: false, roles: ['ADMIN', 'DOCENTE'] },
+    { id: 'excuses' as ActiveTab, label: 'Buzón de Justificaciones', short: 'Buzón', icon: ShieldCheck, badge: 'Excusas', primary: false, roles: ['ADMIN'] },
+    { id: 'scan' as ActiveTab, label: 'Escanear Asistencia', short: 'Escanear', icon: ScanLine, badge: 'En vivo', primary: true, roles: ['ADMIN', 'DOCENTE'] },
+    { id: 'students' as ActiveTab, label: 'Directorio Estudiantes', short: 'Directorio', icon: Users, badge: 'Matrícula', primary: true, roles: ['ADMIN', 'DOCENTE'] },
+    { id: 'schedules' as ActiveTab, label: 'Horarios Escolares', short: 'Horarios', icon: Calendar, badge: 'Plantillas', primary: true, roles: ['ADMIN'] },
+    { id: 'teachers' as ActiveTab, label: 'Gestión Docentes', short: 'Docentes', icon: Key, badge: 'Credenciales', primary: false, roles: ['ADMIN'] },
+    { id: 'cards' as ActiveTab, label: 'Generador de Carnés PDF', short: 'Carnés', icon: CreditCard, badge: 'CR80 PVC', primary: false, roles: ['ADMIN'] },
+    { id: 'teacher' as ActiveTab, label: 'Portal Docente (Aula)', short: 'Aula', icon: BookOpen, badge: 'Clases', primary: true, roles: ['ADMIN', 'DOCENTE'] },
+    { id: 'ai-grades' as ActiveTab, label: 'Analítica e IA por Grado', short: 'IA', icon: BrainCircuit, badge: 'IA Global', primary: false, roles: ['ADMIN', 'DOCENTE'] },
+    { id: 'portal' as ActiveTab, label: 'Portal Estudiante / Acudiente', short: 'Portal', icon: UserCheck, badge: 'Consulta', primary: false, roles: ['ADMIN', 'ESTUDIANTE_ACUDIENTE'] },
   ];
 
   const visibleNavItems = navItems.filter(item => item.roles.includes(currentRole));
@@ -279,7 +281,8 @@ export default function App() {
                     }`}
                   >
                     <Icon className="w-3.5 h-3.5" />
-                    <span>{item.label}</span>
+                    {/* Ronda 25 (P3-B/P5.1): etiqueta compacta en la barra segmentada */}
+                    <span>{item.short ?? item.label}</span>
                     {/* Ronda 24: punto rojo distintivo — excusas esperando revisión (Rectoría) */}
                     {item.id === 'excuses' && pendingCount > 0 && (
                       <span className="absolute -top-1 -right-1 min-w-[16px] h-4 px-1 rounded-full bg-red-500 text-white text-[9px] font-black flex items-center justify-center ring-2 ring-slate-100 dark:ring-zinc-800 animate-pulse" aria-label={`${pendingCount} excusas pendientes`}>
