@@ -2,11 +2,12 @@ import React, { useState, useEffect, useCallback } from 'react';
 import {
   ShieldCheck, RefreshCw, Check, X, Search, BadgeCheck,
   AlertTriangle, Hourglass, FileWarning, CheckCircle2, Fingerprint, Inbox,
-  Image as ImageIcon, CheckCheck, Loader2
+  Image as ImageIcon, CheckCheck, Loader2, Bell, BellOff
 } from 'lucide-react';
 import { ExcuseStatus, StudentExcuse, EXCUSE_REASON_LABELS } from '../types/attendance';
 import { ExcuseService } from '../services/excuseService';
 import { ConfirmDialog } from './ConfirmDialog';
+import { ExcuseChimePref, SoundService } from '../utils/sound';
 
 /**
  * ==============================================================================
@@ -38,6 +39,15 @@ export const ExcusesInboxView: React.FC<ExcusesInboxViewProps> = ({ reviewedBy }
   const [excuses, setExcuses] = useState<StudentExcuse[]>([]);
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState<Filter>('PENDIENTE');
+  // Ronda 25: campanita de nueva excusa — preferencia por dispositivo, ACTIVADA
+  // por defecto (petición del propietario). El toggle da feedback inmediato.
+  const [chimeOn, setChimeOn] = useState<boolean>(() => ExcuseChimePref.isEnabled());
+  const toggleChime = () => {
+    const next = !chimeOn;
+    setChimeOn(next);
+    ExcuseChimePref.setEnabled(next);
+    if (next) SoundService.playExcuseChime(); // gesto del usuario → audio desbloqueado
+  };
   const [search, setSearch] = useState('');
   const [physical, setPhysical] = useState<Record<string, boolean>>({});
   const [rejecting, setRejecting] = useState<Record<string, string>>({}); // id → motivo tipeado
@@ -195,6 +205,20 @@ export const ExcusesInboxView: React.FC<ExcusesInboxViewProps> = ({ reviewedBy }
           </p>
         </div>
         <div className="flex items-center gap-2">
+          <button
+            onClick={toggleChime}
+            aria-pressed={chimeOn}
+            aria-label={chimeOn ? 'Campanita activada: suena cuando llega una excusa nueva. Clic para silenciar.' : 'Campanita silenciada. Clic para activarla.'}
+            className={`px-3 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 border ${chimeOn
+              ? 'bg-amber-500/10 text-amber-700 dark:text-amber-300 border-amber-500/30 hover:bg-amber-500/20'
+              : 'bg-slate-500/10 text-slate-500 dark:text-slate-400 border-slate-500/30 hover:bg-slate-500/20'}`}
+            title={chimeOn
+              ? 'Campanita activada: suena cuando llega una excusa nueva (clic para silenciar)'
+              : 'Campanita silenciada (clic para activarla)'}
+          >
+            {chimeOn ? <Bell className="w-4 h-4" /> : <BellOff className="w-4 h-4" />}
+            {chimeOn ? 'Campanita' : 'Silenciada'}
+          </button>
           {pendingCount >= 2 && (
             <button
               onClick={() => setConfirmBulk(true)}

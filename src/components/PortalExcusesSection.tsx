@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { ShieldCheck, Plus, Hourglass, BadgeCheck, FileWarning, Ban, CalendarDays, Camera } from 'lucide-react';
 import {
   StudentExcuse, ExcuseReason, ExcuseStatus, EXCUSE_REASON_LABELS
@@ -6,6 +6,7 @@ import {
 import { ExcuseService } from '../services/excuseService';
 import { bogotaToday } from '../utils/bogotaDate';
 import { compressImageFile } from '../utils/imageCompressor';
+import { ExcuseChimePref, SoundService } from '../utils/sound';
 
 /**
  * ==============================================================================
@@ -54,12 +55,28 @@ export const PortalExcusesSection: React.FC<PortalExcusesSectionProps> = ({ stud
 
   const tomorrow = bogotaToday(1);
 
+  // Ronda 25: campanita del veredicto — si el estudiante tiene la app abierta
+  // (sondeo de 30 s) y Rectoría decide su excusa (PENDIENTE → APROBADA o
+  // RECHAZADA), suena la misma campanita discreta. Nada de popups. La carga
+  // inicial nunca suena; silenciable con la misma preferencia del Buzón.
+  const prevStatuses = useRef<Map<string, ExcuseStatus> | null>(null);
+
   const load = useCallback(async () => {
     setLoading(true);
     const res = await ExcuseService.listFromWorker({ studentCode });
     if (res.ok) {
       setExcuses(res.excuses);
       setOfflineCache(false);
+      // Detectar transiciones de veredicto contra el sondeo anterior
+      const prev = prevStatuses.current;
+      if (prev) {
+        const decided = res.excuses.some(e => {
+          const before = prev.get(e.id);
+          return before === 'PENDIENTE' && (e.status === 'APROBADA' || e.status === 'RECHAZADA');
+        });
+        if (decided && ExcuseChimePref.isEnabled()) SoundService.playExcuseChime();
+      }
+      prevStatuses.current = new Map(res.excuses.map(e => [e.id, e.status]));
     } else {
       // Sin Worker: cache local (última sincronización) para que el expediente no quede vacío
       setExcuses(ExcuseService.getCachedExcuses().filter(e => e.studentCode === studentCode));
