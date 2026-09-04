@@ -219,7 +219,10 @@ export default function App() {
     <div className="min-h-screen bg-slate-50 dark:bg-black text-slate-900 dark:text-slate-100 flex flex-col antialiased selection:bg-indigo-500 selection:text-white transition-colors duration-200">
       {/* Modern Top Header / Linear Style Navigation */}
       <header className="sticky top-0 z-40 bg-white/80 dark:bg-zinc-950/80 backdrop-blur-xl border-b border-slate-200/80 dark:border-zinc-800/50">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 h-16 flex items-center justify-between gap-4">
+        {/* Ronda 25 (P5.1): fluido en lg+ — a 1440px el max-w-7xl exprimía el nombre del
+            colegio ~30px (medido: client 307 vs scroll 330); el truncado sigue como red
+            de seguridad en pantallas menores y para nombres más largos. */}
+        <div className="max-w-7xl lg:max-w-none mx-auto px-4 sm:px-6 h-16 flex items-center justify-between gap-4">
           {/* Logo & School Identity */}
           <div className="flex items-center gap-3 min-w-0">
             <div className="w-10 h-10 rounded-2xl bg-indigo-600 text-white flex items-center justify-center shadow-lg shadow-indigo-600/25 shrink-0">
