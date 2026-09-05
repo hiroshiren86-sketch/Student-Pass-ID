@@ -37,6 +37,7 @@ import {
 import { parseAndVerifyScan, parseAndVerifyClassScan } from '../utils/crypto';
 import { isValidGrade } from '../utils/documentParser';
 import { FirebaseService } from './firebase';
+import { SEED_DEMO_ON_FIRST_LAUNCH } from './demoConfig';
 // Ciclo runtime-only (excuseService ↔ attendanceStorage): seguro, solo métodos estáticos.
 import { ExcuseService, justificationLabelOf, isRecordProtected } from './excuseService';
 
@@ -257,6 +258,13 @@ export class AttendanceStorageService {
           localStorage.setItem(`${STUDENTS_KEY}_corrupt_backup_${Date.now()}`, raw);
         }
       } catch {}
+      // Ronda 27 (entrega limpia): con el anti-seed activo la corrupción NUNCA recupera con
+      // demo — se protegió un respaldo `_corrupt_backup_*` y se recupera vacío; el usuario
+      // restaura con "Descargar de Cloudflare" (PULL). Regla 6: cero fallback silencioso.
+      if (!SEED_DEMO_ON_FIRST_LAUNCH) {
+        this.saveStudents([]);
+        return [];
+      }
       // Auto-recover with demo data if JSON is corrupted
       this.saveStudents(INITIAL_STUDENTS);
       return INITIAL_STUDENTS;
@@ -264,6 +272,13 @@ export class AttendanceStorageService {
 
     // Only seed initial students if key has never been initialized
     if (localStorage.getItem(STUDENTS_KEY) === null) {
+      // Ronda 27 (entrega limpia): primer arranque SIN demo — se persiste `[]` explícito
+      // (patrón Ronda 14: evita re-disparos del seed) y la app queda lista para importar
+      // la matrícula real o crear estudiantes desde cero.
+      if (!SEED_DEMO_ON_FIRST_LAUNCH) {
+        this.saveStudents([]);
+        return [];
+      }
       this.saveStudents(INITIAL_STUDENTS);
       return INITIAL_STUDENTS;
     }
@@ -525,7 +540,18 @@ export class AttendanceStorageService {
       if (stored) {
         return JSON.parse(stored);
       }
-    } catch {}
+    } catch {
+      // Ronda 27: respaldo del JSON corrupto antes de recuperar (jamás borrar sin copia).
+      try {
+        const raw = localStorage.getItem(TEACHERS_KEY);
+        if (raw) localStorage.setItem(`${TEACHERS_KEY}_corrupt_backup_${Date.now()}`, raw);
+      } catch {}
+    }
+    // Ronda 27 (entrega limpia): key null o corrupta → `[]` persistido (sin demo).
+    if (!SEED_DEMO_ON_FIRST_LAUNCH) {
+      this.saveTeachers([]);
+      return [];
+    }
     this.saveTeachers(INITIAL_TEACHERS);
     return INITIAL_TEACHERS;
   }
@@ -1072,7 +1098,18 @@ export class AttendanceStorageService {
           return clean;
         }
       }
-    } catch {}
+    } catch {
+      // Ronda 27: respaldo del JSON corrupto antes de recuperar (jamás borrar sin copia).
+      try {
+        const raw = localStorage.getItem(SCHEDULE_ASSIGNMENTS_KEY);
+        if (raw) localStorage.setItem(`${SCHEDULE_ASSIGNMENTS_KEY}_corrupt_backup_${Date.now()}`, raw);
+      } catch {}
+    }
+    // Ronda 27 (entrega limpia): key null o corrupta → `[]` persistido (sin cátedras demo).
+    if (!SEED_DEMO_ON_FIRST_LAUNCH) {
+      this.saveScheduleAssignments([]);
+      return [];
+    }
     this.saveScheduleAssignments(INITIAL_SCHEDULE_ASSIGNMENTS);
     return INITIAL_SCHEDULE_ASSIGNMENTS;
   }
@@ -1540,8 +1577,19 @@ export class AttendanceStorageService {
       if (stored) {
         return JSON.parse(stored);
       }
-    } catch {}
+    } catch {
+      // Ronda 27: respaldo del JSON corrupto antes de recuperar (jamás borrar sin copia).
+      try {
+        const raw = localStorage.getItem(ATTENDANCE_KEY);
+        if (raw) localStorage.setItem(`${ATTENDANCE_KEY}_corrupt_backup_${Date.now()}`, raw);
+      } catch {}
+    }
 
+    // Ronda 27 (entrega limpia): la planilla nace sin registros (sin asistencias demo).
+    if (!SEED_DEMO_ON_FIRST_LAUNCH) {
+      this.saveAttendance([]);
+      return [];
+    }
     const initialRecords = this.generateInitialSeededAttendance();
     this.saveAttendance(initialRecords);
     return initialRecords;

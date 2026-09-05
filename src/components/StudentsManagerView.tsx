@@ -308,6 +308,46 @@ export const StudentsManagerView: React.FC<StudentsManagerViewProps> = ({ onGene
         )}
       </div>
 
+      {/* Ronda 27 (entrega limpia): onboarding de matrícula vacía — solo visible con 0 estudiantes.
+          Guía el Día Cero: importar la matrícula real (CSV/Excel/SIMAT) o crear el primer estudiante. */}
+      {students.length === 0 && (
+        <div className="p-4 rounded-3xl bg-indigo-50/80 dark:bg-indigo-950/40 border border-indigo-200 dark:border-indigo-800/60 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
+          <div className="flex items-start gap-3">
+            <div className="w-9 h-9 rounded-2xl bg-indigo-600 text-white flex items-center justify-center shrink-0 shadow-sm">
+              <Upload className="w-4 h-4" />
+            </div>
+            <div>
+              <p className="text-xs font-black text-slate-900 dark:text-white">
+                Sistema listo. Importa tu matrícula para comenzar.
+              </p>
+              <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5">
+                {currentRole === 'ADMIN'
+                  ? 'Carga la lista oficial (CSV / Excel / SIMAT) o matricula estudiantes uno a uno. La demo sigue disponible en Ajustes → "Reiniciar datos de prueba".'
+                  : 'Aún no hay estudiantes registrados. Rectoría debe importar la matrícula para comenzar.'}
+              </p>
+            </div>
+          </div>
+          {currentRole === 'ADMIN' && (
+            <div className="flex flex-wrap items-center gap-2 shrink-0">
+              <button
+                onClick={() => setShowUploadModal(true)}
+                className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-xs font-bold transition-all shadow-md shadow-indigo-600/20 flex items-center gap-2"
+              >
+                <Upload className="w-3.5 h-3.5" />
+                <span>Importar matrícula (CSV/Excel/SIMAT)</span>
+              </button>
+              <button
+                onClick={handleOpenAdd}
+                className="px-4 py-2 bg-white dark:bg-black hover:bg-slate-100 dark:hover:bg-zinc-900 text-slate-800 dark:text-slate-200 rounded-xl text-xs font-bold transition-all border border-slate-200 dark:border-zinc-800 flex items-center gap-2"
+              >
+                <UserPlus className="w-3.5 h-3.5" />
+                <span>Nuevo estudiante</span>
+              </button>
+            </div>
+          )}
+        </div>
+      )}
+
       {/* Main Student Directory Table */}
       <div className="p-5 rounded-3xl bg-white/70 dark:bg-zinc-950/70 border border-slate-200/80 dark:border-zinc-800/50 backdrop-blur-xl shadow-sm space-y-4">
         <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3">
@@ -350,6 +390,18 @@ export const StudentsManagerView: React.FC<StudentsManagerViewProps> = ({ onGene
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100 dark:divide-slate-800/60">
+              {/* Ronda 27 (entrega limpia): empty state útil — nunca una tabla en blanco silencioso. */}
+              {filteredStudents.length === 0 && (
+                <tr>
+                  <td colSpan={6} className="py-12 text-center">
+                    <p className="text-xs font-bold text-slate-500 dark:text-slate-400">
+                      {students.length === 0
+                        ? 'Aún no hay estudiantes. Importa la matrícula (CSV/Excel/SIMAT) o crea el primero con "+ Nuevo Estudiante".'
+                        : 'Sin resultados para la búsqueda o el filtro aplicado.'}
+                    </p>
+                  </td>
+                </tr>
+              )}
               {filteredStudents.map((std) => (
                 <tr key={std.code} className="hover:bg-slate-100 dark:hover:bg-zinc-900/50 transition-colors group border-b border-slate-100 dark:border-zinc-800/50 last:border-0 hover:shadow-sm">
                   <td className="py-3 px-3 font-bold text-slate-900 dark:text-white">

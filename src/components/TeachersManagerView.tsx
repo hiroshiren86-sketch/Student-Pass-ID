@@ -267,6 +267,25 @@ export const TeachersManagerView: React.FC = () => {
 
       {/* Teachers Grid Cards */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+        {/* Ronda 27 (entrega limpia): empty state útil — nunca un grid en blanco silencioso. */}
+        {filteredTeachers.length === 0 && (
+          <div className="col-span-full py-12 text-center space-y-3">
+            <p className="text-xs font-bold text-slate-500 dark:text-slate-400">
+              {teachers.length === 0
+                ? 'Aún no hay docentes registrados. Registra el primero para asignar cátedras y delegar escaneos.'
+                : 'Sin resultados para la búsqueda aplicada.'}
+            </p>
+            {teachers.length === 0 && (
+              <button
+                onClick={handleOpenAdd}
+                className="inline-flex px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-xs font-bold transition-all shadow-md shadow-indigo-600/20 items-center gap-2"
+              >
+                <UserPlus className="w-3.5 h-3.5" />
+                <span>Registrar Nuevo Docente</span>
+              </button>
+            )}
+          </div>
+        )}
         {filteredTeachers.map((teacher) => (
           <div
             key={teacher.id}

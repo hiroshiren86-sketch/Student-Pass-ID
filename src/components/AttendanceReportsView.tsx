@@ -221,8 +221,16 @@ export const AttendanceReportsView: React.FC<AttendanceReportsViewProps> = ({ cu
 
         {/* Clean Responsive Table */}
         {filteredRecords.length === 0 ? (
-          <div className="py-12 text-center text-slate-400 text-xs">
-            No se encontraron registros de asistencia para los filtros seleccionados.
+          <div className="py-12 text-center text-slate-400 text-xs space-y-1">
+            {summary.totalEnrolled === 0 ? (
+              <>
+                {/* Ronda 27 (entrega limpia): guía honesta con matrícula vacía (Día Cero). */}
+                <p className="font-bold text-slate-500 dark:text-slate-400">Matrícula vacía: importa estudiantes para comenzar.</p>
+                <p className="text-[11px]">Ve a Directorio → "Importar matrícula (CSV/Excel/SIMAT)" y luego registra la asistencia del día.</p>
+              </>
+            ) : (
+              'No se encontraron registros de asistencia para los filtros seleccionados.'
+            )}
           </div>
         ) : (
           <>
