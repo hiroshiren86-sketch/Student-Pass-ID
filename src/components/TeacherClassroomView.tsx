@@ -1,6 +1,7 @@
 import React, { useState, useMemo, useEffect, useRef } from 'react';
 import { ConfirmDialog } from './ConfirmDialog';
 import { ActiveClassBanner } from './ActiveClassBanner';
+import { ChangePasswordModal } from './ChangePasswordModal';
 import { 
   BookOpen, 
   CheckCircle2, 
@@ -70,6 +71,7 @@ export const TeacherClassroomView: React.FC<TeacherClassroomViewProps> = ({
   const [selectedSlotId, setSelectedSlotId] = useState<string>(scheduleSlots[0]?.id || 'slot-1');
   const [selectedSubject, setSelectedSubject] = useState<string>(teacher?.subjects?.[0] || 'Matemáticas');
   const [soundEnabled, setSoundEnabled] = useState<boolean>(true);
+  const [showChangePasswordModal, setShowChangePasswordModal] = useState<boolean>(false);
   
   // Scanner state
   const [scannerOpen, setScannerOpen] = useState<boolean>(false);
@@ -613,6 +615,15 @@ export const TeacherClassroomView: React.FC<TeacherClassroomViewProps> = ({
                 </h1>
                 <p className="text-xs text-slate-500 dark:text-slate-400 flex flex-wrap items-center gap-1.5 mt-0.5">
                   <span>Docente: <strong>{teacher?.fullName || teacherName}</strong></span>
+                  <button
+                    type="button"
+                    onClick={() => setShowChangePasswordModal(true)}
+                    className="ml-1 inline-flex items-center gap-1 text-[11px] font-bold text-indigo-600 dark:text-indigo-400 hover:underline bg-indigo-50 dark:bg-indigo-950/60 px-2 py-0.5 rounded-lg border border-indigo-200 dark:border-indigo-800/80 transition-all shadow-xs"
+                    title="Cambiar mi contraseña de acceso"
+                  >
+                    <Key className="w-3 h-3" />
+                    <span>Cambiar mi contraseña</span>
+                  </button>
                   <span className="text-slate-300 dark:text-slate-700">•</span>
                   {teacher?.directorGrade ? (
                     <span className="inline-flex items-center gap-1 font-bold text-amber-600 dark:text-amber-400 bg-amber-50 dark:bg-amber-950/50 px-2 py-0.5 rounded-lg border border-amber-200 dark:border-amber-900/60 text-[11px]">
@@ -1526,6 +1537,15 @@ export const TeacherClassroomView: React.FC<TeacherClassroomViewProps> = ({
             </div>
           </div>
         </div>
+      )}
+
+      {showChangePasswordModal && (
+        <ChangePasswordModal
+          onClose={() => setShowChangePasswordModal(false)}
+          teacher={teacher}
+          role="DOCENTE"
+          username={teacher?.fullName || teacherName}
+        />
       )}
 
       {/* Ronda 18 (H4): modal de confirmación propio (reemplaza window.confirm nativo) */}

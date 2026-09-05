@@ -37,6 +37,7 @@ import { ScheduleBuilderView } from './components/ScheduleBuilderView';
 import { ExcusesInboxView } from './components/ExcusesInboxView'; // Ronda 21: buzón de justificaciones (Rectoría)
 import { LoginScreen } from './components/LoginScreen';
 import { SettingsModal } from './components/SettingsModal';
+import { ChangePasswordModal } from './components/ChangePasswordModal';
 import { PushOnboardingBanner } from './components/PushOnboardingBanner'; // Ronda 24: onboarding visible de notificaciones
 import { FirstWelcomeTour, FirstWelcomeTourService } from './components/FirstWelcomeTour'; // Ronda 29: asistente de primer ingreso
 import { useExcusesBadge } from './hooks/useExcusesBadge'; // Ronda 24: punto rojo de excusas pendientes
@@ -61,6 +62,7 @@ export default function App() {
 
   const { theme, toggleTheme } = useTheme();
   const [showSettingsModal, setShowSettingsModal] = useState(false);
+  const [showChangePasswordModal, setShowChangePasswordModal] = useState(false);
   const [showRoleModal, setShowRoleModal] = useState(false);
   // Ronda 29: asistente de primer ingreso (guía por perfil, una sola vez por dispositivo)
   const [showWelcomeTour, setShowWelcomeTour] = useState(false);
@@ -495,6 +497,17 @@ export default function App() {
                       </span>
                     </button>
 
+                    <button
+                      onClick={() => {
+                        setShowChangePasswordModal(true);
+                        setIsUserMenuOpen(false);
+                      }}
+                      className="w-full p-2 rounded-xl text-left flex items-center gap-2 text-xs font-bold text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
+                    >
+                      <Key className="w-4 h-4 text-emerald-500" />
+                      <span>Cambiar Mi Contraseña</span>
+                    </button>
+
                     {currentRole === 'ADMIN' && (
                       <button
                         onClick={() => {
@@ -681,6 +694,16 @@ export default function App() {
             </div>
           </div>
         </div>
+      )}
+
+      {/* Modal de cambio de contraseña */}
+      {showChangePasswordModal && (
+        <ChangePasswordModal
+          onClose={() => setShowChangePasswordModal(false)}
+          teacher={loggedUser.teacher}
+          role={currentRole}
+          username={loggedUser.username || 'Usuario'}
+        />
       )}
 
       {/* Modern Compact Footer */}

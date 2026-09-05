@@ -8,6 +8,7 @@ import {
   signInAnonymously,
   signOut, 
   onAuthStateChanged,
+  updatePassword,
   User as FirebaseUser
 } from 'firebase/auth';
 import { initializeAppCheck, ReCaptchaV3Provider, getToken as getAppCheckToken } from 'firebase/app-check';
@@ -296,6 +297,22 @@ export class FirebaseService {
       return { user: result.user, profile };
     } catch (error: any) {
       console.error('Error in email registration:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Update current user's password in Firebase Auth
+   */
+  static async updateUserPassword(newPassword: string): Promise<void> {
+    try {
+      const auth = getFirebaseAuth();
+      if (!auth.currentUser) {
+        throw new Error('No hay usuario autenticado en Firebase.');
+      }
+      await updatePassword(auth.currentUser, newPassword);
+    } catch (error: any) {
+      console.error('Error updating password in Firebase:', error);
       throw error;
     }
   }

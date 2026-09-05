@@ -169,6 +169,18 @@ Esta sección documenta el mapa exhaustivo de comunicaciones, protocolos, plataf
 
 ## 📋 3. Bitácora de Implementaciones y Correcciones Realizadas
 
+### ✅ Ronda 31 (04/09/2026): Actualización de Reglas de Firestore y Autoservicio de Cambio de Contraseña de Docentes
+
+- **Despliegue de Reglas de Seguridad de Firestore:**
+  - *Motivo:* Sincronización e imposición de reglas de seguridad en Firebase Firestore.
+  - *Acción:* Se desplegaron exitosamente las reglas contenidas en `firestore.rules` directamente en el proyecto de Firebase Firestore mediante `deploy_firebase`. Todas las 5 colecciones operativas (`school_settings`, `students`, `teachers`, `attendance_records`, `schedule_assignments`) y perfiles de usuario (`users/{userId}`) exigen autenticación obligatoria (`isAuthenticated()`) manteniendo la política de mínima superficie y denegación explícita por defecto (`match /{document=**} { allow read, write: if false; }`).
+- **Autoservicio de Cambio de Contraseña de Docentes y Usuarios:**
+  - *Motivo:* Requerimiento del usuario para permitir que los docentes puedan cambiar su propia contraseña en cualquier momento desde su portal sin depender exclusivamente de contraseñas temporales asignadas por Rectoría, conservando a la vez la capacidad de Rectoría para restablecer credenciales en la administración de docentes.
+  - *Implementación:*
+    - Creado `src/components/ChangePasswordModal.tsx` con validación de contraseña actual, longitud mínima (>= 6 caracteres), verificación de coincidencia y actualización inmediata tanto en almacenamiento local (`AttendanceStorageService.updateTeacher`) como en la nube con `FirebaseService.updateUserPassword` (Firebase Auth).
+    - Integrado botón de acceso directo "Cambiar mi contraseña" en el encabezado del Aula de Clase (`TeacherClassroomView.tsx`) y en el menú flotante de perfil de usuario (`App.tsx`).
+    - Verificación y compilación exitosa con `lint_applet` (`npx tsc --noEmit`) y `compile_applet`.
+
 ### ✅ Fase 1: Núcleo de Portería, Criptografía y Gestión Escolar (Completada)
 - **Lector USB HID y Prevención de Teclado Virtual en Móviles:**
   - *Motivo:* Al conectar lectores de código de barras OTG/Bluetooth en celulares, el teclado táctil de Android/iOS tapaba la pantalla de escaneo. Se solucionó con `inputMode="none"` y foco no invasivo.
