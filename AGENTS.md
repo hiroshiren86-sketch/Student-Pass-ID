@@ -9,6 +9,19 @@ Este documento es la **fuente única de verdad técnica (Single Source of Truth)
 
 > **Instrucción del propietario:** esta sección está dirigida EXCLUSIVAMENTE al agente con acceso a la consola de Firebase/Firestore. Léela COMPLETA antes de escribir una línea de código. Cualquier trabajo de autenticación fuera de esta especificación será rechazado en la verificación de aceptación.
 
+> ### ⚠️ ACTUALIZACIÓN Ronda 32 (05/09/2026) — RESULTADO DE LA VERIFICACIÓN DE ACEPTACIÓN: RECHAZADA (PARCIAL)
+> **Tu commit `ab19e60` fue revisado E2E por el agente principal. Dictamen: RECHAZADO — entregaste ~1 de los 7 módulos y con defectos. Lo corregible ya fue corregido por el agente principal (Ronda 32, ver §3); lo tuyo sigue pendiente.**
+>
+> - ✅ **Lo que SÍ funcionó:** el cambio de contraseña del DOCENTE (modal + verificación de clave actual + actualización local + reingreso verificado E2E con la nueva clave) y tu despliegue declarado de `firestore.rules`.
+> - ❌ **Defecto crítico D1 (corregido en Ronda 32):** el botón "Cambiar Mi Contraseña" aparecía para Rectoría y Estudiante, roles para los que el modal era un NO-OP: mostraba "¡Contraseña actualizada correctamente!" sin cambiar nada (Rectoría no tiene objeto `teacher` y la sesión Firebase es anónima). Reproducido E2E: Rectoría "cambia" clave → cierra sesión → "Credenciales de Rectoría incorrectas". Es EXACTAMENTE el antipatrón que el propietario te advirtió (función integrada sin cablear). Regla vigente: **si un flujo no termina en un cambio real, la UI no lo muestra.**
+> - ❌ **Defecto crítico D2 (corregido en Ronda 32):** M5 no aplicado. Las pestañas "Google Workspace" y "Correo Firebase" seguían en el login con el proveedor Email/Password DESHABILITADO en tu consola (verificado REST Ronda 18 → `auth/operation-not-allowed` garantizado). Fueron retiradas de la UI. Reintégralas SOLO cuando estén cableadas de punta a punta.
+> - ❌ **M1 SIN HACER:** `admin2026` sigue DENTRO del bundle de producción (verificado: `curl` sobre `assets/index-*.js` de pages.dev → 1 ocurrencia). El login de Rectoría sigue verificándose en el cliente.
+> - ❌ **M2 (login) SIN HACER:** alta de docentes sigue siendo credencial solo-local; la verificación sigue siendo contra localStorage, no contra Firestore.
+> - ❌ **M3 SIN HACER:** estudiantes/acudientes sin modelo de acceso server-side.
+> - ❌ **M7 SIN HACER:** no existe `docs/DESPLEGUE_FIREBASE.md`.
+> - 📋 **Tus pendientes para el próximo pase (en orden):** M1 → M2 (login + verificación Firestore) → M3 → M6 (extender y PROBAR reglas, con evidencia en tu bitácora) → M7 (manual). Al terminar, cumple el Definition of Done de la sección E completo (incluye capturas en `/home/z/my-project/download/qa-auth/` y `admin2026` ausente del bundle). El cambio de contraseña docente YA ESTÁ y NO lo rompas: hoy vive en la credencial local `tempPassword` (verificación client-side como paso intermedio, permitido por M2 mientras documentes el porqué); cuando migres docentes a Firebase Auth, ese modal debe pasar a verificar contra tu backend.
+> - 🔒 Recuerda (decisión del propietario, Ronda 31): NO rotar claves. Y NO toques el Worker/Cloudflare.
+
 ### A. Contexto en el que llegas (leer primero)
 
 - App: React 19 + TS + Vite (`src/`), desplegada en `https://student-pass-id.pages.dev` (auto-deploy por push a `main`). Backend de datos: Cloudflare Worker + D1/KV (`https://inas-attendance-worker.hiroshiren86.workers.dev`, token AUTH_TOKEN activo — NO es tu terreno, no lo toques).
@@ -168,6 +181,20 @@ Esta sección documenta el mapa exhaustivo de comunicaciones, protocolos, plataf
 ---
 
 ## 📋 3. Bitácora de Implementaciones y Correcciones Realizadas
+
+### 🔎 Ronda 32 (05/09/2026): VERIFICACIÓN DE ACEPTACIÓN DE LA MISIÓN AUTH — RECHAZADA (PARCIAL) + CORRECCIONES DEL AGENTE PRINCIPAL
+
+- **Contexto:** el propietario reportó un error en producción tras el commit `ab19e60` del Agente de Autenticación y ordenó validar, corregir y dejar nota. Esta ronda ejecuta la "verificación de aceptación independiente" prometida en el Definition of Done (sección 🔑 E).
+- **Auditoría del commit `ab19e60` (Agente de Autenticación):** entregó únicamente el autoservicio de cambio de contraseña docente (M2 parcial) y el despliegue declarado de `firestore.rules`. M1, M2-login, M3, M6-evidencia y M7 NO fueron entregados. Veredicto completo y pendientes: ver el bloque "⚠️ ACTUALIZACIÓN Ronda 32" dentro de la sección 🔑 MISIÓN AUTH (arriba de este documento).
+- **Reproducción E2E del error del propietario (build local + producción):** el defecto crítico D1 era real y reproducible al 100%: Rectoría abría "Cambiar Mi Contraseña" (botón visible para todos los roles), el modal NO pedía contraseña actual (no hay objeto `teacher` para ADMIN), aceptaba una clave nueva y mostraba "¡Contraseña actualizada correctamente!" — sin actualizar absolutamente nada (la sesión Firebase es anónima y la credencial de Rectoría es la embebida `admin2026`). Al cerrar sesión, la clave "nueva" producía "Credenciales de Rectoría incorrectas": el usuario quedaba bloqueado por un mensaje falso. Violación directa de la Regla 6 (Cero Fallbacks) y del aviso explícito del propietario sobre integraciones sin cablear.
+- **Defectos encontrados (D1–D6):** D1 falso éxito NO-OP para Rectoría/Estudiante (crítico, reproducido); D2 M5 incumplido — pestañas "Google Workspace" y "Correo Firebase" en el login con el proveedor Email/Password deshabilitado en consola (`auth/operation-not-allowed` garantizado, verificado REST en Ronda 18); D3 ruta `auth/requires-recent-login` mostraba error y éxito SIMULTÁNEOS; D4 variable `updatedWays` integrada y nunca consumida (código muerto); D5 si `updateTeacher` fallaba igual se mostraba éxito; D6 M1/M2-login/M3/M7 sin entregar (`admin2026` verificado AÚN presente en el bundle de producción vía `curl`).
+- **Correcciones aplicadas (agente principal):**
+  - `App.tsx`: el botón "Cambiar Mi Contraseña" del menú de sesión SOLO se muestra para DOCENTE con `loggedUser.teacher.tempPassword` real (para Rectoría/Estudiante no existe nada que cambiar hoy: vuelve cuando M1/M3 migren sus credenciales). Segundo guard en el render del modal (defensa en profundidad).
+  - `TeacherClassroomView.tsx`: el botón del encabezado del aula exige `teacher.tempPassword` (sin credencial verificable el modal no tendría contra qué comparar).
+  - `ChangePasswordModal.tsx`: guard duro `if (!teacher || !teacher.tempPassword) return null`; validación de clave nueva distinta de la actual; verificación de clave actual obligatoria; si el guardado local falla → error honesto (nunca éxito); la rama Firebase Auth queda como nota informativa única (jamás éxito+error simultáneos, resuelve D3); variable muerta `updatedWays` eliminada (D4); mensaje de éxito solo tras un cambio REAL (D5).
+  - `LoginScreen.tsx` (M5 aplicado, D2): retiradas de la UI las pestañas "Google Workspace" y "Correo Firebase" — solo permanece "Acceso Institucional" (el único modo que funciona de punta a punta). Los manejadores de servicio (`loginWithGoogle`/`loginWithEmail`/`registerWithEmail` en `firebase.ts`) se conservan como caja de herramientas del Agente de Autenticación, que los reintegrará SOLO cuando M1–M3 estén cableados de punta a punta. Comentarios en código marcan los 3 puntos (ADMIN/DOCENTE/ESTUDIANTE) donde la verificación deberá migrar a server-side.
+- **Validación:** `npx tsc --noEmit` = 0 errores; `vite build` limpio; E2E local (build servido): login sin pestañas muertas ✓, menú de Rectoría sin botón de contraseña ✓, docente de prueba (alta desde Gestión Docentes → `Docente####*`) cambió su clave con verificación de la actual ✓, clave incorrecta actual rechazada ✓, reingreso con la nueva clave OK ✓, cero errores de consola ✓.
+- **Al Agente de Autenticación:** tus pendientes y el orden recomendado están en el bloque "⚠️ ACTUALIZACIÓN Ronda 32" de la sección 🔑. No rompas el cambio de contraseña docente ya corregido.
 
 ### ✅ Ronda 31 (04/09/2026): Actualización de Reglas de Firestore y Autoservicio de Cambio de Contraseña de Docentes
 

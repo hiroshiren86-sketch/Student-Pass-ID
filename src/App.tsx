@@ -497,16 +497,24 @@ export default function App() {
                       </span>
                     </button>
 
-                    <button
-                      onClick={() => {
-                        setShowChangePasswordModal(true);
-                        setIsUserMenuOpen(false);
-                      }}
-                      className="w-full p-2 rounded-xl text-left flex items-center gap-2 text-xs font-bold text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
-                    >
-                      <Key className="w-4 h-4 text-emerald-500" />
-                      <span>Cambiar Mi Contraseña</span>
-                    </button>
+                    {/* Ronda 32 (fix aceptación MISIÓN AUTH): el autoservicio de contraseña es SOLO del
+                        portal docente. Para Rectoría/Estudiante el modal del agente de Firebase era un
+                        NO-OP con falso éxito (no hay objeto teacher y la sesión Firebase es anónima):
+                        mostraba "¡Contraseña actualizada correctamente!" sin cambiar nada y el usuario
+                        quedaba fuera con su clave nueva (Regla 6: jamás mostrar un flujo que no termina
+                        en un cambio real). Vuelve para esos roles cuando M1/M3 migren sus credenciales. */}
+                    {currentRole === 'DOCENTE' && loggedUser.teacher?.tempPassword && (
+                      <button
+                        onClick={() => {
+                          setShowChangePasswordModal(true);
+                          setIsUserMenuOpen(false);
+                        }}
+                        className="w-full p-2 rounded-xl text-left flex items-center gap-2 text-xs font-bold text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
+                      >
+                        <Key className="w-4 h-4 text-emerald-500" />
+                        <span>Cambiar Mi Contraseña</span>
+                      </button>
+                    )}
 
                     {currentRole === 'ADMIN' && (
                       <button
@@ -696,12 +704,13 @@ export default function App() {
         </div>
       )}
 
-      {/* Modal de cambio de contraseña */}
-      {showChangePasswordModal && (
+      {/* Modal de cambio de contraseña — Ronda 32: solo DOCENTE con credencial real;
+          el guard del botón ya lo garantiza y este segundo guard defiende en profundidad */}
+      {showChangePasswordModal && loggedUser.teacher && (
         <ChangePasswordModal
           onClose={() => setShowChangePasswordModal(false)}
           teacher={loggedUser.teacher}
-          role={currentRole}
+          role="DOCENTE"
           username={loggedUser.username || 'Usuario'}
         />
       )}

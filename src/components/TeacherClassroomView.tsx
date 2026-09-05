@@ -615,15 +615,19 @@ export const TeacherClassroomView: React.FC<TeacherClassroomViewProps> = ({
                 </h1>
                 <p className="text-xs text-slate-500 dark:text-slate-400 flex flex-wrap items-center gap-1.5 mt-0.5">
                   <span>Docente: <strong>{teacher?.fullName || teacherName}</strong></span>
-                  <button
-                    type="button"
-                    onClick={() => setShowChangePasswordModal(true)}
-                    className="ml-1 inline-flex items-center gap-1 text-[11px] font-bold text-indigo-600 dark:text-indigo-400 hover:underline bg-indigo-50 dark:bg-indigo-950/60 px-2 py-0.5 rounded-lg border border-indigo-200 dark:border-indigo-800/80 transition-all shadow-xs"
-                    title="Cambiar mi contraseña de acceso"
-                  >
-                    <Key className="w-3 h-3" />
-                    <span>Cambiar mi contraseña</span>
-                  </button>
+                  {/* Ronda 32: el botón exige credencial local real (tempPassword); sin ella el modal no
+                      tendría contra qué verificar la clave actual y repetiría el falso éxito corregido */}
+                  {teacher?.tempPassword && (
+                    <button
+                      type="button"
+                      onClick={() => setShowChangePasswordModal(true)}
+                      className="ml-1 inline-flex items-center gap-1 text-[11px] font-bold text-indigo-600 dark:text-indigo-400 hover:underline bg-indigo-50 dark:bg-indigo-950/60 px-2 py-0.5 rounded-lg border border-indigo-200 dark:border-indigo-800/80 transition-all shadow-xs"
+                      title="Cambiar mi contraseña de acceso"
+                    >
+                      <Key className="w-3 h-3" />
+                      <span>Cambiar mi contraseña</span>
+                    </button>
+                  )}
                   <span className="text-slate-300 dark:text-slate-700">•</span>
                   {teacher?.directorGrade ? (
                     <span className="inline-flex items-center gap-1 font-bold text-amber-600 dark:text-amber-400 bg-amber-50 dark:bg-amber-950/50 px-2 py-0.5 rounded-lg border border-amber-200 dark:border-amber-900/60 text-[11px]">
@@ -1539,7 +1543,7 @@ export const TeacherClassroomView: React.FC<TeacherClassroomViewProps> = ({
         </div>
       )}
 
-      {showChangePasswordModal && (
+      {showChangePasswordModal && teacher && (
         <ChangePasswordModal
           onClose={() => setShowChangePasswordModal(false)}
           teacher={teacher}
