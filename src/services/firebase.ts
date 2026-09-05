@@ -464,21 +464,34 @@ export class FirebaseService {
   }
 
   /**
-   * Get user profile
+   * Get user profile.
+   * Ronda 33: reintento corto ante la CARRERA de token de Firestore — justo después
+   * de signInWithEmailAndPassword, la instancia de Firestore puede aún llevar el
+   * token ANÓNIMO del arranque mientras Auth ya es el usuario real; esa primera
+   * lectura da permission-denied espurio. Se reintentan 3 lecturas (0/350/900ms):
+   * es eventually-consistency del binding Auth→Firestore, no un fallback silencioso
+   * (si el perfil no existe, devuelve null con normalidad).
    */
   static async getUserProfile(uid: string): Promise<FirebaseUserProfile | null> {
-    try {
-      const db = getFirebaseFirestore();
-      const docRef = doc(db, 'users', uid);
-      const snap = await getDoc(docRef);
-      if (snap.exists()) {
-        return snap.data() as FirebaseUserProfile;
+    const delays = [0, 350, 900];
+    let lastErr: unknown = null;
+    for (const delay of delays) {
+      if (delay > 0) await new Promise(r => setTimeout(r, delay));
+      try {
+        const db = getFirebaseFirestore();
+        const docRef = doc(db, 'users', uid);
+        const snap = await getDoc(docRef);
+        if (snap.exists()) {
+          return snap.data() as FirebaseUserProfile;
+        }
+        return null; // el documento no existe — no hay nada que reintentar
+      } catch (e) {
+        lastErr = e;
+        console.warn('Firestore: lectura de perfil diferida (token aún propagando):', e);
       }
-      return null;
-    } catch (e) {
-      console.warn('Firestore offline / user read failed:', e);
-      return null;
     }
+    console.warn('Firestore: perfil no legible tras reintentos:', lastErr);
+    return null;
   }
 
   /**
