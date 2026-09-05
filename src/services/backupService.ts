@@ -15,7 +15,7 @@
  * ==============================================================================
  */
 import { AttendanceStorageService } from './attendanceStorage';
-import { ExcuseService } from './excuseService';
+import { ExcuseService, normalizeExcuse } from './excuseService';
 import type { SchoolSettings, Student, Teacher, AttendanceRecord, ClassScheduleAssignment, ScheduleSlot, StudentExcuse } from '../types/attendance';
 
 export const BACKUP_FORMAT = 'INAS_BACKUP';
@@ -30,6 +30,8 @@ export interface BackupFile {
   schoolCode: string;
   scope: BackupScope;
   includesSecrets: boolean;
+  /** Ronda 28: 'cloud' = el contenido proviene del volcado completo del Worker (GET /api/sync/export). */
+  source?: 'local' | 'cloud';
   config?: { settings: SchoolSettings };
   data?: {
     students: Student[];
@@ -146,4 +148,164 @@ export function applyBackup(file: BackupFile): { applied: string[] } {
     applied.push('base de datos');
   }
   return { applied };
+}
+
+// ============================================================================
+// Ronda 28 — RESPALDOS DESDE/PARA LA NUBE (export completo + borrado local)
+// ============================================================================
+
+/** Fila cruda de D1 (snake_case) — subconjunto relacional del estudiante. */
+function normalizeCloudStudent(s: any): Student {
+  const grade = String(s.grade || '');
+  return {
+    code: String(s.code || ''),
+    documentId: String(s.document_id || s.documentId || ''),
+    documentType: (s.document_type || s.documentType || 'TI') as Student['documentType'],
+    firstName: String(s.first_name || s.firstName || ''),
+    lastName: String(s.last_name || s.lastName || ''),
+    grade,
+    section: String(grade.split('°')[1] || s.section || ''),
+    photoUrl: s.photo_url || s.photoUrl || undefined,
+    active: String(s.status || s.active || 'ACTIVO') === 'ACTIVO',
+    createdAt: String(s.created_at || s.createdAt || new Date().toISOString())
+  } as Student;
+}
+
+/** Fila cruda de D1 (snake_case) — subconjunto relacional del registro de asistencia. */
+function normalizeCloudRecord(r: any): AttendanceRecord {
+  const date = String(r.date || '');
+  const time = String(r.time || '');
+  return {
+    id: String(r.id || ''),
+    studentCode: String(r.student_code || r.studentCode || ''),
+    studentDocument: String(r.document_id || r.documentId || ''),
+    studentName: String(r.student_name || r.studentName || ''),
+    studentGrade: String(r.grade || ''),
+    studentSection: String(String(r.grade || '').split('°')[1] || ''),
+    slotId: String(r.slot_id || r.slotId || ''),
+    slotName: String(r.slot_name || r.slotName || ''),
+    subject: String(r.subject || ''),
+    teacherName: String(r.teacher_name || r.teacherName || ''),
+    timestamp: date && time ? `${date}T${time}` : String(r.timestamp || ''),
+    date,
+    time,
+    type: 'CLASE',
+    status: r.status,
+    method: r.method,
+    scannedBy: (r.scanned_by || r.scannedBy || 'ADMIN') as AttendanceRecord['scannedBy'],
+    scannedByName: r.scanned_by_name || r.scannedByName || undefined,
+    verifiedHmac: !!(r.verified_hmac ?? r.verifiedHmac),
+    synced: true,
+    notes: r.notes || undefined,
+    excuseId: r.excuse_id || r.excuseId || undefined,
+    excuseStatus: r.excuse_status || r.excuseStatus || undefined
+  } as AttendanceRecord;
+}
+
+/** Fila cruda de D1 schedule_slots (snake_case) → bloque de jornada del frontend. */
+function normalizeCloudSlot(s: any): ScheduleSlot {
+  const startTime = String(s.start_time || s.startTime || '');
+  const endTime = String(s.end_time || s.endTime || '');
+  // Duración derivada de HH:MM (los slots D1 no guardan durationMinutes);
+  // 0 si las horas son ilegibles — el frontend recalcula al re-guardar.
+  const toMin = (t: string) => {
+    const [h, m] = t.split(':').map(Number);
+    return Number.isFinite(h) && Number.isFinite(m) ? h * 60 + m : null;
+  };
+  const d0 = toMin(startTime), d1 = toMin(endTime);
+  const duration = d0 !== null && d1 !== null && d1 >= d0 ? d1 - d0 : 0;
+  return {
+    id: String(s.id || ''),
+    order: Number(s.order_index ?? s.order ?? s.orderIndex ?? 0),
+    type: (s.type || 'CLASS') as ScheduleSlot['type'],
+    name: String(s.name || ''),
+    startTime,
+    endTime,
+    durationMinutes: Number(s.duration_minutes ?? s.durationMinutes ?? duration),
+    isNonComputable: s.is_non_computable ?? s.isNonComputable ?? (String(s.type || '') === 'ASSEMBLY')
+  } as ScheduleSlot;
+}
+
+/**
+ * Ronda 28: convierte el volcado COMPLETO de la nube (GET /api/sync/export) en un
+ * archivo INAS_BACKUP v1 (scope DATA, sin secretos — la nube nunca los almacena).
+ * Fuente de verdad EN ORDEN: (1) snapshot KV — objetos frontend fieles que algún
+ * dispositivo subió; (2) filas D1 normalizadas (fallback si la KV está vacía).
+ * Las excusas SIEMPRE vienen de D1 (no viajan en el snapshot).
+ */
+export function buildBackupFromCloudExport(exportData: any, schoolCode: string): BackupFile {
+  const kv = exportData?.kvSnapshot?.data || {};
+  const pickCloud = (kvArr: any, d1Arr: any[], normalize: (row: any) => any): any[] => {
+    if (Array.isArray(kvArr) && kvArr.length > 0) return kvArr;
+    return (Array.isArray(d1Arr) ? d1Arr : []).map(normalize);
+  };
+
+  const students = pickCloud(kv.students, exportData?.students, normalizeCloudStudent);
+  const attendance = pickCloud(kv.records, exportData?.records, normalizeCloudRecord);
+  const slots = pickCloud(kv.slots, exportData?.slots, normalizeCloudSlot);
+  const teachers = Array.isArray(kv.teachers) && kv.teachers.length > 0
+    ? kv.teachers
+    : (Array.isArray(exportData?.teachers) ? exportData.teachers : []);
+  const assignments = Array.isArray(kv.assignments) && kv.assignments.length > 0
+    ? kv.assignments
+    : (Array.isArray(exportData?.assignments) ? exportData.assignments : []);
+  const excuses = (Array.isArray(exportData?.excuses) ? exportData.excuses : []).map(normalizeExcuse);
+
+  return {
+    format: BACKUP_FORMAT,
+    version: BACKUP_VERSION,
+    exportedAt: new Date().toISOString(),
+    schoolCode: schoolCode || '',
+    scope: 'DATA',
+    includesSecrets: false,
+    source: 'cloud',
+    data: {
+      students,
+      teachers,
+      assignments,
+      slots,
+      attendance,
+      excuses,
+      customTemplates: Array.isArray(kv.customTemplates) ? kv.customTemplates : [],
+      studentSchedules: kv.studentSchedules && typeof kv.studentSchedules === 'object' ? kv.studentSchedules : {}
+    },
+    counts: {
+      students: students.length,
+      teachers: teachers.length,
+      assignments: assignments.length,
+      slots: slots.length,
+      attendance: attendance.length,
+      excuses: excuses.length
+    }
+  };
+}
+
+/**
+ * Ronda 28: respaldo VACÍO (scope DATA) para el flujo de purga — aplicado con
+ * applyBackup() deja el dispositivo en blanco (patrón anti-seed Ronda 27: []
+ * persistido explícito, NUNCA re-inyecta demo). No toca settings (Worker URL,
+ * token y jornada se conservan) ni slots (applyBackup solo aplica si trae >0 —
+ * la estructura de jornada local sobrevive al borrado).
+ */
+export function buildEmptyWipeBackup(schoolCode: string): BackupFile {
+  return {
+    format: BACKUP_FORMAT,
+    version: BACKUP_VERSION,
+    exportedAt: new Date().toISOString(),
+    schoolCode: schoolCode || '',
+    scope: 'DATA',
+    includesSecrets: false,
+    source: 'local',
+    data: {
+      students: [],
+      teachers: [],
+      assignments: [],
+      slots: [],
+      attendance: [],
+      excuses: [],
+      customTemplates: [],
+      studentSchedules: {}
+    },
+    counts: { students: 0, teachers: 0, assignments: 0, attendance: 0, excuses: 0 }
+  };
 }

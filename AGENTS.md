@@ -683,6 +683,35 @@ El proveedor **Email/Password NO está habilitado** en Firebase Console (`accoun
 **⏳ Desbloqueo requerido del propietario (RESUELTO el 03/09 — ver continuación):**
 - ~~(a) Reparar el despliegue automático~~ / ~~(b) Entregar un token~~ → **El propietario entregó token fresco** (guardado en `/home/z/my-project/secrets/` fuera del repo, junto con VAPID y GitHub PAT; son temporales y los rotará él).
 
+### ✅ Ronda 28 (05/09/2026): PURGA DE LA NUBE DESDE LA UI + COPIA COMPLETA DEL WORKER — el ciclo "datos demo contaminantes" se cierra sin wrangler
+
+**Origen (petición textual del propietario):** confirmado que sin token un dispositivo con caché no sube nada a la nube (verificado en código: `verifyAuth` guarda TODAS las rutas salvo `/api/health`; push/pull/excusas/suscripciones responden 401 y el frontend degrada sin perder datos — `cloudflareSync` devuelve `success:false` y `excuseService` muestra el error sin guardar nada). Pidió además: (1) pruebas integrales de lo implementado, y (2) "en Ajustes → Sincronización y Seguridad un interruptor o botón que elimine los datos demo de la nube… pero tampoco hay que hacerlo al azar porque si rompe las cosas".
+
+**1. Worker — `GET /api/sync/export` (volcado completo, solo lectura):**
+- A diferencia de `/api/sync/pull` (snapshot KV con ÚLTIMOS 500 registros), exporta TODAS las filas de D1 sin límites: students, teachers, schedule_assignments, schedule_slots, attendance_records, student_excuses + el snapshot KV vigente + conteos de audit_logs/push_subscriptions (archive-only: la cadena HMAC de la era no se re-inyecta).
+- Las excusas NO viajan en el snapshot de sync — este endpoint es la única vía de respaldo fiel del Buzón completo.
+- Protegido por el guard global AUTH_TOKEN (Ronda 27). Filas D1 en snake_case crudo — el frontend normaliza.
+
+**2. Worker — `POST /api/sync/purge` (purga D1+KV con 5 barreras):**
+- (1) guard global AUTH_TOKEN; (2) rate limit 3/h por IP (patrón H-2, Map por isolate — cuenta TODOS los intentos, incluso los rechazados por confirmación); (3) cuerpo exige `{confirm:"PURGAR"}` EXACTO (400 si falta); (4) la UI descarga la copia previa ANTES y bloquea si falla; (5) auditoría `CLOUD_PURGE` insertada DESPUÉS de los DELETEs — la era nueva arranca con el registro del propio evento (survive check: audit_logs=1 post-purga, verificado).
+- Orden FK-seguo (hijas antes que madres; las cruzadas attendance↔excuses primero): attendance_records → student_excuses → students → teachers → schedule_assignments → schedule_slots → sync_snapshots → push_subscriptions → audit_logs. Reporte por tabla via `meta.changes`. KV (namespace dedicado): list con cursor + delete de TODAS las claves con nombres en el reporte. Si D1 purga pero KV falla → 500 explícito con lo ya hecho (jamás éxito parcial silencioso).
+
+**3. Frontend — `CloudPurgeSection` (Ajustes → Sync y Seguridad, bajo el Respaldo Local):**
+- **Descargar copia de la nube**: export → `buildBackupFromCloudExport` → `INAS_respaldo_nube_<fecha>.json`. Lectura PURA (no hidrata localStorage, al contrario del Pull — evita contaminar el dispositivo con lo que se quiere limpiar).
+- **Purgar datos de la nube…**: flujo de 4 pasos — copia previa INNEGOCIABLE (`INAS_respaldo_nube_antes_de_purgar_<fecha>.json`; si falla, la purga queda BLOQUEADA con botón de reintento) → avisos (qué se borra, GENESIS de la cadena, reactivación de notificaciones) → confirmación TIPEADA "PURGAR" (patrón GitHub) → reporte con filas borradas por tabla + claves KV.
+- Casilla opcional "también dejar este dispositivo en blanco": aplica `buildEmptyWipeBackup` (patrón anti-seed R27: `[]` persistido explícito, NUNCA re-inyecta demo; PRESERVA settings y estructura de jornada) + recarga. Sin la casilla, aviso explícito: el auto-sync re-subirá el estado local en ≤ intervalo.
+- Oculta para rol Portal (misma fuente de rol que pushService: `inas_push_role_v1` → `inas_user_session_v5`); aviso si falta URL o token (401 garantizado).
+
+**4. Normalización cloud→frontend (`backupService.ts`):**
+- `buildBackupFromCloudExport`: fuente de verdad EN ORDEN — (1) snapshot KV (objetos frontend fieles que algún dispositivo subió), (2) filas D1 snake_case normalizadas (fallback si KV vacía). `source:'cloud'` marcado en el formato (campo opcional, compatible con `validateBackup` existente). Excusas SIEMPRE de D1 con `normalizeExcuse` (exportada desde excuseService).
+- Normalizadores D1: estudiante (sección derivada del grado "6°1"→"1", active desde status), registro (verified_hmac→bool, timestamp sintetizado date+time, overlay excuse_id preservado), slot (order/duración derivada de HH:MM — D1 no guarda durationMinutes).
+
+**Validación:** `tsc` 0 errores (raíz + worker) · `vite build` 8.3 s · suites nuevas: **Ronda 28 lógica pura 21/21** (`scripts/verify_ronda28.ts`: KV preferida vs D1 fallback, normalizaciones, wipe local preserva slots/settings) y **Ronda 28 worker 28/28** (`scripts/verify_ronda28_worker.sh`, wrangler dev LOCAL — lección H-1 respetada, jamás toca producción): ciclo export→seed(2 est+1 reg+1 excusa 201)→purga(400 sin confirm / 200 con PURGAR / reporte exacto / 2 claves KV)→export en 0 + audit_logs=1; y con AUTH_TOKEN: 401 sin/incorrecto token, 200 con token, health abierto, 429 en la 4.ª purga. **Regresión: Día Cero 41/41, Ronda 19 111/111.** Lección de pruebas: el proceso `npx wrangler dev` sobrevive al kill del padre (workerd huérfano retiene el puerto y el isolate — el rate limit de la corrida 1 "contaminaba" a la 2); fix: puertos distintos por corrida + pkill de workerd.
+
+**Despliegue:** frontend push automático (Pages). **El Worker SÍ requiere `wrangler deploy` manual** (token del propietario) — mientras no se despliegue, los botones nuevos responderán 404 del worker vivo (degradación honesta con mensaje). Sin migraciones ni secrets nuevos.
+
+**Checklist de producción vigente (R27 §7 + esta ronda):** borrar localStorage por dispositivo → configurar AUTH_TOKEN por dispositivo → importar matrícula real CSV → reactivar notificaciones → prueba push 2 dispositivos → (opcional) rotar qrSecret y regenerar carnés. NUEVO: para limpiar datos demo de aprobadores ya no hace falta wrangler — botón "Purgar datos de la nube…" con copia previa automática.
+
 ### ✅ Ronda 27 (05/09/2026): DÍA CERO — handoff de producción ejecutado (anti-seed + purga demo + hardening + respaldo export/import)
 
 **Origen:** el agente QA entregó el paquete `handoff-produccion.zip` (Ronda 27): purga de datos demo decidida por el propietario, switch anti-seed, hardening y respaldo export/import. El agente de ejecución (este) lo ejecutó COMPLETO con el token CF del propietario (verificado: `active`, acct `5d4e4bd4…`). Despliegues: frontend `index-BTBWHWCC` (anti-seed) → `index-DCtLlHME` (respaldo); worker `0b2ae3ce` (H-2) — **desde git** (lección H-1).

@@ -13,7 +13,7 @@ import { handlePushRoutes } from './push';
 export interface D1PreparedStatement {
   bind(...values: any[]): D1PreparedStatement;
   first<T = unknown>(colName?: string): Promise<T | null>;
-  run<T = unknown>(): Promise<{ success: boolean; results?: T[]; error?: string }>;
+  run<T = unknown>(): Promise<{ success: boolean; results?: T[]; error?: string; meta?: { changes?: number } }>;
   all<T = unknown>(): Promise<{ success: boolean; results?: T[] }>;
 }
 
@@ -110,6 +110,36 @@ function verifyAuth(request: Request, env: Env): boolean {
   if (!authHeader) return false;
   const token = authHeader.replace(/^Bearer\s+/i, '').trim();
   return timingSafeEqual(token, env.AUTH_TOKEN.trim());
+}
+
+// ==============================================================================
+// Ronda 28 — PURGA DE LA NUBE con rate limit (defensa en profundidad, patrón
+// H-2 de push.ts): máx. 3 purgas por hora por IP. El Map vive mientras viva el
+// isolate — suficiente contra abuso casual; la barrera real es el AUTH_TOKEN
+// (guard global) + confirmación textual "PURGAR" en el cuerpo.
+// ==============================================================================
+const PURGE_HITS = new Map<string, number[]>();
+const PURGE_LIMIT_PER_HOUR = 3;
+
+function purgeRateLimited(ip: string): boolean {
+  const now = Date.now();
+  const windowStart = now - 60 * 60 * 1000;
+  const hits = (PURGE_HITS.get(ip) || []).filter((t) => t > windowStart);
+  if (hits.length >= PURGE_LIMIT_PER_HOUR) {
+    PURGE_HITS.set(ip, hits);
+    return true;
+  }
+  hits.push(now);
+  PURGE_HITS.set(ip, hits);
+  return false;
+}
+
+function clientIp(request: Request): string {
+  return (
+    request.headers.get('CF-Connecting-IP') ||
+    request.headers.get('X-Forwarded-For')?.split(',')[0].trim() ||
+    'unknown'
+  );
 }
 
 export default {
@@ -337,6 +367,182 @@ export default {
         }
 
         return errorResponse('No se encontraron datos de sincronización previos para este colegio.', 404);
+      }
+
+      // =========================================================================
+      // RUTA: SYNC EXPORT (Ronda 28) — Volcado COMPLETO de la nube para respaldo.
+      // A diferencia de /pull (snapshot KV con últimos 500 registros), este endpoint
+      // lee TODAS las filas de D1 sin límites + el snapshot KV + las excusas.
+      // Propósito: copia fiel ANTES de operaciones destructivas (purga) y archivo
+      // forense de cada "era" de datos. Requiere AUTH_TOKEN (guard global).
+      // =========================================================================
+      if (path === '/api/sync/export' && request.method === 'GET') {
+        const schoolCode = url.searchParams.get('schoolCode') || env.SCHOOL_CODE || 'INAS_2026';
+
+        const count = async (table: string): Promise<number> => {
+          if (!env.DB) return 0;
+          try {
+            const row = await env.DB.prepare(`SELECT COUNT(*) AS n FROM ${table}`).first<{ n: number }>();
+            return row?.n ?? 0;
+          } catch { return 0; }
+        };
+
+        const all = async <T = any>(table: string): Promise<T[]> => {
+          if (!env.DB) return [];
+          try {
+            const res = await env.DB.prepare(`SELECT * FROM ${table}`).all<T>();
+            return res.results || [];
+          } catch { return []; }
+        };
+
+        // Snapshot KV vigente (estructura de jornada + settings viajan dentro).
+        let kvSnapshot: any = null;
+        if (env.ATTENDANCE_KV) {
+          try {
+            kvSnapshot = await env.ATTENDANCE_KV.get(`latest_snapshot_${schoolCode}`, 'json');
+          } catch { kvSnapshot = null; }
+        }
+
+        const [students, teachers, assignments, slots, records, excuses, auditN, subsN] = await Promise.all([
+          all('students'),
+          all('teachers'),
+          all('schedule_assignments'),
+          all('schedule_slots'),
+          all('attendance_records'),
+          all('student_excuses'),
+          count('audit_logs'),
+          count('push_subscriptions')
+        ]);
+
+        return jsonResponse({
+          success: true,
+          source: 'Cloudflare D1 full dump + KV snapshot',
+          schoolCode,
+          exportedAt: new Date().toISOString(),
+          data: {
+            students,        // filas D1 crudas (snake_case) — el frontend normaliza
+            teachers,
+            assignments,
+            slots,
+            records,         // TODOS los registros de asistencia (sin recorte de 500)
+            excuses,         // buzón completo (D1 student_excuses)
+            kvSnapshot,
+            kvSnapshotSyncedAt: kvSnapshot?.syncedAt || null
+          },
+          counts: {
+            students: students.length,
+            teachers: teachers.length,
+            assignments: assignments.length,
+            slots: slots.length,
+            records: records.length,
+            excuses: excuses.length,
+            audit_logs: auditN,            // archive-only (cadena HMAC de la era)
+            push_subscriptions: subsN      // no restaurables (tokens por dispositivo)
+          }
+        });
+      }
+
+      // =========================================================================
+      // RUTA: SYNC PURGE (Ronda 28) — Eliminar TODOS los datos de la nube (D1 + KV).
+      // Caso de uso del propietario: limpiar datos demo contaminantes sin wrangler,
+      // p.ej. después de que un probador subió basura. Barreras (no es una acción al
+      // azar): (1) guard global AUTH_TOKEN, (2) rate limit 3/h por IP, (3) cuerpo
+      // exige confirm === 'PURGAR', (4) la UI descarga copia de la nube ANTES y
+      // exige tipear PURGAR, (5) auditoría CLOUD_PURGE insertada DESPUÉS de borrar
+      // (el nuevo era arranca con el registro del propio evento).
+      // ORDEN FK-SEGURO (hijas antes que madres; attendance ↔ excuses cruzadas primero).
+      // =========================================================================
+      if (path === '/api/sync/purge' && request.method === 'POST') {
+        if (purgeRateLimited(clientIp(request))) {
+          return errorResponse('Límite de purgas alcanzado (3 por hora). Espera antes de reintentar.', 429);
+        }
+
+        const body = await request.json().catch(() => null) as any;
+        if (!body || body.confirm !== 'PURGAR') {
+          return errorResponse('Confirmación requerida: el cuerpo debe incluir { "confirm": "PURGAR" } exacto.', 400);
+        }
+        const performedBy = (typeof body.performedBy === 'string' && body.performedBy.trim())
+          ? body.performedBy.trim().slice(0, 120)
+          : 'SETTINGS_UI';
+
+        if (!env.DB && !env.ATTENDANCE_KV) {
+          return errorResponse('Worker sin D1 ni KV configurados: nada que purgar.', 503);
+        }
+
+        const tables: Record<string, number> = {};
+
+        // 1) Tablas cruzadas / hijas primero (FKs: attendance→students, attendance→excuses,
+        //    excuses→students, excuses→attendance).
+        const deleteOrder = [
+          'attendance_records',
+          'student_excuses',
+          'students',
+          'teachers',
+          'schedule_assignments',
+          'schedule_slots',
+          'sync_snapshots',
+          'push_subscriptions',
+          'audit_logs'
+        ];
+
+        if (env.DB) {
+          for (const table of deleteOrder) {
+            try {
+              const res = await env.DB.prepare(`DELETE FROM ${table}`).run();
+              tables[table] = res.meta?.changes ?? 0;
+            } catch (e: any) {
+              // Tabla inexistente en despliegues viejos: cuenta 0 y continúa (purga idempotente).
+              tables[table] = 0;
+            }
+          }
+
+          // 2) Auditoría del propio evento — DESPUÉS de los DELETEs: primera fila de la era nueva.
+          try {
+            await env.DB.prepare(
+              `INSERT INTO audit_logs (id, event_type, performed_by, ip_address, details_json, created_at)
+               VALUES (?, 'CLOUD_PURGE', ?, ?, ?, datetime('now'))`
+            ).bind(
+              `purge_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+              performedBy,
+              clientIp(request),
+              JSON.stringify({ tables, reason: body.reason || 'purga-demo-produccion' })
+            ).run();
+          } catch { /* auditoría best-effort: no bloquea el reporte de purga */ }
+        }
+
+        // 3) KV: namespace DEDICADO de la app — se vacía completo con nombres reportados.
+        const kvDeleted: string[] = [];
+        if (env.ATTENDANCE_KV) {
+          try {
+            let cursor: string | undefined = undefined;
+            let complete = false;
+            while (!complete) {
+              const page = await env.ATTENDANCE_KV.list(cursor ? { cursor } : undefined);
+              for (const key of page.keys) {
+                await env.ATTENDANCE_KV.delete(key.name);
+                kvDeleted.push(key.name);
+              }
+              complete = page.list_complete;
+              cursor = (page as any).cursor;
+            }
+          } catch (e: any) {
+            return jsonResponse({
+              success: false,
+              error: `D1 purgado pero KV falló: ${e?.message || e}. Revisa la KV manualmente.`,
+              tables,
+              kvDeleted
+            }, 500);
+          }
+        }
+
+        return jsonResponse({
+          success: true,
+          message: `Nube purgada: ${Object.values(tables).reduce((a, b) => a + b, 0)} filas D1 eliminadas y ${kvDeleted.length} claves KV borradas. La cadena de excusas reinicia en GENESIS con la próxima excusa real.`,
+          timestamp: new Date().toISOString(),
+          tables,
+          kvDeleted,
+          note: 'Las suscripciones push fueron eliminadas: cada dispositivo debe reactivar notificaciones. El auto-sync de los dispositivos volverá a subir su estado local en el próximo intervalo.'
+        });
       }
 
       // =========================================================================

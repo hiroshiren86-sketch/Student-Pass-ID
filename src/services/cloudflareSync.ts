@@ -12,6 +12,14 @@ export interface CloudflareSyncResult {
   details?: any;
 }
 
+/** Reporte de purga devuelto por el Worker (filas D1 por tabla + claves KV borradas). */
+export interface CloudPurgeReport {
+  tables: Record<string, number>;
+  kvDeleted: string[];
+  message: string;
+  note?: string;
+}
+
 /**
  * Ronda 16 (auditoría integral): arquitectura de sincronización SIMPLIFICADA y SEGURA.
  *
@@ -376,5 +384,69 @@ export class CloudflareSyncService {
       ...current,
       lastCloudflareSync: `${new Date().toLocaleDateString('es-CO')} ${timeStr}`
     });
+  }
+
+  // ===========================================================================
+  // Ronda 28 — EXPORT Y PURGA DE LA NUBE (Ajustes → Sync y Seguridad)
+  // ===========================================================================
+
+  /**
+   * Descarga el volcado COMPLETO de la nube (GET /api/sync/export) SIN tocar el
+   * estado local — a diferencia de pullFromCloudflare(), este método no hidrata
+   * localStorage: es una lectura pura para respaldos y para la purga asistida.
+   */
+  static async fetchCloudExport(): Promise<{ ok: boolean; data?: any; counts?: Record<string, number>; message: string }> {
+    const settings = AttendanceStorageService.getSettings();
+    const baseUrl = this.getWorkerBaseUrl();
+    if (!baseUrl) {
+      return { ok: false, message: 'URL del Cloudflare Worker no configurada. Ingrésala en Ajustes → Sync y Seguridad.' };
+    }
+    try {
+      const schoolCode = settings.schoolCode || 'INAS_2026';
+      const res = await fetch(`${baseUrl}/api/sync/export?schoolCode=${encodeURIComponent(schoolCode)}`, {
+        method: 'GET',
+        headers: this.workerHeaders()
+      });
+      const json = await res.json().catch(() => null);
+      if (!res.ok || !json?.success) {
+        return { ok: false, message: json?.error || `Worker HTTP ${res.status}` };
+      }
+      return { ok: true, data: json.data, counts: json.counts, message: 'Volcado completo de la nube recibido.' };
+    } catch (err: any) {
+      return { ok: false, message: `Fallo al exportar la nube: ${err?.message || err}` };
+    }
+  }
+
+  /**
+   * Ejecuta la purga de la nube (POST /api/sync/purge). El Worker exige
+   * confirm === 'PURGAR' en el cuerpo — la UI además descarga el respaldo previo
+   * y pide tipear la frase. Jamás llamada sin intervención explícita del usuario.
+   */
+  static async purgeCloudData(performedBy: string): Promise<{ ok: boolean; report?: CloudPurgeReport; message: string }> {
+    const baseUrl = this.getWorkerBaseUrl();
+    if (!baseUrl) {
+      return { ok: false, message: 'URL del Cloudflare Worker no configurada. Ingrésala en Ajustes → Sync y Seguridad.' };
+    }
+    if (!(AttendanceStorageService.getSettings().cloudflareApiToken || '').trim()) {
+      return { ok: false, message: 'Sin el Token de Acceso (AUTH_TOKEN) configurado, el Worker rechazará la purga con 401. Configúralo arriba en esta misma pestaña.' };
+    }
+    try {
+      const res = await fetch(`${baseUrl}/api/sync/purge`, {
+        method: 'POST',
+        headers: this.workerHeaders(),
+        body: JSON.stringify({ confirm: 'PURGAR', performedBy: performedBy || 'SETTINGS_UI' })
+      });
+      const json = await res.json().catch(() => null);
+      if (!res.ok || !json?.success) {
+        return { ok: false, message: json?.error || `Worker HTTP ${res.status}: la nube NO fue purgada.` };
+      }
+      return {
+        ok: true,
+        report: { tables: json.tables || {}, kvDeleted: json.kvDeleted || [], message: json.message, note: json.note },
+        message: json.message
+      };
+    } catch (err: any) {
+      return { ok: false, message: `Fallo de red durante la purga: ${err?.message || err}` };
+    }
   }
 }

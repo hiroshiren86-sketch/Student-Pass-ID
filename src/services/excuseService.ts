@@ -38,8 +38,10 @@ const EXCUSES_CACHE_KEY = 'inas_excuses_cache_v1';
  * buzón de Rectoría y "Mis Justificaciones" mostraban nombre/fechas/motivo
  * VACÍOS desde la Ronda 21 (los botones funcionaban; el texto no). Tolerante
  * con ambas formas: si ya viene normalizado (POST/decide), no toca nada.
+ * Exportada desde Ronda 28: backupService la reutiliza para normalizar las
+ * excusas del volcado completo de la nube (GET /api/sync/export).
  */
-function normalizeExcuse(raw: any): StudentExcuse {
+export function normalizeExcuse(raw: any): StudentExcuse {
   if (!raw || typeof raw !== 'object') return raw;
   const pick = <T>(camel: T, snake: any): T =>
     (camel === undefined || camel === null ? (snake as T) : camel);
