@@ -19,8 +19,8 @@
  * ==============================================================================
  */
 
-const SHELL_CACHE = 'inas-pwa-shell-v1';
-const STATIC_CACHE = 'inas-pwa-static-v1';
+const SHELL_CACHE = 'inas-pwa-shell-v2';
+const STATIC_CACHE = 'inas-pwa-static-v2';
 
 const PRECACHE_URLS = [
   '/',

@@ -26,6 +26,7 @@ import {
 import { Teacher } from '../types/attendance';
 import { AttendanceStorageService } from '../services/attendanceStorage';
 import { FirebaseService } from '../services/firebase';
+import { INSTITUTIONAL_SUBJECTS } from '../constants/subjects'; // Ronda 34: lista institucional única de asignaturas
 
 export const TeachersManagerView: React.FC = () => {
   const [teachers, setTeachers] = useState<Teacher[]>(AttendanceStorageService.getTeachers());
@@ -624,19 +625,24 @@ export const TeachersManagerView: React.FC = () => {
                 </div>
               </div>
 
-              {/* Subjects */}
+              {/* Subjects — Ronda 34: datalist con la lista institucional (sugerencias;
+                  el texto separado por comas sigue siendo libre) */}
               <div>
                 <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 uppercase tracking-wider mb-1">
                   Asignaturas que Dicta (Separadas por coma)
                 </label>
                 <input
                   type="text"
-                  placeholder="Matemáticas, Física, Geometría"
+                  list="inas-subjects-datalist-teacher"
+                  placeholder="Matemáticas, Física, Educación Religiosa, Cátedra de la Paz…"
                   value={formData.subjectsText}
                   onChange={(e) => setFormData({ ...formData, subjectsText: e.target.value })}
                   className="w-full px-3 py-2 bg-white dark:bg-black border border-slate-300 dark:border-zinc-800 rounded-xl text-xs text-slate-900 dark:text-white focus:ring-2 focus:ring-indigo-500 outline-none"
                   required
                 />
+                <datalist id="inas-subjects-datalist-teacher">
+                  {INSTITUTIONAL_SUBJECTS.map(s => <option key={s} value={s} />)}
+                </datalist>
               </div>
 
               {/* Assigned Grades Selection */}

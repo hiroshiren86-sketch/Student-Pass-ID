@@ -30,6 +30,7 @@ import { DocumentUploadModal } from './DocumentUploadModal';
 import { ConfirmDialog } from './ConfirmDialog';
 import { normalizeGradeName, isValidGrade } from '../utils/documentParser';
 import { compressImageFile } from '../utils/imageCompressor';
+import { KeyRound, Copy } from 'lucide-react'; // Ronda 34 (H-34-2): clave de acceso visible en la matrícula
 
 interface StudentsManagerViewProps {
   onGenerateCard?: (student: Student) => void;
@@ -877,6 +878,48 @@ export const StudentsManagerView: React.FC<StudentsManagerViewProps> = ({ onGene
               </p>
             </div>
 
+            {/* Ronda 34 (H-34-2): la clave de acceso ANTES solo existía en el PDF impreso —
+                Rectoría no podía verla en pantalla y el estudiante quedaba sin credencial
+                utilizable. Ahora se muestra junto al código, con copia al portapapeles. */}
+            {justSavedStudent.tempPassword && (
+              <div className="p-3.5 rounded-2xl bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-800 text-left space-y-2">
+                <div className="flex items-center gap-2">
+                  <KeyRound className="w-4 h-4 text-amber-600 dark:text-amber-400 shrink-0" />
+                  <span className="text-[10px] font-black uppercase tracking-wider text-amber-700 dark:text-amber-300">Credenciales de ingreso al portal</span>
+                </div>
+                <div className="flex items-center justify-between gap-2">
+                  <div className="min-w-0">
+                    <span className="block text-[10px] font-bold uppercase text-slate-400">Código</span>
+                    <span className="font-mono text-sm font-black text-slate-900 dark:text-white truncate block">{justSavedStudent.code}</span>
+                  </div>
+                  <div className="min-w-0 text-right">
+                    <span className="block text-[10px] font-bold uppercase text-slate-400">Clave de acceso</span>
+                    <span className="font-mono text-sm font-black text-amber-700 dark:text-amber-300 truncate block">{justSavedStudent.tempPassword}</span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const texto = `Código: ${justSavedStudent.code} · Clave: ${justSavedStudent.tempPassword}`;
+                      navigator.clipboard?.writeText(texto).then(() => {
+                        setToastMessage('Credenciales copiadas al portapapeles.');
+                        setTimeout(() => setToastMessage(null), 2500);
+                      }).catch(() => {});
+                    }}
+                    className="p-2 rounded-xl bg-white dark:bg-black border border-amber-300 dark:border-amber-700 text-amber-700 dark:text-amber-300 hover:bg-amber-100 dark:hover:bg-amber-900/50 transition-colors shrink-0"
+                    title="Copiar código y clave"
+                    aria-label="Copiar código y clave de acceso"
+                  >
+                    <Copy className="w-4 h-4" />
+                  </button>
+                </div>
+                <p className="text-[10px] text-slate-500 dark:text-slate-400 leading-relaxed">
+                  Entréguelas impresas al estudiante/acudiente: con ellas ingresa al portal
+                  (pestaña Estudiante / Representante) desde cualquier dispositivo donde esté
+                  registrada la matrícula. La clave también va en el reverso del carné PDF.
+                </p>
+              </div>
+            )}
+
             <div className="flex items-center justify-center gap-2 pt-2">
               <button
                 onClick={() => setJustSavedStudent(null)}
@@ -987,6 +1030,34 @@ export const StudentsManagerView: React.FC<StudentsManagerViewProps> = ({ onGene
                 )}
               </div>
             </div>
+
+            {/* Ronda 34 (H-34-2): clave de acceso consultable — antes solo el PDF la llevaba.
+                Bloque discreto (solo para ojos de Rectoría ya autenticada) con copia rápida. */}
+            {inspectStudent.tempPassword && (
+              <div className="p-3 rounded-2xl bg-slate-50 dark:bg-black border border-slate-200 dark:border-zinc-800 flex items-center justify-between gap-3">
+                <div className="flex items-center gap-2 min-w-0">
+                  <KeyRound className="w-4 h-4 text-indigo-500 shrink-0" />
+                  <div className="min-w-0">
+                    <span className="block text-[9px] font-bold uppercase text-slate-400">Clave de acceso al portal (reverso del carné)</span>
+                    <span className="font-mono text-xs font-black text-slate-900 dark:text-white truncate block">{inspectStudent.tempPassword}</span>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    navigator.clipboard?.writeText(inspectStudent.tempPassword || '').then(() => {
+                      setToastMessage('Clave de acceso copiada.');
+                      setTimeout(() => setToastMessage(null), 2500);
+                    }).catch(() => {});
+                  }}
+                  className="p-2 rounded-xl bg-white dark:bg-zinc-950 border border-slate-200 dark:border-zinc-800 text-slate-500 hover:text-indigo-600 dark:hover:text-indigo-400 transition-colors shrink-0"
+                  title="Copiar clave de acceso"
+                  aria-label="Copiar clave de acceso"
+                >
+                  <Copy className="w-4 h-4" />
+                </button>
+              </div>
+            )}
 
             <div className="flex items-center justify-end gap-2 pt-2">
               <button

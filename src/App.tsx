@@ -617,7 +617,7 @@ export default function App() {
         {activeTab === 'attendance' && <AttendanceReportsView currentRole={currentRole} reviewedBy={loggedUser.username} />}
         {activeTab === 'excuses' && <ExcusesInboxView reviewedBy={loggedUser.username} />}
         {activeTab === 'ai-grades' && <GradeAiSummaryView />}
-        {activeTab === 'portal' && <StudentPortalView activeStudentCode={loggedUser.student?.code} />}
+        {activeTab === 'portal' && <StudentPortalView activeStudentCode={loggedUser.student?.code} onLogout={handleLogout} />}
       </main>
 
       {/* Ronda 29: Asistente de primer ingreso (una vez por perfil/dispositivo) */}

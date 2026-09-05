@@ -36,6 +36,7 @@ import jsQR from 'jsqr';
 import { Student, AttendanceRecord, SchoolSettings, Teacher, ScheduleSlot, AttendanceStatus, EphemeralScanDelegation } from '../types/attendance';
 import { AttendanceStorageService, getTodayDateString, getCurrentTimeString } from '../services/attendanceStorage';
 import { ExcuseService } from '../services/excuseService'; // Ronda 21: protección de excusas en el cierre de bloque
+import { INSTITUTIONAL_SUBJECTS } from '../constants/subjects'; // Ronda 34: lista institucional única de asignaturas
 import { SoundService } from '../utils/sound';
 
 // Ronda 19 — autogestión docente: días para "Mis Cátedras"
@@ -69,7 +70,7 @@ export const TeacherClassroomView: React.FC<TeacherClassroomViewProps> = ({
     teacher?.directorGrade || teacher?.assignedGrades?.[0] || uniqueGrades[0] || '6°1'
   );
   const [selectedSlotId, setSelectedSlotId] = useState<string>(scheduleSlots[0]?.id || 'slot-1');
-  const [selectedSubject, setSelectedSubject] = useState<string>(teacher?.subjects?.[0] || 'Matemáticas');
+  const [selectedSubject, setSelectedSubject] = useState<string>(teacher?.subjects?.[0] || INSTITUTIONAL_SUBJECTS[0]);
   const [soundEnabled, setSoundEnabled] = useState<boolean>(true);
   const [showChangePasswordModal, setShowChangePasswordModal] = useState<boolean>(false);
   
@@ -695,11 +696,12 @@ export const TeacherClassroomView: React.FC<TeacherClassroomViewProps> = ({
               </select>
             </div>
 
-            {/* Subject Selector */}
+            {/* Subject Selector — Ronda 34: datalist con la lista institucional (libertad de texto + sugerencias oficiales) */}
             <div>
               <label className="block text-[10px] font-bold uppercase text-slate-400 mb-1">Asignatura</label>
               <input
                 type="text"
+                list="inas-subjects-datalist"
                 value={selectedSubject}
                 onChange={(e) => setSelectedSubject(e.target.value)}
                 className="py-2 px-3 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-zinc-800 rounded-xl text-xs font-bold text-slate-900 dark:text-white outline-none w-36"
@@ -1499,6 +1501,7 @@ export const TeacherClassroomView: React.FC<TeacherClassroomViewProps> = ({
               <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2">
                 <input
                   type="text"
+                  list="inas-subjects-datalist"
                   value={myAsgForm.subject}
                   onChange={(e) => setMyAsgForm({ ...myAsgForm, subject: e.target.value })}
                   placeholder="Materia (ej: Matemáticas)"
@@ -1561,6 +1564,12 @@ export const TeacherClassroomView: React.FC<TeacherClassroomViewProps> = ({
         onConfirm={() => { const a = confirmState?.action; setConfirmState(null); a?.(); }}
         onCancel={() => setConfirmState(null)}
       />
+      {/* Ronda 34: datalist compartido de asignaturas (id único por página; lo consumen
+          el selector del aula y el formulario Mis Cátedras). El navegador autocompleta
+          con la lista institucional y el texto libre sigue permitido. */}
+      <datalist id="inas-subjects-datalist">
+        {INSTITUTIONAL_SUBJECTS.map(s => <option key={s} value={s} />)}
+      </datalist>
     </div>
   );
 };

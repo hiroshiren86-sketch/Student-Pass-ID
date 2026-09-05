@@ -43,6 +43,7 @@ import {
   ScheduleImportResult
 } from '../types/attendance';
 import { AttendanceStorageService, schoolYearEndEpochMs } from '../services/attendanceStorage';
+import { INSTITUTIONAL_SUBJECTS } from '../constants/subjects'; // Ronda 34: lista institucional única (incluye Religión, Artística y Cátedra de la Paz)
 import QRCode from 'qrcode';
 import { generateClassQrPayload } from '../utils/crypto';
 import { ToggleSwitch } from './ToggleSwitch';
@@ -1042,19 +1043,8 @@ export const ScheduleBuilderView: React.FC = () => {
                   onChange={(e) => setAssignedSubject(e.target.value)}
                   className="w-full px-3 py-2 bg-white dark:bg-black border border-slate-300 dark:border-zinc-800 rounded-xl text-xs font-bold text-slate-900 dark:text-white focus:ring-2 focus:ring-indigo-500 outline-none"
                 >
-                  <option value="Matemáticas">Matemáticas</option>
-                  <option value="Física">Física</option>
-                  <option value="Química">Química</option>
-                  <option value="Ciencias Naturales">Ciencias Naturales</option>
-                  <option value="Ciencias Sociales">Ciencias Sociales</option>
-                  <option value="Lengua Castellana">Lengua Castellana</option>
-                  <option value="Inglés">Inglés</option>
-                  <option value="Tecnología e Informática">Tecnología e Informática</option>
-                  <option value="Educación Física">Educación Física</option>
-                  <option value="Geometría">Geometría</option>
-                  <option value="Filosofía">Filosofía</option>
-                  <option value="Ética y Valores">Ética y Valores</option>
-                  <option value="Dirección de Grupo">Dirección de Grupo</option>
+                  {/* Ronda 34: sugerencias oficiales desde la lista institucional central */}
+                  {INSTITUTIONAL_SUBJECTS.map(s => <option key={s} value={s}>{s}</option>)}
                 </select>
               </div>
 

@@ -316,7 +316,11 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onLoginSuccess }) => {
                       autoCapitalize="none"
                       autoComplete="username"
                       placeholder={
-                        selectedRole === 'ESTUDIANTE_ACUDIENTE' ? 'Ej: 1000000002' : 
+                        // Ronda 34 (H-34-1): el placeholder anterior "Ej: 1000000002" parecía una
+                        // credencial precargada — Rectoría intentaba "ingresar con esa clave que
+                        // está ahí" y obtenía el error de estudiante no registrado. Ahora el
+                        // placeholder describe DÓNDE está el código en lugar de SIMULAR un código.
+                        selectedRole === 'ESTUDIANTE_ACUDIENTE' ? 'Código del reverso de su carné' :
                         'correo@institucional.edu.co'
                       }
                       className="w-full pl-10 pr-4 py-3 bg-slate-50 dark:bg-black border border-slate-200 dark:border-zinc-800/50 rounded-2xl text-xs font-bold text-slate-900 dark:text-white focus:ring-2 focus:ring-indigo-500 outline-none"
@@ -350,6 +354,16 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onLoginSuccess }) => {
                       {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
                     </button>
                   </div>
+                  {/* Ronda 34 (H-34-1): instrucción explícita — los puntos del placeholder son
+                      decorativos, la clave NO viene precargada: la entrega Rectoría impresa
+                      en el reverso del carné (o la define el acudiente tras el primer ingreso). */}
+                  {selectedRole === 'ESTUDIANTE_ACUDIENTE' && (
+                    <p className="text-[11px] text-slate-500 dark:text-slate-400 leading-relaxed mt-1.5">
+                      Los dos campos van vacíos: escriba el código Y la clave de acceso impresos
+                      en el <strong>reverso del carné</strong> (los entrega Rectoría). Si no los
+                      tiene, solicítelos en secretaría.
+                    </p>
+                  )}
                 </div>
 
                 <button
