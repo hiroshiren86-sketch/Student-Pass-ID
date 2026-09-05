@@ -63,6 +63,9 @@ export default function App() {
   const { theme, toggleTheme } = useTheme();
   const [showSettingsModal, setShowSettingsModal] = useState(false);
   const [showChangePasswordModal, setShowChangePasswordModal] = useState(false);
+  // Ronda 33 (M2): cambio de contraseña OBLIGATORIO (primer ingreso docente con
+  // contraseña temporal). En modo forzado el modal no se puede cerrar sin completar.
+  const [forcedPasswordChange, setForcedPasswordChange] = useState(false);
   const [showRoleModal, setShowRoleModal] = useState(false);
   // Ronda 29: asistente de primer ingreso (guía por perfil, una sola vez por dispositivo)
   const [showWelcomeTour, setShowWelcomeTour] = useState(false);
@@ -133,13 +136,18 @@ export default function App() {
   // (estampa del login) que habilita su restauración por < 12h al recargar. La píldora
   // de cambio de perfil ya NO pasa por aquí (era el agujero: al recargar tras cambiar
   // de perfil, el dispositivo "renacía" como Docente/Estudiante sin autenticarse).
-  const persistSession = (role: UserRole, payload?: { teacher?: Teacher; student?: Student; username: string }) => {
+  const persistSession = (role: UserRole, payload?: { teacher?: Teacher; student?: Student; username: string; uid?: string; email?: string; mustChangePassword?: boolean }) => {
     try {
       AttendanceStorageService.saveCurrentSession({
         username: payload?.username || role,
         role,
         token: 'local-session',
         authAt: Date.now(),
+        // Ronda 33 (M4): la sesión arrastra la identidad Firebase real (uid/email)
+        // y la marca de cambio forzado de contraseña del primer ingreso docente.
+        uid: payload?.uid,
+        email: payload?.email,
+        mustChangePassword: role === 'DOCENTE' ? payload?.mustChangePassword === true : undefined,
         studentCode: role === 'ESTUDIANTE_ACUDIENTE' ? payload?.student?.code : undefined,
         teacherId: role === 'DOCENTE' ? payload?.teacher?.id : undefined
       });
@@ -164,6 +172,12 @@ export default function App() {
       if (!teacher) { invalidate(); return; }
       userPayload = { teacher, username: teacher.fullName };
       setActiveTab('teacher');
+      // Ronda 33 (M2): una sesión restaurada que arrastraba cambio obligatorio pendiente
+      // vuelve a forzar el modal (el docente cerró antes de terminar el primer ingreso).
+      if (session.mustChangePassword === true) {
+        setForcedPasswordChange(true);
+        setShowChangePasswordModal(true);
+      }
     } else if (session.role === 'ESTUDIANTE_ACUDIENTE') {
       const student = AttendanceStorageService.getStudents().find(s => s.code === session.studentCode);
       if (!student) { invalidate(); return; }
@@ -180,7 +194,7 @@ export default function App() {
   };
 
   // Handle successful login
-  const handleLoginSuccess = (role: UserRole, userPayload?: { teacher?: Teacher; student?: Student; username: string }) => {
+  const handleLoginSuccess = (role: UserRole, userPayload?: { teacher?: Teacher; student?: Student; username: string; uid?: string; email?: string; mustChangePassword?: boolean }) => {
     setCurrentRole(role);
     setIsAuthenticated(true);
     persistSession(role, userPayload);
@@ -188,6 +202,16 @@ export default function App() {
       setLoggedUser(userPayload);
     } else {
       setLoggedUser({ username: role });
+    }
+
+    // Ronda 33 (M2): primer ingreso docente con contraseña temporal — el cambio de
+    // contraseña es OBLIGATORIO antes de usar el portal (mustChangePassword proviene
+    // de users/{uid}, escrito al momento de la provisión de la cuenta).
+    setForcedPasswordChange(role === 'DOCENTE' && userPayload?.mustChangePassword === true);
+    if (role === 'DOCENTE' && userPayload?.mustChangePassword === true) {
+      setShowChangePasswordModal(true);
+    } else {
+      setShowChangePasswordModal(false);
     }
 
     // Default landing tab per role
@@ -207,6 +231,9 @@ export default function App() {
     // navegador del dispositivo heredaba el rol autenticado. Ahora la sesión se
     // destruye, la bandera de enrutamiento push se limpia y el dispositivo vuelve
     // a la pantalla de login.
+    // Ronda 33 (M4): el logout también destruye la sesión de Firebase Auth —
+    // dejarla viva mantendría una identidad válida en el SDK tras el logout UI.
+    FirebaseService.logout().catch(() => {});
     AttendanceStorageService.clearSession();
     try { localStorage.removeItem('inas_push_role_v1'); } catch {}
     setCurrentRole('ADMIN');
@@ -497,13 +524,11 @@ export default function App() {
                       </span>
                     </button>
 
-                    {/* Ronda 32 (fix aceptación MISIÓN AUTH): el autoservicio de contraseña es SOLO del
-                        portal docente. Para Rectoría/Estudiante el modal del agente de Firebase era un
-                        NO-OP con falso éxito (no hay objeto teacher y la sesión Firebase es anónima):
-                        mostraba "¡Contraseña actualizada correctamente!" sin cambiar nada y el usuario
-                        quedaba fuera con su clave nueva (Regla 6: jamás mostrar un flujo que no termina
-                        en un cambio real). Vuelve para esos roles cuando M1/M3 migren sus credenciales. */}
-                    {currentRole === 'DOCENTE' && loggedUser.teacher?.tempPassword && (
+                    {/* Ronda 33 (M2): el autoservicio de contraseña opera sobre la cuenta REAL
+                        de Firebase Auth del docente (hasFirebaseAccount): re-autenticación +
+                        updatePassword + limpieza de mustChangePassword. Sin cuenta real el botón
+                        no se muestra — jamás un flujo que no termina en un cambio verdadero. */}
+                    {currentRole === 'DOCENTE' && loggedUser.teacher?.hasFirebaseAccount && (
                       <button
                         onClick={() => {
                           setShowChangePasswordModal(true);
@@ -704,14 +729,20 @@ export default function App() {
         </div>
       )}
 
-      {/* Modal de cambio de contraseña — Ronda 32: solo DOCENTE con credencial real;
-          el guard del botón ya lo garantiza y este segundo guard defiende en profundidad */}
+      {/* Modal de cambio de contraseña — Ronda 33 (M2): autoservicio real con cuenta
+          Firebase (re-autenticación + updatePassword). El botón del menú exige
+          hasFirebaseAccount y este segundo guard defiende en profundidad. En modo
+          forzado (primer ingreso) no se puede cerrar sin completar el cambio. */}
       {showChangePasswordModal && loggedUser.teacher && (
         <ChangePasswordModal
-          onClose={() => setShowChangePasswordModal(false)}
+          onClose={() => {
+            setShowChangePasswordModal(false);
+            setForcedPasswordChange(false);
+          }}
           teacher={loggedUser.teacher}
           role="DOCENTE"
           username={loggedUser.username || 'Usuario'}
+          forced={forcedPasswordChange}
         />
       )}
 

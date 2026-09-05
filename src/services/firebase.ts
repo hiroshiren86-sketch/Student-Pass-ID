@@ -1,14 +1,15 @@
-import { initializeApp, getApps, getApp, FirebaseApp } from 'firebase/app';
+import { initializeApp, getApps, getApp, deleteApp, FirebaseApp } from 'firebase/app';
 import { 
   getAuth, 
-  GoogleAuthProvider, 
-  signInWithPopup, 
   signInWithEmailAndPassword, 
-  createUserWithEmailAndPassword, 
   signInAnonymously,
   signOut, 
   onAuthStateChanged,
   updatePassword,
+  reauthenticateWithCredential,
+  EmailAuthProvider,
+  sendPasswordResetEmail,
+  createUserWithEmailAndPassword,
   User as FirebaseUser
 } from 'firebase/auth';
 import { initializeAppCheck, ReCaptchaV3Provider, getToken as getAppCheckToken } from 'firebase/app-check';
@@ -18,6 +19,7 @@ import {
   collection, 
   doc, 
   setDoc,
+  updateDoc,
   deleteDoc, 
   getDoc, 
   getDocs, 
@@ -84,10 +86,6 @@ export function handleFirestoreError(error: unknown, operationType: OperationTyp
 let firebaseApp: FirebaseApp | null = null;
 let authInstance: ReturnType<typeof getAuth> | null = null;
 let firestoreDb: Firestore | null = null;
-const googleProvider = new GoogleAuthProvider();
-googleProvider.setCustomParameters({
-  prompt: 'select_account'
-});
 
 export function getFirebaseApp(): FirebaseApp {
   if (!firebaseApp) {
@@ -149,23 +147,16 @@ export function getFirebaseFirestore(): Firestore {
   return firestoreDb;
 }
 
-// ===== Ronda 18: Gobernanza de roles (cierra la escalada de privilegios) =====
+// ===== Ronda 33 (M2): provisión de cuentas reales desde Rectoría =====
 /**
- * Lista EXACTA de correos que nacen ADMIN al crear su primer perfil.
- * NUNCA usar heurísticas tipo email.includes('admin'): cualquier persona con un
- * Gmail "superadmin123@gmail.com" se convertiría en administrador. Un nuevo ADMIN
- * legítimo se agrega AQUÍ (despliegue) o promoviendo manualmente su documento
- * users/{uid} desde la Consola de Firebase (el rol persistido prevalece al iniciar
- * sesión). Registro público vía Email/Password siempre nace DOCENTE.
+ * Espejo en la nube de la ficha docente (colección teachers). Lo escribe la sesión
+ * de Rectoría (rol ADMIN según users/{uid}); NO incluye credenciales — jamás se
+ * suben contraseñas a Firestore (Ronda 16/33).
  */
-export const ADMIN_EMAILS: readonly string[] = [
-  'hiroshiren86@gmail.com'
-];
-
-export function resolveInitialRole(email: string | null | undefined, existingRole?: UserRole): UserRole {
-  if (existingRole) return existingRole; // rol persistido en users/{uid} prevalece
-  const normalized = (email || '').trim().toLowerCase();
-  return ADMIN_EMAILS.includes(normalized) ? 'ADMIN' : 'DOCENTE';
+export interface TeacherCloudMirror {
+  authEmail?: string;
+  authUid?: string;
+  hasFirebaseAccount?: boolean;
 }
 
 export interface FirebaseUserProfile {
@@ -176,6 +167,8 @@ export interface FirebaseUserProfile {
   role: UserRole;
   linkedTeacherId?: string;
   linkedStudentCode?: string;
+  /** Ronda 33 (M2): el primer ingreso exige definir contraseña personal. */
+  mustChangePassword?: boolean;
   createdAt?: any;
 }
 
@@ -229,39 +222,9 @@ export class FirebaseService {
   }
 
   /**
-   * Sign in with Google Popup
-   */
-  static async loginWithGoogle(): Promise<{ user: FirebaseUser; profile?: FirebaseUserProfile }> {
-    try {
-      const auth = getFirebaseAuth();
-      const result = await signInWithPopup(auth, googleProvider);
-      const user = result.user;
-
-      // Check or create user profile in Firestore
-      // Ronda 18: NUNCA auto-promover por heurística de texto del email (escala de
-      // privilegios). Rol = perfil persistido; si no existe, SOLO la allowlist exacta.
-      let profile = await this.getUserProfile(user.uid);
-      if (!profile) {
-        profile = {
-          uid: user.uid,
-          email: user.email,
-          displayName: user.displayName || user.email?.split('@')[0] || 'Usuario Google',
-          photoURL: user.photoURL,
-          role: resolveInitialRole(user.email)
-        };
-
-        await this.saveUserProfile(profile);
-      }
-
-      return { user, profile };
-    } catch (error: any) {
-      console.error('Error logging in with Google:', error);
-      throw error;
-    }
-  }
-
-  /**
-   * Sign in with Email and Password
+   * Sign in with Email and Password (M1/M2 — el estándar de Ronda 33).
+   * Devuelve también el perfil users/{uid}: el ROL se decide por el documento
+   * persistido en Firestore (jamás por el correo ni por un check embebido).
    */
   static async loginWithEmail(email: string, pass: string): Promise<{ user: FirebaseUser; profile?: FirebaseUserProfile }> {
     try {
@@ -276,33 +239,188 @@ export class FirebaseService {
   }
 
   /**
-   * Register with Email and Password
-   * Ronda 18 (multi-admin): el rol YA NO lo elige el cliente — cualquier registro
-   * público nace DOCENTE, salvo que el correo esté en la allowlist institucional
-   * (ADMIN_EMAILS). El rol de administradores adicionales se otorga promoviendo su
-   * documento users/{uid} desde la Consola de Firebase (procedimiento en AGENTS.md).
+   * Mapea códigos de Firebase Auth a mensajes honestos y sin fugas de información
+   * (jamás revelan si el correo existe o no — anti enumeración de usuarios).
    */
-  static async registerWithEmail(email: string, pass: string, _requestedRole: UserRole, displayName: string): Promise<{ user: FirebaseUser; profile: FirebaseUserProfile }> {
+  static mapAuthError(error: unknown): string {
+    const code = (error && typeof error === 'object' && 'code' in error) ? String((error as any).code) : '';
+    switch (code) {
+      case 'auth/invalid-credential':
+      case 'auth/wrong-password':
+      case 'auth/user-not-found':
+      case 'auth/invalid-login-credentials':
+        return 'Credenciales incorrectas. Verifique su correo y contraseña.';
+      case 'auth/invalid-email':
+        return 'El correo electrónico no tiene un formato válido.';
+      case 'auth/too-many-requests':
+        return 'Demasiados intentos fallidos. Espere unos minutos e intente de nuevo.';
+      case 'auth/network-request-failed':
+        return 'No hay conexión con el servidor de acceso. Verifique su internet e intente de nuevo.';
+      case 'auth/unauthorized-domain':
+        return 'Este dominio no está autorizado para el acceso. Contacte a Rectoría.';
+      case 'auth/operation-not-allowed':
+        return 'El acceso por correo y contraseña está deshabilitado en Firebase. Contacte a Rectoría.';
+      case 'auth/user-disabled':
+        return 'Esta cuenta está deshabilitada. Contacte a Rectoría.';
+      case 'auth/email-already-in-use':
+        return 'Ya existe una cuenta con ese correo. Use "Crear cuenta" solo para docentes sin acceso.';
+      default:
+        return 'No se pudo iniciar sesión. Intente de nuevo o contacte a Rectoría.';
+    }
+  }
+
+  /**
+   * Ronda 33 (M2): crea la cuenta REAL de Firebase Auth de un docente desde la
+   * sesión de Rectoría, SIN cerrar la sesión de Rectoría.
+   *
+   * Técnica oficial (documentación Firebase): instancia secundaria de la app —
+   * createUserWithEmailAndPassword sobre un initializeApp con nombre propio crea la
+   * cuenta y SOLO inicia sesión en esa instancia secundaria, que se destruye al
+   * terminar. La sesión principal (Rectoría) queda intacta.
+   *
+   * El nuevo usuario escribe su propio perfil users/{uid} (role DOCENTE,
+   * linkedTeacherId, mustChangePassword=true — el primer ingreso exigirá definir
+   * contraseña personal) y se firma el espejo en teachers/{id} con la sesión de
+   * Rectoría.
+   */
+  static async provisionTeacherAccount(email: string, tempPassword: string, teacherId: string, displayName: string): Promise<{ uid: string; email: string }> {
+    const cleanEmail = (email || '').trim().toLowerCase();
+    if (!cleanEmail || !cleanEmail.includes('@')) {
+      throw new Error('El docente necesita un correo institucional válido para crear su cuenta de acceso.');
+    }
+    const secondaryApp = initializeApp({
+      apiKey: firebaseConfigData.apiKey,
+      authDomain: firebaseConfigData.authDomain,
+      projectId: firebaseConfigData.projectId,
+      storageBucket: firebaseConfigData.storageBucket,
+      messagingSenderId: firebaseConfigData.messagingSenderId,
+      appId: firebaseConfigData.appId
+    }, `inas-provisioner-${Date.now()}`);
     try {
-      const auth = getFirebaseAuth();
-      const result = await createUserWithEmailAndPassword(auth, email, pass);
+      const secondaryAuth = getAuth(secondaryApp);
+      const dbId = firebaseConfigData.firestoreDatabaseId && firebaseConfigData.firestoreDatabaseId !== '(default)'
+        ? firebaseConfigData.firestoreDatabaseId
+        : undefined;
+      // Ronda 33: Firestore debe ser el de la INSTANCIA SECUNDARIA — así el write
+      // de users/{uid} viaja con el idToken del usuario NUEVO (dueño del documento,
+      // permitido por las reglas). Usar la instancia principal enviaría el token de
+      // Rectoría y las reglas lo denegarían (request.auth.uid ≠ userId).
+      const secondaryDb = dbId ? getFirestore(secondaryApp, dbId) : getFirestore(secondaryApp);
+      let cred;
+      try {
+        cred = await createUserWithEmailAndPassword(secondaryAuth, cleanEmail, tempPassword);
+      } catch (e: any) {
+        // Recuperación honesta de huérfanos: si el correo ya existe pero la clave
+        // temporal sigue siendo válida (intento anterior falló a mitad de camino),
+        // reanudamos la provisión con ESA cuenta en lugar de abandonar al docente.
+        const code = (e && typeof e === 'object' && 'code' in e) ? String((e as any).code) : '';
+        if (code !== 'auth/email-already-in-use') throw e;
+        cred = await signInWithEmailAndPassword(secondaryAuth, cleanEmail, tempPassword);
+      }
       const profile: FirebaseUserProfile = {
-        uid: result.user.uid,
-        email: result.user.email,
-        displayName: displayName,
+        uid: cred.user.uid,
+        email: cleanEmail,
+        displayName: displayName || cleanEmail.split('@')[0],
         photoURL: null,
-        role: resolveInitialRole(result.user.email) // ignora _requestedRole (cerrado por seguridad)
+        role: 'DOCENTE',
+        linkedTeacherId: teacherId,
+        mustChangePassword: true
       };
-      await this.saveUserProfile(profile);
-      return { user: result.user, profile };
+      await setDoc(doc(secondaryDb, 'users', cred.user.uid), {
+        ...profile,
+        updatedAt: serverTimestamp()
+      }, { merge: true });
+      await this.mirrorTeacherCloud(teacherId, { authEmail: cleanEmail, authUid: cred.user.uid, hasFirebaseAccount: true });
+      await signOut(secondaryAuth);
+      return { uid: cred.user.uid, email: cleanEmail };
+    } finally {
+      try {
+        const idx = getApps().findIndex(a => a.name === secondaryApp.name);
+        if (idx >= 0) await deleteApp(getApps()[idx]);
+      } catch { /* la limpieza del provisioner jamás bloquea el flujo principal */ }
+    }
+  }
+
+  /** Espejo nube de la ficha docente (escrito por la sesión ADMIN de Rectoría). */
+  static async mirrorTeacherCloud(teacherId: string, mirror: TeacherCloudMirror): Promise<void> {
+    try {
+      await setDoc(doc(getFirebaseFirestore(), 'teachers', teacherId), {
+        ...mirror,
+        cloudSyncedAt: serverTimestamp()
+      }, { merge: true });
+    } catch (e) {
+      console.warn('Firestore: espejo de docente diferido (offline):', e);
+    }
+  }
+
+  /**
+   * Ronda 33 (M2): restablecimiento de contraseña del docente por correo (flujo
+   * estándar de Firebase, sin SDK admin). Rectoría lo dispara desde Gestión
+   * Docentes cuando el docente olvidó su clave; el docente define una nueva desde
+   * el enlace del correo institucional.
+   */
+  static async sendPasswordResetTo(email: string): Promise<void> {
+    try {
+      await sendPasswordResetEmail(getFirebaseAuth(), (email || '').trim());
     } catch (error: any) {
-      console.error('Error in email registration:', error);
+      console.error('Error sending password reset:', error);
       throw error;
     }
   }
 
   /**
-   * Update current user's password in Firebase Auth
+   * Ronda 33 (M2): cambio de contraseña propia del DOCENTE con cuenta real.
+   *  1) Re-autenticación OBLIGATORIA con la contraseña actual (Firebase exige sesión
+   *     reciente; además prueba que quien pide el cambio conoce la clave vigente).
+   *  2) updatePassword en Firebase Auth (la autoridad).
+   *  3) mustChangePassword=false en users/{uid} (documento propio — reglas lo permiten).
+   * Devuelve el uid por si el llamador actualiza espejos locales.
+   */
+  static async changeOwnPassword(currentPassword: string, newPassword: string): Promise<string> {
+    const auth = getFirebaseAuth();
+    const user = auth?.currentUser;
+    if (!user || user.isAnonymous || !user.email) {
+      throw new Error('No hay una cuenta de acceso activa. Inicie sesión con su correo institucional.');
+    }
+    const credential = EmailAuthProvider.credential(user.email, currentPassword);
+    try {
+      await reauthenticateWithCredential(user, credential);
+    } catch (e: any) {
+      const code = (e && typeof e === 'object' && 'code' in e) ? String((e as any).code) : '';
+      if (code === 'auth/wrong-password' || code === 'auth/invalid-credential' || code === 'auth/user-mismatch' || code === 'auth/invalid-login-credentials') {
+        throw new Error('La contraseña actual ingresada es incorrecta.');
+      }
+      if (code === 'auth/too-many-requests') {
+        throw new Error('Demasiados intentos. Espere unos minutos e intente de nuevo.');
+      }
+      throw new Error('No se pudo verificar su identidad. Intente de nuevo.');
+    }
+    try {
+      await updatePassword(user, newPassword);
+    } catch (e: any) {
+      const code = (e && typeof e === 'object' && 'code' in e) ? String((e as any).code) : '';
+      if (code === 'auth/weak-password') {
+        throw new Error('La nueva contraseña es demasiado débil. Use al menos 6 caracteres.');
+      }
+      if (code === 'auth/requires-recent-login') {
+        throw new Error('Por seguridad debe volver a iniciar sesión y repetir el cambio.');
+      }
+      throw new Error('No se pudo actualizar la contraseña en Firebase. Intente de nuevo.');
+    }
+    try {
+      await updateDoc(doc(getFirebaseFirestore(), 'users', user.uid), {
+        mustChangePassword: false,
+        updatedAt: serverTimestamp()
+      });
+    } catch (e) {
+      // La marca de primer ingreso queda pendiente en la nube; el cambio REAL ya ocurrió.
+      console.warn('Firestore: no se pudo limpiar mustChangePassword (offline):', e);
+    }
+    return user.uid;
+  }
+
+  /**
+   * Update current user's password in Firebase Auth (caso directo sin re-autenticación)
    */
   static async updateUserPassword(newPassword: string): Promise<void> {
     try {
@@ -410,13 +528,14 @@ export class FirebaseService {
       count++;
 
       // 2. Students — Ronda 18: fotos heredadas grandes se COMPRIMEN on-the-fly
-      // (nunca se descartan en silencio; consistencia con cloudflareSync).
-      // Nota: aquí NO se persiste la versión comprimida (backupAllToFirestore recibe
-      // una copia de datos y firebase.ts no importa attendanceStorage para evitar
-      // dependencia circular); la auto-sanación local la realiza el push a Cloudflare.
+      //    (nunca se descartan en silencio; consistencia con cloudflareSync).
+      //    Ronda 33 (M6): la copia en nube JAMÁS lleva credenciales — tempPassword
+      //    se elimina del espejo (antes viajaba en texto plano legible por cualquier
+      //    sesión anónima).
       let photosOmitted = 0;
       for (const st of data.students) {
         const stData = { ...st };
+        delete stData.tempPassword;
         if (stData.photoUrl && stData.photoUrl.length > PHOTO_DATAURL_SOFT_LIMIT) {
           const compressed = await compressDataUrl(stData.photoUrl);
           if (compressed) {
@@ -430,9 +549,12 @@ export class FirebaseService {
         count++;
       }
 
-      // 3. Teachers
+      // 3. Teachers — Ronda 33 (M6): sin credenciales en la nube (tempPassword,
+      //    password y passwordHash se eliminan del espejo; authEmail/authUid sí viajan
+      //    porque no son secretos).
       for (const tc of data.teachers) {
-        await setDoc(doc(db, 'teachers', tc.id), tc, { merge: true });
+        const { tempPassword: _tp, password: _p, passwordHash: _ph, ...safeTeacher } = tc;
+        await setDoc(doc(db, 'teachers', tc.id), safeTeacher, { merge: true });
         count++;
       }
 

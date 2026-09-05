@@ -13,19 +13,30 @@ import {
 } from 'lucide-react';
 import { UserRole, Teacher, Student } from '../types/attendance';
 import { AttendanceStorageService } from '../services/attendanceStorage';
+import { FirebaseService } from '../services/firebase';
 
 interface LoginScreenProps {
-  onLoginSuccess: (role: UserRole, userPayload?: { teacher?: Teacher; student?: Student; username: string; email?: string; photoURL?: string }) => void;
+  onLoginSuccess: (role: UserRole, userPayload?: {
+    teacher?: Teacher;
+    student?: Student;
+    username: string;
+    uid?: string;
+    email?: string;
+    mustChangePassword?: boolean;
+  }) => void;
 }
 
 export const LoginScreen: React.FC<LoginScreenProps> = ({ onLoginSuccess }) => {
-  // Ronda 32 (M5 de la MISIÓN AUTH): la pantalla queda con EXACTAMENTE los modos que
-  // funcionan de punta a punta. Las pestañas "Google Workspace" y "Correo Firebase" se
-  // RETIRARON de la UI: el proveedor Email/Password está deshabilitado en la consola
-  // Firebase (verificado por REST en Ronda 18 → auth/operation-not-allowed garantizado) y
-  // el flujo Google no crea vinculación/perfil real — un botón roto es peor que un botón
-  // ausente. El Agente de Autenticación los REINTEGRA solo cuando M1–M3 (login verificado
-  // server-side, rol desde users/{uid}, vinculación docente/estudiante) estén completos.
+  // Ronda 33 (M1/M2/M3 — MISIÓN AUTH completa): los tres modos de acceso quedan
+  // cableados de punta a punta contra Firebase Auth (proveedor Email/Password
+  // habilitado y dominios autorizados verificados por API oficial):
+  //  - Rectoría: correo + contraseña → Firebase Auth → users/{uid}.role === 'ADMIN'.
+  //    La credencial embebida admin/admin2026 fue ELIMINADA del código.
+  //  - Docente: correo institucional + contraseña → Firebase Auth → users/{uid}
+  //    con role DOCENTE y linkedTeacherId que existe en la BD del dispositivo.
+  //  - Estudiante/Acudiente: código + clave de acceso (verificación local endurecida
+    //    Ronda 30; la migración a verificación server-side está documentada en
+    //    docs/DESPLEGUE_FIREBASE.md — fase Worker).
   const [selectedRole, setSelectedRole] = useState<UserRole>('ADMIN');
   // Ronda 30 (H-30-2): el formulario nace VACÍO. Antes venía precargado con
   // admin/admin2026 — en producción, el navegador de cualquier dispositivo
@@ -46,74 +57,97 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onLoginSuccess }) => {
     setErrorMessage(null);
   };
 
-  // Acceso Institucional (único modo vivo — Ronda 32 M5)
-  const handleFormSubmit = (e: React.FormEvent) => {
+  // Acceso Institucional — Ronda 33: login real contra Firebase Auth (sin delays ficticios)
+  const handleFormSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setErrorMessage(null);
     setIsLoading(true);
 
-    setTimeout(() => {
-      const cleanIdent = identifier.trim();
-      const cleanPass = password.trim();
+    const cleanIdent = identifier.trim();
+    const cleanPass = password;
 
+    try {
       if (!cleanIdent) {
-        setErrorMessage('Por favor ingrese su usuario o número de documento.');
+        setErrorMessage('Por favor ingrese sus credenciales completas.');
         setIsLoading(false);
         return;
       }
 
-      // Role 1: ADMIN — Ronda 30 (H-30-2): credencial única, sin contraseñas maestras
-      // de demostración (antes 'admin' y '123456' también abrían la sesión).
-      // PENDIENTE M1 (Agente de Autenticación): verificar contra Firebase Auth y
-      // eliminar esta credencial del bundle.
+      // ===== Role 1: ADMIN — M1: verificación contra Firebase Auth + rol desde users/{uid} =====
       if (selectedRole === 'ADMIN') {
-        if (cleanIdent.toLowerCase() === 'admin' && cleanPass === 'admin2026') {
-          onLoginSuccess('ADMIN', { username: 'Rectoría / Admin' });
-        } else {
-          setErrorMessage('Credenciales de Rectoría incorrectas. Verifique su usuario y contraseña.');
+        if (!cleanIdent.includes('@')) {
+          setErrorMessage('Rectoría ingresa con su CORREO institucional y su contraseña.');
+          setIsLoading(false);
+          return;
         }
+        const { user, profile } = await FirebaseService.loginWithEmail(cleanIdent.toLowerCase(), cleanPass);
+        if (!profile || profile.role !== 'ADMIN') {
+          // Cuenta válida pero sin rol de Rectoría: se cierra la sesión abierta.
+          await FirebaseService.logout();
+          setErrorMessage('Esta cuenta no tiene rol de Rectoría. Use el portal correspondiente.');
+          setIsLoading(false);
+          return;
+        }
+        onLoginSuccess('ADMIN', {
+          username: profile.displayName || cleanIdent.toLowerCase(),
+          uid: user.uid,
+          email: user.email || cleanIdent.toLowerCase()
+        });
         setIsLoading(false);
         return;
       }
 
-      // Role 2: DOCENTE
+      // ===== Role 2: DOCENTE — M2: Firebase Auth + vinculación users/{uid}.linkedTeacherId =====
       if (selectedRole === 'DOCENTE') {
-        const teachers = AttendanceStorageService.getTeachers();
-        const teacher = teachers.find(t => 
-          t.username.toLowerCase() === cleanIdent.toLowerCase() || 
-          t.documentId === cleanIdent || 
-          t.email.toLowerCase() === cleanIdent.toLowerCase()
-        );
-
+        if (!cleanIdent.includes('@')) {
+          setErrorMessage('Los docentes ingresan con su CORREO institucional y su contraseña (la temporal la entrega Rectoría).');
+          setIsLoading(false);
+          return;
+        }
+        const { user, profile } = await FirebaseService.loginWithEmail(cleanIdent.toLowerCase(), cleanPass);
+        if (!profile || profile.role !== 'DOCENTE' || !profile.linkedTeacherId) {
+          await FirebaseService.logout();
+          setErrorMessage('Esta cuenta no está vinculada a una ficha docente. Contacte a Rectoría.');
+          setIsLoading(false);
+          return;
+        }
+        const teacher = AttendanceStorageService.getTeachers().find(t => t.id === profile.linkedTeacherId);
         if (!teacher) {
-          setErrorMessage(`No se encontró ningún docente con el identificador "${cleanIdent}".`);
+          await FirebaseService.logout();
+          setErrorMessage('Su cuenta es válida, pero este dispositivo aún no tiene su ficha docente. Pida a Rectoría sincronizar este dispositivo.');
           setIsLoading(false);
           return;
         }
-
-        // Ronda 30 (H-30-2): solo la tempPassword real del docente — se retiran los
-        // bypass universales ('123456', 'Profe2026*Mat') que dejaban entrar a CUALQUIER
-        // docente con la misma contraseña.
-        // PENDIENTE M2 (Agente de Autenticación): verificación contra Firestore.
-        if (!teacher.tempPassword || cleanPass !== teacher.tempPassword) {
-          setErrorMessage('Contraseña incorrecta. Use la clave temporal asignada por Rectoría (o la que usted mismo definió en su portal).');
-          setIsLoading(false);
-          return;
+        // Espejo local: la cuenta real quedó confirmada por el perfil en la nube.
+        if (!teacher.hasFirebaseAccount || teacher.authEmail !== cleanIdent.toLowerCase()) {
+          AttendanceStorageService.updateTeacher(teacher.id, {
+            hasFirebaseAccount: true,
+            authEmail: cleanIdent.toLowerCase(),
+            authUid: user.uid
+          });
+          teacher.hasFirebaseAccount = true;
+          teacher.authEmail = cleanIdent.toLowerCase();
+          teacher.authUid = user.uid;
         }
-
-        onLoginSuccess('DOCENTE', { teacher, username: teacher.fullName });
+        onLoginSuccess('DOCENTE', {
+          teacher,
+          username: teacher.fullName,
+          uid: user.uid,
+          email: user.email || cleanIdent.toLowerCase(),
+          mustChangePassword: profile.mustChangePassword === true
+        });
         setIsLoading(false);
         return;
       }
 
-      // Role 3: ESTUDIANTE / ACUDIENTE
+      // ===== Role 3: ESTUDIANTE / ACUDIENTE — M3: código + clave de acceso =====
       if (selectedRole === 'ESTUDIANTE_ACUDIENTE') {
         let student = AttendanceStorageService.getStudentByCodeOrDoc(cleanIdent);
-        
+
         // Búsqueda inteligente por nombre de estudiante si no coincide código exacto
         if (!student) {
           const allStudents = AttendanceStorageService.getStudents();
-          student = allStudents.find(s => 
+          student = allStudents.find(s =>
             `${s.firstName} ${s.lastName}`.toLowerCase().includes(cleanIdent.toLowerCase()) ||
             s.firstName.toLowerCase() === cleanIdent.toLowerCase()
           );
@@ -125,12 +159,8 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onLoginSuccess }) => {
           return;
         }
 
-        // Ronda 30 (H-30-2): solo la tempPassword real del estudiante (el código del
-        // reverso del carné o el que el acudiente definió en el portal). Se retiran los
-        // bypass ('123456', 'admin', documento, código) y — crítico — el mensaje de
-        // error ya NO revela la contraseña válida (antes la imprimía en pantalla para
-        // cualquier visitante que tecleara un nombre).
-        // PENDIENTE M3 (Agente de Autenticación): verificación contra Firestore.
+        // Ronda 30 (H-30-2): solo la clave de acceso real (reverso del carné o la que
+        // definió el acudiente). El error jamás revela la contraseña válida.
         if (!student.tempPassword || cleanPass !== student.tempPassword) {
           setErrorMessage(`Código de acceso incorrecto para ${student.firstName} ${student.lastName}. Verifique el código del reverso del carné o solicite uno nuevo en Rectoría.`);
           setIsLoading(false);
@@ -143,7 +173,11 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onLoginSuccess }) => {
       }
 
       setIsLoading(false);
-    }, 400);
+    } catch (err: any) {
+      // M1/M2: mensajes honestos, mapeados y sin fugas (anti enumeración)
+      setErrorMessage(FirebaseService.mapAuthError(err));
+      setIsLoading(false);
+    }
   };
 
   const roleButtons = [
@@ -271,19 +305,19 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onLoginSuccess }) => {
                   <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 uppercase tracking-wider mb-1.5">
                     {selectedRole === 'ESTUDIANTE_ACUDIENTE' 
                       ? 'Código de Estudiante o Tarjeta de Identidad' 
-                      : selectedRole === 'DOCENTE'
-                      ? 'Usuario Institucional o Cédula'
-                      : 'Usuario de Rectoría'}
+                      : 'Correo Institucional'}
                   </label>
                   <div className="relative">
                     <User className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
                     <input
-                      type="text"
+                      type={selectedRole === 'ESTUDIANTE_ACUDIENTE' ? 'text' : 'email'}
                       value={identifier}
                       onChange={(e) => setIdentifier(e.target.value)}
+                      autoCapitalize="none"
+                      autoComplete="username"
                       placeholder={
                         selectedRole === 'ESTUDIANTE_ACUDIENTE' ? 'Ej: 1000000002' : 
-                        selectedRole === 'DOCENTE' ? 'Ej: jperez' : 'Ej: admin'
+                        'correo@institucional.edu.co'
                       }
                       className="w-full pl-10 pr-4 py-3 bg-slate-50 dark:bg-black border border-slate-200 dark:border-zinc-800/50 rounded-2xl text-xs font-bold text-slate-900 dark:text-white focus:ring-2 focus:ring-indigo-500 outline-none"
                       required
@@ -303,6 +337,7 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onLoginSuccess }) => {
                       type={showPassword ? 'text' : 'password'}
                       value={password}
                       onChange={(e) => setPassword(e.target.value)}
+                      autoComplete="current-password"
                       placeholder="••••••••"
                       className="w-full pl-10 pr-10 py-3 bg-slate-50 dark:bg-black border border-slate-200 dark:border-zinc-800/50 rounded-2xl text-xs font-bold text-slate-900 dark:text-white focus:ring-2 focus:ring-indigo-500 outline-none font-mono"
                       required
@@ -336,7 +371,7 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onLoginSuccess }) => {
 
             {/* Bottom Security Info */}
             <div className="pt-4 border-t border-slate-100 dark:border-zinc-800/50 flex items-center justify-between text-[11px] text-slate-400 font-medium">
-              <span>Acceso Institucional</span>
+              <span>Acceso verificado con Firebase Auth</span>
               <span>HMAC-SHA256 • Ley 1581</span>
             </div>
           </div>

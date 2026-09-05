@@ -2,20 +2,33 @@ import React, { useState } from 'react';
 import { Key, Lock, Eye, EyeOff, Check, AlertCircle, X, ShieldCheck } from 'lucide-react';
 import { Teacher, UserRole } from '../types/attendance';
 import { AttendanceStorageService } from '../services/attendanceStorage';
-import { FirebaseService, getFirebaseAuth } from '../services/firebase';
+import { FirebaseService } from '../services/firebase';
 
 interface ChangePasswordModalProps {
   onClose: () => void;
   teacher?: Teacher;
   role: UserRole;
   username: string;
+  /** Ronda 33 (M2): primer ingreso con contraseña temporal — el cambio es OBLIGATORIO. */
+  forced?: boolean;
 }
 
+/**
+ * Ronda 33 (M2 — MISIÓN AUTH): autoservicio de contraseña REAL para docentes con
+ * cuenta de Firebase Auth. La verificación de identidad la hace Firebase
+ * (re-autenticación con EmailAuthProvider) y el cambio ocurre en Firebase Auth
+ * (updatePassword) — la fuente de autoridad de las credenciales. El espejo local
+ * solo deja de mostrar la contraseña temporal (privacidad) y marca la ficha.
+ *
+ * Sin `teacher` no hay nada que cambiar: el componente NO se renderiza (guard duro)
+ * — jamás un falso éxito como el corregido en Ronda 32.
+ */
 export const ChangePasswordModal: React.FC<ChangePasswordModalProps> = ({
   onClose,
   teacher,
   role,
-  username
+  username,
+  forced = false
 }) => {
   const [currentPasswordInput, setCurrentPasswordInput] = useState('');
   const [newPassword, setNewPassword] = useState('');
@@ -25,13 +38,7 @@ export const ChangePasswordModal: React.FC<ChangePasswordModalProps> = ({
   const [success, setSuccess] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
-  // Ronda 32 (verificación de aceptación MISIÓN AUTH): el autoservicio SOLO existe para un
-  // docente con credencial local verificable. Sin `teacher` no hay nada que actualizar de
-  // verdad (Rectoría usa credencial embebida pendiente de M1; estudiante pendiente de M3) y
-  // renderizar el formulario producía el falso éxito "¡Contraseña actualizada correctamente!"
-  // sin cambiar absolutamente nada — exactamente el patrón "función integrada pero no
-  // cableada" que la Regla 6 (Cero Fallbacks) prohíbe.
-  if (!teacher || !teacher.tempPassword) {
+  if (!teacher || role !== 'DOCENTE') {
     return null;
   }
 
@@ -40,7 +47,11 @@ export const ChangePasswordModal: React.FC<ChangePasswordModalProps> = ({
     setError(null);
     setSuccess(null);
 
-    // Basic Validation
+    if (!currentPasswordInput.trim()) {
+      setError('Por favor ingrese su contraseña actual.');
+      return;
+    }
+
     if (!newPassword.trim()) {
       setError('Por favor ingrese la nueva contraseña.');
       return;
@@ -56,62 +67,34 @@ export const ChangePasswordModal: React.FC<ChangePasswordModalProps> = ({
       return;
     }
 
-    if (newPassword === teacher.tempPassword) {
+    if (newPassword === currentPasswordInput) {
       setError('La nueva contraseña debe ser diferente a la actual.');
-      return;
-    }
-
-    // Verify current password against the teacher's real local credential
-    if (currentPasswordInput.trim() !== teacher.tempPassword) {
-      setError('La contraseña actual ingresada es incorrecta.');
       return;
     }
 
     setIsSubmitting(true);
 
     try {
-      // 1. Actualiza la credencial local del docente (la fuente que verifica el
-      //    "Acceso Institucional" hasta que M2 migre la verificación a Firestore).
-      const localUpdated = AttendanceStorageService.updateTeacher(teacher.id, {
-        tempPassword: newPassword
+      // 1) Firebase Auth: re-autenticación + cambio real (la autoridad).
+      const uid = await FirebaseService.changeOwnPassword(currentPasswordInput, newPassword);
+
+      // 2) Espejo local: la contraseña temporal deja de existir en el dispositivo
+      //    (privacidad — ni Rectoría la ve) y la ficha marca credencial personalizada.
+      AttendanceStorageService.updateTeacher(teacher.id, {
+        hasFirebaseAccount: true,
+        hasCustomPassword: true,
+        authUid: uid,
+        tempPassword: undefined
       });
 
-      if (!localUpdated) {
-        setError('No se pudo actualizar la contraseña en este dispositivo. Intente nuevamente.');
-        setIsSubmitting(false);
-        return;
-      }
-
-      // 2. Si además existe una cuenta REAL de Firebase Auth (no anónima — modelo futuro M2),
-      //    refleja el cambio en la nube. Hoy la sesión Firebase es siempre anónima, así que
-      //    esta rama es inerte y jamás inventa éxito donde no lo hay.
-      let firebaseNote: string | null = null;
-      const currentUser = getFirebaseAuth()?.currentUser ?? null;
-      if (currentUser && !currentUser.isAnonymous) {
-        try {
-          await FirebaseService.updateUserPassword(newPassword);
-          firebaseNote = 'El cambio también se aplicó en Firebase Auth.';
-        } catch (fbErr: any) {
-          console.warn('Firebase Auth update password notice:', fbErr);
-          if (fbErr?.code === 'auth/requires-recent-login') {
-            firebaseNote = 'Para aplicarla también en Firebase Auth deberá volver a iniciar sesión y repetir el cambio.';
-          } else {
-            firebaseNote = 'La clave local quedó actualizada, pero no se pudo reflejar en Firebase Auth en este intento.';
-          }
-        }
-      }
-
       // Mensaje único y honesto (nunca éxito + error simultáneos).
-      setSuccess(
-        'Su contraseña fue actualizada. Úsela la próxima vez que ingrese al portal.' +
-        (firebaseNote ? ` Nota: ${firebaseNote}` : '')
-      );
+      setSuccess('Su contraseña fue actualizada en Firebase Auth. Úsela la próxima vez que ingrese al portal.');
       setTimeout(() => {
         onClose();
-      }, 2600);
+      }, 1800);
     } catch (err: any) {
       console.error('Error in change password:', err);
-      setError(err.message || 'Error al actualizar la contraseña. Reintente.');
+      setError(err?.message || 'Error al actualizar la contraseña. Reintente.');
     } finally {
       setIsSubmitting(false);
     }
@@ -127,20 +110,31 @@ export const ChangePasswordModal: React.FC<ChangePasswordModalProps> = ({
             </div>
             <div>
               <h3 className="text-base font-black text-slate-900 dark:text-white">
-                Cambiar Mi Contraseña
+                {forced ? 'Defina su Contraseña Personal' : 'Cambiar Mi Contraseña'}
               </h3>
               <p className="text-xs text-slate-500 truncate max-w-[220px]">
-                {username} • {role === 'ADMIN' ? 'Rectoría' : role === 'DOCENTE' ? 'Docente' : 'Estudiante'}
+                {username} • Docente
               </p>
             </div>
           </div>
-          <button
-            onClick={onClose}
-            className="p-1.5 rounded-xl text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800"
-          >
-            <X className="w-5 h-5" />
-          </button>
+          {!forced && (
+            <button
+              onClick={onClose}
+              className="p-1.5 rounded-xl text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800"
+            >
+              <X className="w-5 h-5" />
+            </button>
+          )}
         </div>
+
+        {forced && (
+          <div className="p-3.5 rounded-2xl bg-amber-50 dark:bg-amber-950/60 border border-amber-200 dark:border-amber-800 text-amber-800 dark:text-amber-300 text-xs font-semibold flex items-center gap-2 animate-fadeIn">
+            <ShieldCheck className="w-4 h-4 shrink-0" />
+            <span>
+              Primer ingreso con contraseña temporal: por seguridad debe definir su propia contraseña antes de continuar.
+            </span>
+          </div>
+        )}
 
         {error && (
           <div className="p-3.5 rounded-2xl bg-rose-50 dark:bg-rose-950/60 border border-rose-200 dark:border-rose-800 text-rose-700 dark:text-rose-300 text-xs font-semibold flex items-center gap-2 animate-fadeIn">
@@ -157,7 +151,7 @@ export const ChangePasswordModal: React.FC<ChangePasswordModalProps> = ({
         )}
 
         <form onSubmit={handleSubmit} className="space-y-4">
-          {/* Current Password — el docente siempre tiene tempPassword (guard de arriba) */}
+          {/* Current Password — verificada contra Firebase Auth por re-autenticación */}
           <div>
             <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 uppercase tracking-wider mb-1.5">
               Contraseña Actual
@@ -169,6 +163,7 @@ export const ChangePasswordModal: React.FC<ChangePasswordModalProps> = ({
                 value={currentPasswordInput}
                 onChange={(e) => setCurrentPasswordInput(e.target.value)}
                 placeholder="Ingrese contraseña actual"
+                autoComplete="current-password"
                 className="w-full pl-10 pr-4 py-2.5 bg-slate-50 dark:bg-black border border-slate-200 dark:border-zinc-800 rounded-2xl text-xs font-bold text-slate-900 dark:text-white outline-none focus:ring-2 focus:ring-indigo-500 font-mono"
                 required
               />
@@ -187,6 +182,7 @@ export const ChangePasswordModal: React.FC<ChangePasswordModalProps> = ({
                 value={newPassword}
                 onChange={(e) => setNewPassword(e.target.value)}
                 placeholder="Mínimo 6 caracteres"
+                autoComplete="new-password"
                 className="w-full pl-10 pr-10 py-2.5 bg-slate-50 dark:bg-black border border-slate-200 dark:border-zinc-800 rounded-2xl text-xs font-bold text-slate-900 dark:text-white outline-none focus:ring-2 focus:ring-indigo-500 font-mono"
                 required
               />
@@ -212,6 +208,7 @@ export const ChangePasswordModal: React.FC<ChangePasswordModalProps> = ({
                 value={confirmPassword}
                 onChange={(e) => setConfirmPassword(e.target.value)}
                 placeholder="Repita la nueva contraseña"
+                autoComplete="new-password"
                 className="w-full pl-10 pr-4 py-2.5 bg-slate-50 dark:bg-black border border-slate-200 dark:border-zinc-800 rounded-2xl text-xs font-bold text-slate-900 dark:text-white outline-none focus:ring-2 focus:ring-indigo-500 font-mono"
                 required
               />
@@ -221,18 +218,20 @@ export const ChangePasswordModal: React.FC<ChangePasswordModalProps> = ({
           <div className="p-3 rounded-2xl bg-indigo-50/60 dark:bg-indigo-950/30 border border-indigo-100 dark:border-indigo-900/40 text-[11px] text-indigo-800 dark:text-indigo-300 flex items-start gap-2">
             <ShieldCheck className="w-4 h-4 text-indigo-600 shrink-0 mt-0.5" />
             <span>
-              Su nueva clave queda activa para su ingreso al portal. Rectoría conserva la capacidad de restablecerla desde Gestión Docentes si la olvida.
+              La verificación de identidad y el cambio los realiza Firebase Auth. Si algún día olvida su clave, Rectoría puede enviarle un enlace de restablecimiento a su correo institucional.
             </span>
           </div>
 
           <div className="pt-2 flex justify-end gap-2">
-            <button
-              type="button"
-              onClick={onClose}
-              className="px-4 py-2.5 bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 rounded-2xl text-xs font-bold hover:bg-slate-200 transition-all"
-            >
-              Cancelar
-            </button>
+            {!forced && (
+              <button
+                type="button"
+                onClick={onClose}
+                className="px-4 py-2.5 bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 rounded-2xl text-xs font-bold hover:bg-slate-200 transition-all"
+              >
+                Cancelar
+              </button>
+            )}
             <button
               type="submit"
               disabled={isSubmitting}

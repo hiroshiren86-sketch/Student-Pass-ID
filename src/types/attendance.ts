@@ -85,7 +85,14 @@ export interface Teacher {
   username: string; // Usuario de acceso
   password?: string; // Contraseña en texto plano para demo/reset
   passwordHash?: string; // Contraseña / hash
-  tempPassword?: string; // Contraseña actual visible/reemplazable por admin
+  tempPassword?: string; // Contraseña temporal INICIAL (Rectoría la muestra para comunicarla; se elimina cuando el docente personaliza la suya)
+  hasCustomPassword?: boolean; // Ronda 33 (M2): el docente ya definió su propia contraseña — tempPassword ya no es válida ni visible
+  // Ronda 33 (M2): cuenta real de Firebase Auth vinculada a esta ficha.
+  // La autoridad de verificación es Firebase Auth; estos campos son el espejo local
+  // para que Rectoría sepa qué correo accederá y qué acciones de acceso ofrece.
+  authEmail?: string;      // correo con el que el docente ingresa (Firebase Auth)
+  authUid?: string;        // uid de Firebase Auth (users/{uid}.linkedTeacherId apunta aquí)
+  hasFirebaseAccount?: boolean; // la ficha YA tiene cuenta de acceso creada
   active: boolean;
   createdAt: string;
   isGroupDirector?: boolean; // Subrol: Director de Grupo
@@ -245,6 +252,13 @@ export interface UserSession {
   // Las sesiones sin authAt (era pre-hardening, Rectoría implícita) NO son
   // restaurables al recargar: solo un login explícito abre la app.
   authAt?: number;
+  // Ronda 33 (M4): identidad Firebase de la sesión (uid de Auth + correo).
+  // Permite el cambio de contraseña con re-autenticación y la auditoría de quién opera.
+  uid?: string;
+  email?: string;
+  // Ronda 33 (M2): si el perfil users/{uid} exigió cambio forzado de contraseña en el
+  // primer ingreso, la sesión lo arrastra para que la app muestre el modal obligatorio.
+  mustChangePassword?: boolean;
   studentCode?: string; // Si el rol es ESTUDIANTE_ACUDIENTE
   teacherId?: string;   // Si el rol es DOCENTE
   isRepresentative?: boolean;

@@ -25,6 +25,7 @@ import {
 } from 'lucide-react';
 import { Teacher } from '../types/attendance';
 import { AttendanceStorageService } from '../services/attendanceStorage';
+import { FirebaseService } from '../services/firebase';
 
 export const TeachersManagerView: React.FC = () => {
   const [teachers, setTeachers] = useState<Teacher[]>(AttendanceStorageService.getTeachers());
@@ -101,7 +102,7 @@ export const TeachersManagerView: React.FC = () => {
     setShowModal(true);
   };
 
-  const handleSave = (e: React.FormEvent) => {
+  const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!formData.fullName.trim() || !formData.documentId.trim()) return;
 
@@ -130,6 +131,7 @@ export const TeachersManagerView: React.FC = () => {
       });
       showToast(`¡Docente ${formData.fullName} actualizado con éxito!`);
     } else {
+      const initialTemp = formData.tempPassword || `Docente${Math.floor(1000 + Math.random() * 9000)}*`;
       const newTeacher: Teacher = {
         id: `prof-${Date.now()}`,
         documentId: formData.documentId,
@@ -141,7 +143,7 @@ export const TeachersManagerView: React.FC = () => {
         isGroupDirector,
         directorGrade: isGroupDirector ? formData.directorGrade : undefined,
         username: generatedUsername,
-        tempPassword: formData.tempPassword || `Docente${Math.floor(1000 + Math.random() * 9000)}*`,
+        tempPassword: initialTemp,
         active: true,
         createdAt: new Date().toISOString()
       };
@@ -152,9 +154,53 @@ export const TeachersManagerView: React.FC = () => {
         return;
       }
       showToast(`¡Docente ${formData.fullName} registrado correctamente!`);
+
+      // Ronda 33 (M2): la creación termina en una credencial REAL — se crea la cuenta
+      // de Firebase Auth (correo institucional + contraseña temporal). El docente
+      // será forzado a definir su propia contraseña en su primer ingreso.
+      await provisionAccount(newTeacher, initialTemp, true);
     }
 
     setShowModal(false);
+  };
+
+  /**
+   * Ronda 33 (M2): crea la cuenta de Firebase Auth del docente y firma su espejo
+   * local/nube. Sin correo explícito se genera uno institucional a partir del
+   * usuario de acceso. Toda falla se comunica honesta (la ficha local ya existe;
+   * el botón "Crear Cuenta" de la tarjeta permite reintentar).
+   */
+  const provisionAccount = async (t: Teacher, tempPassword: string, silentWhenOk = false) => {
+    const email = (t.authEmail || t.email || `${t.username}@inas.edu.co`).trim().toLowerCase();
+    try {
+      const result = await FirebaseService.provisionTeacherAccount(email, tempPassword, t.id, t.fullName);
+      AttendanceStorageService.updateTeacher(t.id, {
+        hasFirebaseAccount: true,
+        authEmail: result.email,
+        authUid: result.uid
+      });
+      setTeachers(AttendanceStorageService.getTeachers());
+      if (!silentWhenOk) {
+        setResetModalTeacher({ ...t, authEmail: result.email });
+        setNewGeneratedPass(tempPassword);
+        setCopiedPass(false);
+        showToast(`Cuenta de acceso creada para ${t.fullName} (${result.email}).`);
+      } else {
+        showToast(`Docente registrado y cuenta de acceso creada (${result.email}). Comuníquele su clave temporal.`);
+      }
+    } catch (err: any) {
+      console.error('Provisioning de cuenta docente falló:', err);
+      const code = (err && typeof err === 'object' && 'code' in err) ? String((err as any).code) : '';
+      if (code === 'auth/email-already-in-use') {
+        showToast(`No se creó la cuenta: el correo ${email} ya tiene cuenta de acceso. Use otro correo o "Enviar Reset".`);
+      } else if (code === 'auth/weak-password') {
+        showToast('No se creó la cuenta: la clave temporal es demasiado débil. Restablezca la clave e intente de nuevo.');
+      } else if (code === 'auth/network-request-failed') {
+        showToast('No se creó la cuenta: sin conexión con Firebase. Intente "Crear Cuenta" cuando haya internet.');
+      } else {
+        showToast(`No se pudo crear la cuenta de acceso (${FirebaseService.mapAuthError(err)}). Reintente con "Crear Cuenta".`);
+      }
+    }
   };
 
   const handleDelete = (t: Teacher) => {
@@ -171,12 +217,59 @@ export const TeachersManagerView: React.FC = () => {
   };
 
   const handleResetPassword = (t: Teacher) => {
+    // Ronda 33 (M2): para docentes CON cuenta real, la contraseña se gestiona en
+    // Firebase Auth — el restablecimiento local solo aplica a fichas sin cuenta.
+    if (t.hasFirebaseAccount) {
+      handleSendResetEmail(t);
+      return;
+    }
     const res = AttendanceStorageService.resetTeacherPassword(t.id);
     if (res.success && res.newPassword) {
       setResetModalTeacher(t);
       setNewGeneratedPass(res.newPassword);
       setCopiedPass(false);
     }
+  };
+
+  /**
+   * Ronda 33 (M2): restablecimiento de contraseña REAL para docentes con cuenta
+   * Firebase — envía el enlace oficial de Firebase Auth al correo institucional.
+   * El docente define su nueva clave desde el correo (jamás se comparte clave
+   * nueva por canales informales).
+   */
+  const handleSendResetEmail = (t: Teacher) => {
+    const target = (t.authEmail || t.email || '').trim().toLowerCase();
+    if (!target || !target.includes('@')) {
+      showToast('Este docente no tiene un correo institucional válido para recibir el restablecimiento.');
+      return;
+    }
+    setDeleteConfirm({
+      title: 'Enviar restablecimiento por correo',
+      message: `Se enviará a ${target} el enlace oficial de Firebase para que ${t.fullName} defina una nueva contraseña. ¿Continuar?`,
+      action: async () => {
+        try {
+          await FirebaseService.sendPasswordResetTo(target);
+          showToast(`Enlace de restablecimiento enviado a ${target}.`);
+        } catch (err: any) {
+          console.error('Reset por correo falló:', err);
+          showToast(FirebaseService.mapAuthError(err));
+        }
+      }
+    });
+  };
+
+  /** Ronda 33 (M2): reintento de provisión para fichas que quedaron sin cuenta. */
+  const handleProvisionAccount = (t: Teacher) => {
+    if (!t.tempPassword) {
+      // Sin clave temporal no hay con qué crear la cuenta: se genera una nueva
+      // localmente y se muestra en el modal de credenciales para comunicarla.
+      const res = AttendanceStorageService.resetTeacherPassword(t.id);
+      const fresh = res.success && res.newPassword ? res.newPassword : `Docente${Math.floor(1000 + Math.random() * 9000)}*`;
+      const updated = AttendanceStorageService.getTeachers().find(x => x.id === t.id);
+      provisionAccount(updated || { ...t, tempPassword: fresh }, fresh, false);
+      return;
+    }
+    provisionAccount(t, t.tempPassword, false);
   };
 
   const handleCopyPassword = () => {
@@ -365,7 +458,7 @@ export const TeachersManagerView: React.FC = () => {
                 )}
               </div>
 
-              {/* Access Credentials Box */}
+              {/* Access Credentials Box — Ronda 33 (M2): refleja la cuenta real de Firebase */}
               <div className="p-3 rounded-2xl bg-slate-50 dark:bg-black border border-slate-200 dark:border-zinc-800/50 space-y-1.5">
                 <div className="flex items-center justify-between text-[11px]">
                   <span className="font-bold text-slate-500">Usuario:</span>
@@ -373,25 +466,58 @@ export const TeachersManagerView: React.FC = () => {
                     {teacher.username}
                   </span>
                 </div>
-                <div className="flex items-center justify-between text-[11px]">
-                  <span className="font-bold text-slate-500">Clave actual:</span>
-                  <span className="font-mono text-slate-700 dark:text-slate-300 font-bold">
-                    {teacher.tempPassword || '••••••••'}
-                  </span>
-                </div>
+                {teacher.hasFirebaseAccount ? (
+                  <>
+                    <div className="flex items-center justify-between text-[11px]">
+                      <span className="font-bold text-slate-500">Acceso:</span>
+                      <span className="font-mono text-slate-700 dark:text-slate-300 font-bold truncate max-w-[150px]" title={teacher.authEmail || teacher.email}>
+                        {teacher.authEmail || teacher.email}
+                      </span>
+                    </div>
+                    <div className="flex items-center justify-between text-[11px]">
+                      <span className="font-bold text-slate-500">Clave:</span>
+                      <span className="font-bold text-emerald-600 dark:text-emerald-400">
+                        {teacher.hasCustomPassword ? 'Personal (Firebase)' : 'Temporal — cambia en 1er ingreso'}
+                      </span>
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    <div className="flex items-center justify-between text-[11px]">
+                      <span className="font-bold text-slate-500">Clave temporal:</span>
+                      <span className="font-mono text-slate-700 dark:text-slate-300 font-bold">
+                        {teacher.tempPassword || '••••••••'}
+                      </span>
+                    </div>
+                    <p className="text-[10px] text-amber-600 dark:text-amber-400 font-semibold">
+                      Sin cuenta de acceso aún — use "Crear Cuenta"
+                    </p>
+                  </>
+                )}
               </div>
             </div>
 
-            {/* Bottom Actions */}
+            {/* Bottom Actions — Ronda 33 (M2): acciones según el estado de la cuenta */}
             <div className="pt-2 border-t border-slate-100 dark:border-zinc-800/50 flex items-center justify-between gap-1.5">
-              <button
-                onClick={() => handleResetPassword(teacher)}
-                className="px-2.5 py-1.5 rounded-xl bg-amber-50 hover:bg-amber-100 dark:bg-amber-950/60 dark:hover:bg-amber-900/60 text-amber-700 dark:text-amber-300 text-[11px] font-bold transition-all border border-amber-200 dark:border-amber-800 flex items-center gap-1"
-                title="Restablecer contraseña de acceso"
-              >
-                <Key className="w-3.5 h-3.5" />
-                <span>Restablecer Clave</span>
-              </button>
+              {teacher.hasFirebaseAccount ? (
+                <button
+                  onClick={() => handleSendResetEmail(teacher)}
+                  className="px-2.5 py-1.5 rounded-xl bg-amber-50 hover:bg-amber-100 dark:bg-amber-950/60 dark:hover:bg-amber-900/60 text-amber-700 dark:text-amber-300 text-[11px] font-bold transition-all border border-amber-200 dark:border-amber-800 flex items-center gap-1"
+                  title="Enviar enlace de restablecimiento al correo institucional (Firebase Auth)"
+                >
+                  <Key className="w-3.5 h-3.5" />
+                  <span>Reset por Correo</span>
+                </button>
+              ) : (
+                <button
+                  onClick={() => handleProvisionAccount(teacher)}
+                  className="px-2.5 py-1.5 rounded-xl bg-emerald-50 hover:bg-emerald-100 dark:bg-emerald-950/60 dark:hover:bg-emerald-900/60 text-emerald-700 dark:text-emerald-300 text-[11px] font-bold transition-all border border-emerald-200 dark:border-emerald-800 flex items-center gap-1"
+                  title="Crear la cuenta de acceso real (Firebase Auth) con la clave temporal"
+                >
+                  <Key className="w-3.5 h-3.5" />
+                  <span>Crear Cuenta</span>
+                </button>
+              )}
 
               <div className="flex items-center gap-1">
                 <button

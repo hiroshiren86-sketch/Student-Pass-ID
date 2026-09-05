@@ -1,27 +1,25 @@
 rules_version = '2';
 
 /**
- * Ronda 18 (02/09/2026) — Reglas de Firestore ENDURECIDAS con sesión obligatoria.
+ * Ronda 33 (05/09/2026) — Reglas de Firestore v2: MISIÓN AUTH completada por el
+ * agente principal. Sucesora de las reglas endurecidas de Ronda 18.
  *
- * Historia:
- *  - Ronda 9 (agente anterior): `allow read, write: if true` GLOBAL — toda la base
- *    pública en internet. REVERTIDO en Ronda 16.
- *  - Ronda 16: catch-all DENY + 5 colecciones operativas aún abiertas (`if true`)
- *    porque Anonymous NO estaba habilitado y las terminales operaban sin sesión.
- *  - Ronda 18 (HOY): el propietario HABILITÓ Firebase Anonymous (verificado por REST:
- *    accounts:signUp → 200 con idToken anónimo) y el frontend ya espera la sesión
- *    (ensureAnonymousAuth con espera controlada) antes de tocar Firestore.
- *    ⇒ Las 5 colecciones operativas pasan a `isAuthenticated()`.
+ * Modelo de autenticación (Ronda 33):
+ *  - Firebase Auth (proveedor Email/Password) es la ÚNICA autoridad de credenciales
+ *    para Rectoría (role ADMIN) y Docentes (role DOCENTE).
+ *  - El rol vive EXCLUSIVAMENTE en users/{uid}.role, escrito al crear la cuenta:
+ *    ADMIN por despliegue/consola (la cuenta de Rectoría nace pre-provisionada),
+ *    DOCENTE por la propia cuenta nueva en su provisión (el cliente NUNCA elige roles).
+ *  - Los espejos de credenciales JAMÁS viajan a Firestore: tempPassword/password/
+ *    passwordHash se eliminan de los respaldos (backupAllToFirestore los sanitiza).
  *
- * ⚠ ORDEN DE DESPLIEGUE OBLIGATORIO:
- *  1. Desplegar PRIMERO el código de la app (este push ya lo hace vía Cloudflare Pages).
- *  2. DESPUÉS desplegar estas reglas (deploy_firebase del agente de infraestructura).
- *  Si se hacen en orden inverso, las terminales con la app vieja (sin espera de
- *  sesión) verían "Missing or insufficient permissions" hasta recargar.
- *
- * Endurecimiento definitivo (App Check con reCAPTCHA v3): ver AGENTS.md. Con App
- * Check en enforcement, las reglas pueden además exigir `request.auth != null &&
- * request.app`... vía verifyAppCheck() — se documenta pero NO se aplica hoy.
+ * ⚠ DESPLIEGUE (ver docs/DESPLEGUE_FIREBASE.md):
+ *  - Consola de Firebase → Firestore Database → (base "ai-studio-sistemaderegistr-…")
+ *    → Reglas → pegar este archivo → Publicar.
+ *  - Esta base es NOMBRADA (no la (default)); el despliegue por consola aplica a la
+ *    base que esté seleccionada — verificar el selector de base antes de publicar.
+ *  - Orden seguro: desplegar primero el código de la app (ya desplegado en este push),
+ *    después las reglas.
  */
 service cloud.firestore {
   match /databases/{database}/documents {
@@ -30,50 +28,68 @@ service cloud.firestore {
       return request.auth != null;
     }
 
-    // Perfiles de usuario: SOLO el dueño autenticado. (Antes: público total.)
+    // Rol del solicitante leído de su propio perfil (server-side, no falsificable).
+    // Coste: 1 lectura de regla por operación — aceptado por seguridad.
+    function myRole() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role;
+    }
+
+    function isAdmin() {
+      return isAuthenticated() && myRole() == 'ADMIN';
+    }
+
+    // ===== Perfiles de usuario (users/{uid}) =====
+    // Ronda 33: el perfil es del dueño. En CREATE el rol nace SOLO como DOCENTE
+    // (la cuenta ADMIN la provisiona el despliegue/consola, que pasa por encima de
+    // estas reglas vía SDK Admin). En UPDATE el rol y la vinculación son INMUTABLES
+    // para el cliente — la escalada de privilegios queda cerrada por reglas.
     match /users/{userId} {
-      allow read, create, update: if isAuthenticated() && request.auth.uid == userId;
+      allow read: if isAuthenticated() && request.auth.uid == userId;
+      allow create: if isAuthenticated()
+                    && request.auth.uid == userId
+                    && request.resource.data.role == 'DOCENTE';
+      allow update: if isAuthenticated()
+                    && request.auth.uid == userId
+                    && request.resource.data.role == resource.data.role
+                    && (resource.data.linkedTeacherId == null
+                        || request.resource.data.linkedTeacherId == resource.data.linkedTeacherId)
+                    && (resource.data.linkedStudentCode == null
+                        || request.resource.data.linkedStudentCode == resource.data.linkedStudentCode);
       allow delete: if false;
     }
 
-    // ===== Colecciones operativas del colegio (las únicas que usa la app) =====
-    // Ronda 18: exigir sesión (anónima o de correo) — Anonymous ya está habilitado
-    // y el frontend espera la sesión antes de leer/escribir (ensureAnonymousAuth).
-
-    // Configuración institucional (doc 'main'; los secretos YA NO se suben — Ronda 16)
+    // ===== Configuración institucional (doc 'main'; sin secretos — Ronda 16) =====
+    // Cualquier sesión (incluida la anónima del terminal) puede leer/escribir:
+    // la sincronización de ajustes del terminal depende de esto (Ronda 18).
     match /school_settings/{settingId} {
-      allow read: if isAuthenticated();
-      allow write: if isAuthenticated();
+      allow read, write: if isAuthenticated();
     }
 
-    // Estudiantes (carnés, fotos ya comprimidas client-side)
+    // ===== Datos operativos sensibles: solo Rectoría (ADMIN) =====
+    // Estudiantes y docentes los administra Rectoría desde la app. El respaldo
+    // nube (backupAllToFirestore) y el espejo de docentes corren bajo su sesión.
+    // (Ronda 18 permitía escribir a cualquier sesión; Ronda 33 lo restringe.)
     match /students/{studentId} {
-      allow read: if isAuthenticated();
-      allow write: if isAuthenticated();
+      allow read, write: if isAdmin();
     }
 
-    // Docentes
     match /teachers/{teacherId} {
-      allow read: if isAuthenticated();
-      allow write: if isAuthenticated();
+      allow read, write: if isAdmin();
     }
 
-    // Registros de asistencia
+    match /schedule_assignments/{assignmentId} {
+      allow read, write: if isAdmin();
+    }
+
+    // ===== Registros de asistencia =====
+    // Escritura para cualquier sesión autenticada (los terminales/docentes registran
+    // en operación), lectura para sesiones autenticadas (portales).
     match /attendance_records/{recordId} {
       allow read: if isAuthenticated();
       allow write: if isAuthenticated();
     }
 
-    // Asignaciones docente-materia-bloque
-    match /schedule_assignments/{assignmentId} {
-      allow read: if isAuthenticated();
-      allow write: if isAuthenticated();
-    }
-
-    // ===== TODO LO DEMÁS: DENEGADO =====
-    // Antes la catch-all permitía read/write público sobre cualquier colección
-    // nueva o interna (y existía una /test pública). Firestore ya niega por
-    // defecto; se declara explícito como política de mínima superficie.
+    // ===== TODO LO DEMÁS: DENEGADO (política de mínima superficie, Ronda 18) =====
     match /{document=**} {
       allow read, write: if false;
     }

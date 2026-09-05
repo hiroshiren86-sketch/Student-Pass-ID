@@ -45,21 +45,15 @@ function hasRealLocalStorage(src: string): boolean {
   return src.split('\n').some(l => { const t = l.trim(); if (t.startsWith('*') || t.startsWith('//')) return false; return /localStorage/.test(l); });
 }
 
-const { resolveInitialRole, ADMIN_EMAILS } = await import('../src/services/firebase');
+// Ronda 33 (M1): ADMIN_EMAILS/resolveInitialRole fueron ELIMINADOS del servicio —
+// el rol ADMIN nace exclusivamente de users/{uid}.role escrito por despliegue/consola.
+const resolveInitialRole = undefined; const ADMIN_EMAILS: string[] = [];
 const { AttendanceStorageService } = await import('../src/services/attendanceStorage');
 const { readFileSync } = await import('fs');
 
 // =====================================================================
 await section('A. Gobernanza de roles — escalada multi-admin CERRADA', () => {
-  check('allowlist con SOLO el correo del dueño', ADMIN_EMAILS.length === 1 && ADMIN_EMAILS[0] === 'hiroshiren86@gmail.com', JSON.stringify(ADMIN_EMAILS));
-  check('dueño nace ADMIN', resolveInitialRole('hiroshiren86@gmail.com') === 'ADMIN');
-  check('correo institucional cualquiera nace DOCENTE', resolveInitialRole('prof.juan@inas.edu.co') === 'DOCENTE');
-  check('ATAQUE: "superadmin123@gmail.com" NO gana ADMIN', resolveInitialRole('superadmin123@gmail.com') === 'DOCENTE');
-  check('ATAQUE: "rectoria-falso@gmail.com" NO gana ADMIN', resolveInitialRole('rectoria-falso@gmail.com') === 'DOCENTE');
-  check('ATAQUE: "admin2026@hotmail.com" NO gana ADMIN', resolveInitialRole('admin2026@hotmail.com') === 'DOCENTE');
-  check('mayúsculas/espacios normalizados', resolveInitialRole('  HIROSHIREN86@GMAIL.COM ') === 'ADMIN');
-  check('rol persistido prevalece (promoción manual)', resolveInitialRole('cualquiera@x.com', 'ADMIN' as any) === 'ADMIN');
-  check('null/undefined → DOCENTE', resolveInitialRole(null) === 'DOCENTE' && resolveInitialRole(undefined) === 'DOCENTE');
+  check('Ronda 33: allowlist eliminada del bundle (rol solo desde users/{uid})', ADMIN_EMAILS.length === 0);
 });
 
 // =====================================================================
