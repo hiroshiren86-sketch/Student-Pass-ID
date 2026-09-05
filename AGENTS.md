@@ -5,6 +5,55 @@ Este documento es la **fuente única de verdad técnica (Single Source of Truth)
 
 ---
 
+## 🔑 SECCIÓN EXCLUSIVA DEL AGENTE DE AUTENTICACIÓN (FIREBASE / FIRESTORE) — "MISIÓN AUTH"
+
+> **Instrucción del propietario:** esta sección está dirigida EXCLUSIVAMENTE al agente con acceso a la consola de Firebase/Firestore. Léela COMPLETA antes de escribir una línea de código. Cualquier trabajo de autenticación fuera de esta especificación será rechazado en la verificación de aceptación.
+
+### A. Contexto en el que llegas (leer primero)
+
+- App: React 19 + TS + Vite (`src/`), desplegada en `https://student-pass-id.pages.dev` (auto-deploy por push a `main`). Backend de datos: Cloudflare Worker + D1/KV (`https://inas-attendance-worker.hiroshiren86.workers.dev`, token AUTH_TOKEN activo — NO es tu terreno, no lo toques).
+- Estado de la autenticación tras la Ronda 30 (commit `7b18092`): puerta de login obligatoria (`App.tsx` con `isAuthenticated=false`), sesiones locales `inas_user_session_v5` con `authAt` + TTL 12h (`AttendanceStorageService.restoreValidSession`), logout destructivo, y la píldora de cambio de perfil SOLO como vista previa (no escribe sesión). Bypass maestros eliminados; el error del portal ya no revela códigos.
+- Lo que EXISTE y es solo parcialmente cableado (`src/services/firebase.ts`, 567 líneas): `loginWithGoogle`, `loginWithEmail`, `registerWithEmail` (ignora el rol pedido por seguridad → `resolveInitialRole`), perfil `users/{uid}` en Firestore (`FirebaseUserProfile { uid, email, displayName, photoURL, role, linkedTeacherId?, linkedStudentCode? }`), `saveUserProfile`/`getUserProfile`, `onAuthStateChange`, `ensureAnonymousAuth`, sync de `school_settings`.
+- Lo que sigue VIVO y es tuyo de reemplazar: **el modo "Acceso Institucional" (`ROLE_QUICK`) del `LoginScreen.tsx` verifica credenciales en el cliente** — Rectoría contra `admin2026` hardcodeado en el bundle, docentes/estudiantes contra `tempPassword` en localStorage. Este es el objetivo principal de tu misión: **que NINGUNA credencial se verifique en el cliente.**
+- Firestore: reglas endurecidas (Ronda 16/18) ya desplegadas — owner-only en `users`, 5 colecciones operativas, catch-all DENY. No las debilites.
+- Credenciales y secretos actuales: ver `/home/z/my-project/download/Paquete_Credenciales_Entrega_INAS_R29.md` (documento del propietario, fuera del repo).
+
+### B. Decisiones del propietario (vinculantes, no negociables)
+
+1. **División de terreno:** tú eres dueño de TODA la autenticación (Firebase Auth + Firestore perfiles/reglas + los flujos de login del frontend). El Worker de Cloudflare y sus secrets NO se tocan (si un endpoint nuevo fuera estrictamente necesario, documéntalo en tu bitácora y justifícalo antes de implementar; recuerda H-29-4: "validado en wrangler dev" ≠ "desplegado en producción").
+2. **NO rotar claves.** El AUTH_TOKEN, VAPID, claves API de IA y credenciales actuales se quedan como están: esta etapa es dejar el sistema funcionando de punta a punta; la institución real pondrá SUS propias claves al adoptar el proyecto (habrá un bootstrapper de entrega — ver Roadmap §4 "Fase Bootstrapper"). Queda PROHIBIDO cambiar/rotar/regenerar secretos existentes en esta misión.
+3. **Regla de oro del propietario:** si alguien no se ha autenticado como Rectoría, NO existe camino (visible u oculto) para operar como Rectoría. El rol SIEMPRE viene del perfil `users/{uid}` en Firestore, jamás de una selección del cliente.
+4. **Los secretos que el administrador pega en su panel** (AUTH_TOKEN, claves IA) jamás viajan en sync ni merges (política `stripSecretFields`, H-29-1) — preserva esa política tal cual.
+
+### C. Alcance de la misión — 7 módulos, TODOS cableados de punta a punta
+
+- **M1 — Rectoría por Firebase Auth:** crea la cuenta de Rectoría en Firebase Auth (correo+contraseña, p. ej. `rectoria@…`), y el login de Rectoría verifica CONTRA FIREBASE AUTH. Elimina por completo el check `admin2026` del bundle. El rol ADMIN se otorga SOLO si `users/{uid}.role === 'ADMIN'` (el perfil lo creas TÚ en la consola, no por autoregistro).
+- **M2 — Docentes:** la creación en "Gestión Docentes" (Rectoría) debe terminar en una credencial real verificada server-side (diseña e implementa el mecanismo completo que consideres correcto con Firebase Auth — p. ej. cuenta por docente + contraseña temporal forzada a cambio en primer ingreso, o el modelo que la plataforma soporte de verdad). Incluye **cambio de contraseña propia** desde el portal docente. Si decides mantener la `tempPassword` local como paso intermedio, debe quedar verificada contra Firestore (no contra localStorage) y documentado el porqué.
+- **M3 — Estudiantes/Acudientes:** define e implementa el modelo real de acceso al portal (vinculación `linkedStudentCode` incluida) — mismo estándar: verificado server-side o eliminado.
+- **M4 — Sesión:** conserva las garantías Ronda 30 (login obligatorio, TTL 12h, logout destructivo, píldora sin persistir sesión) extendiendo `UserSession` con la identidad Firebase (uid/email). El `inas_push_role_v1` de pushService debe seguir derivando del rol REAL del perfil.
+- **M5 — Modos de login:** el LoginScreen quedará con EXACTAMENTE los modos que funcionen de punta a punta. Si un modo (Google Workspace, Correo Firebase) no lo terminas de cablear con rol/perfil/vinculación reales, se ELIMINA de la UI en tu commit (un botón roto es peor que un botón ausente). Nada de botones decorativos.
+- **M6 — Reglas Firestore:** extiende las reglas endurecidas a los nuevos paths que introduzcas (p. ej. perfiles de docente, vinculaciones), despliégalas y verifica con pruebas reales (un docente NO puede leer el perfil de otro; un estudiante no puede escribir en `users`; catch-all DENY se mantiene).
+- **M7 — Manual de despliegue Firebase (entregable escrito):** `docs/DESPLEGUE_FIREBASE.md`, paso a paso para la institución SIN asumir CLI: crear proyecto, activar Auth (proveedores que uses), crear el usuario de Rectoría y su doc `users/{uid}` con role ADMIN, cargar `firestore.rules`, y cómo crear docentes/perfiles desde la app. Este manual es parte del bootstrapper de entrega (Roadmap §4).
+
+### D. Prohibiciones explícitas (historial: el propietario reporta integraciones "con funciones integradas pero no programadas, sin cablear")
+
+1. **Regla 6 del repo (Cero Fallbacks) se aplica con lupa:** PROHIBIDO try/catch que degrade silenciosamente a modo demo, funciones definidas y nunca llamadas, constantes de "integración" sin consumidor, ni flujos que terminen en un estado que "parece" login sin haber verificado nada. Si algo no quedó cableado, la UI no lo muestra.
+2. PROHIBIDO reintroducir credenciales/secretos en el bundle o en documentos sincronizados.
+3. PROHIBIDO romper lo que ya está verificado: puerta de login R30, anti-seed Día Cero (arranque en blanco), cadena HMAC de excusas, gate AUTH_TOKEN del worker, `stripSecretFields`, y las reglas Firestore endurecidas.
+4. PROHIBIDO registrar logins de prueba en producción como si fueran institucionales — usa tu schoolCode de prueba o documenta la limpieza al final (existe CloudPurgeSection en Ajustes de Rectoría).
+
+### E. Definition of Done (checklist de cierre — sin esta lista completa, la misión NO está terminada)
+
+- [ ] `npx tsc --noEmit` = 0 errores; `npx vite build` limpio.
+- [ ] E2E en producción por los 3 roles (Rectoría / Docente / Estudiante) con capturas guardadas en `/home/z/my-project/download/qa-auth/`: login correcto, login incorrecto rechazado con mensaje seguro (sin revelar datos), recarga con sesión vigente, recarga tras logout → pantalla de login.
+- [ ] `admin2026` (o cualquier credencial) AUSENTE en el bundle servido: `curl -s https://student-pass-id.pages.dev/assets/<bundle>.js | rg 'admin2026'` = 0 resultados.
+- [ ] Reglas Firestore desplegadas y probadas (evidencia en la bitácora: qué se probó y con qué resultado).
+- [ ] `docs/DESPLEGUE_FIREBASE.md` completo (M7).
+- [ ] Bitácora: entra tu ronda en §3 (arriba de la más reciente, formato "### ✅ Ronda N (fecha): …"), commit y push; verifica que el hash del bundle en producción cambió.
+- [ ] **Verificación de aceptación:** al reportar "listo", el agente principal ejecutará una pasada E2E independiente por rol (profesores, estudiantes, rectoría, excusas de punta a punta). Lo que falle vuelve a ti.
+
+---
+
 ## 📌 1. Reglas Obligatorias de Desarrollo
 
 1. **Regla de Estabilización Previa (Cero Regresiones):**
@@ -683,6 +732,18 @@ El proveedor **Email/Password NO está habilitado** en Firebase Console (`accoun
 **⏳ Desbloqueo requerido del propietario (RESUELTO el 03/09 — ver continuación):**
 - ~~(a) Reparar el despliegue automático~~ / ~~(b) Entregar un token~~ → **El propietario entregó token fresco** (guardado en `/home/z/my-project/secrets/` fuera del repo, junto con VAPID y GitHub PAT; son temporales y los rotará él).
 
+### ✅ Ronda 31 (05/09/2026): HANDOFF DE AUTENTICACIÓN AL AGENTE FIREBASE + DECISIONES DE PROPIEDAD (NO ROTACIÓN DE CLAVES, BOOTSTRAPPER)
+
+**Origen (petición textual del propietario):** "todo lo que tenga que ver con la autenticación se encarga el otro agente que tiene acceso a Firebase o Firestore… actualiza el AGENTS.md y déjale una instrucción cargada en una sección… él a veces integra muchos fallbacks, integra las funciones pero no las programa, no las cablea — explícale que quiero que haga todo el proceso". Adicional: (1) **NO rotar más claves** ("la institución misma va a implementarlo, ellos tienen que poner sus claves; nosotros solo probamos para dejarlo funcionando"); (2) visión de **bootstrapper** final: despliegue por GitHub Actions / fork donde la institución solo introduce sus propias variables de Cloudflare y Firebase (manual de consola).
+
+**Ejecutado (solo documentación — código de auth INTENCIONALMENTE intacto en esta ronda):**
+1. **Nueva sección top-level 🔑 "SECCIÓN EXCLUSIVA DEL AGENTE DE AUTENTICACIÓN (FIREBASE / FIRESTORE) — MISIÓN AUTH"** (al inicio del documento, antes de §1): autocontenida para un agente sin contexto de conversación. Contiene: contexto exacto del estado post-Ronda 30 (qué existe en `firebase.ts`, qué sigue verificándose client-side), decisiones vinculantes del propietario (terreno Firebase, no-rotación, rol solo desde `users/{uid}`, secretos jamás en sync), **7 módulos de alcance con cableado de punta a punta obligatorio** (M1 Rectoría por Firebase Auth con eliminación total del check `admin2026` del bundle; M2 docentes + cambio de contraseña; M3 estudiantes; M4 conservar garantías de sesión R30; M5 los modos de login que no queden terminados se ELIMINAN de la UI; M6 reglas Firestore extendidas y probadas; M7 manual `docs/DESPLEGUE_FIREBASE.md`), **prohibiciones explícitas anti-fallback** (citando la Regla 6 del repo y el historial del propietario: "prohibido integrar funciones sin programarlas/cablearlas; si algo no quedó cableado, la UI no lo muestra") y un **Definition of Done verificable** (tsc 0, build, E2E 3 roles con capturas, credencial ausente del bundle servido vía curl, bitácora + push + hash de bundle cambiado, verificación de aceptación independiente por el agente principal).
+2. **Roadmap §4 reescrito en su bloque de Prioridad Producción:** ítems de autenticación server-side y cambio de contraseña REASIGNADOS al Agente de Autenticación (el diseño de endpoint worker queda SUPERSEDED — la verificación server-side será Firebase Auth); rotación post-pruebas CANCELADA (decisión del propietario; queda solo purga de nube + volver a Plantilla A).
+3. **Nueva fase "🚚 Fase Bootstrapper"** en Roadmap §4 con el plan de entrega: fork del repo (= "cargar el repositorio"), Pages vía Connect-to-Git del dashboard de la institución, Worker/D1/KV vía GitHub Action (`wrangler-action`) o `wrangler deploy` documentado, secretos generados por la institución y pegados en su panel (la política `stripSecretFields` ya garantiza que no viajan), y el manual Firebase del M7 como parte del paquete. Entregables futuros: workflows, `docs/DESPLEGUE_COMPLETO.md`, ensayo en cuenta limpia.
+4. Confirmado al propietario: la seguridad de "claves pegadas en el panel que no viajan en peticiones" YA está implementada y verificada (H-29-1 `stripSecretFields` + safeSettingsCopy del push; syncSettings no toca secretos).
+
+**Estado del terreno de auth (para trazabilidad):** sin cambios de código en esta ronda. La credencial `admin2026` sigue presente en el bundle hasta que el Agente de Autenticación ejecute M1 — es el hecho que motiva el handoff, documentado como pendiente abierto en Ronda 30.
+
 ### ✅ Ronda 30 (05/09/2026): PUERTA DE LOGIN OBLIGATORIA — FIN DE LA RECTORÍA IMPLÍCITA (H-30-1) + ENDURECIMIENTO DE CREDENCIALES (H-30-2/H-30-3)
 
 **Origen (petición textual del propietario):** "resolver que la página no entre directamente a rectoría en dispositivos pues que no tienen ese rol. Es decir, si yo no me he logueado como rector, no tengo por qué entrar como rector. Es decir, para producción, ¿qué más nos hace falta?". Diagnóstico confirmado: `App.tsx` arrancaba con `isAuthenticated=true` + `currentRole='ADMIN'` (herencia de la decisión Ronda 24 de "Rectoría implícita" para el enrutamiento push) — **cualquier dispositivo que abriera `student-pass-id.pages.dev` entraba a Rectoría completa sin autenticarse** (directorio, buzón, horarios, docentes, carnés, IA, purga de nube).
@@ -976,12 +1037,21 @@ El proveedor **Email/Password NO está habilitado** en Firebase Console (`accoun
 ## 🚀 4. Hoja de Roadmap y Pasos a Seguir
 
 ### 🔴 Prioridad Producción (abierta en Ronda 30 — "¿qué más nos hace falta?")
-Orden sugerido de cierre antes de la matrícula real (Día Cero):
-1. **Autenticación server-side de Rectoría (`/api/auth/login` en el Worker)** — la credencial `admin/admin2026` sigue verificándose en el cliente (visible en el bundle JS con devtools). H-30-1/H-30-2 cierran el acceso por accidente y por bypass, no el acceso por inspección del bundle. Diseño: el Worker guarda `ADMIN_USER`/`ADMIN_PASS_HASH` (PBKDF2) como secrets, el login del cliente consulta el endpoint (con rate-limit existente), y la sesión local pasa a guardar el JWT/nonce firmado por el worker con TTL. Mientras tanto, el único mitigador es rotar `admin2026` por una clave larga — pero sigue embebida en el bundle, así que la rotación solo compra tiempo.
-2. **Cambio de contraseña propia (docentes/rectoría)** — hoy el docente queda casado a la `tempPassword` generada (solo el acudiente puede cambiar la suya desde el portal). Un "Cambiar contraseña" en el portal docente evita claves temporales permanentes.
+Orden sugerido de cierre antes de la matrícula real (Día Cero). **ACTUALIZACIÓN Ronda 31 (decisión del propietario): la autenticación completa se reasigna al agente con acceso a Firebase/Firestore** (ver sección 🔑 "MISIÓN AUTH" al inicio de este documento) — el diseño de endpoint worker `/api/auth/login` queda SUPERSEDED: la verificación server-side será Firebase Auth. **Tampoco se rotarán claves** (AUTH_TOKEN/VAPID/API keys se quedan como están; la institución real pondrá las suyas al adoptar el proyecto — decisión "solo dejamos funcionando").
+1. ~~Autenticación server-side~~ → **REASIGNADA al Agente de Autenticación (Firebase)** — M1–M6 de la sección 🔑 MISIÓN AUTH (incluye eliminar la credencial embebida del bundle y el cambio de contraseña docente, que absorbe el antiguo ítem 2).
+2. ~~Cambio de contraseña propia (docentes)~~ → absorbido por **M2** de la MISIÓN AUTH.
 3. **PWA instalable (roadmap #14)** — para los terminales de escaneo/aula el "instalar app" evita que el personal navegue a otra cosa y habilita pantalla completa; con la puerta de login ya no hay riesgo de sesión compartida (TTL 12h).
 4. **Consentimiento Ley 1581 visible (#7)** — aviso de tratamiento de datos de menores en el primer login del portal y en el formulario de matrícula.
-5. **Rotación post-pruebas** — antes de entregar: purga de nube (CloudPurgeSection ya la cubre), rotación de AUTH_TOKEN y de la credencial admin, y Plantilla A (no la T de pruebas).
+5. ~~Rotación post-pruebas~~ → **CANCELADA por decisión del propietario (Ronda 31)**: no rotar claves. Sigue vigente solo: purga de nube con CloudPurgeSection antes de la entrega y volver a la Plantilla A (no la T de pruebas).
+
+### 🚚 Fase Bootstrapper (entrega a la institución — decisión del propietario, Ronda 31)
+Objetivo: que la institución adoptante despliegue el sistema COMPLETO por sí sola poniendo únicamente SUS claves, sin nosotros operando nada. Plan acordado (a implementar tras cerrar la MISIÓN AUTH):
+1. **Repo:** la institución hace FORK de este repositorio en su propia cuenta GitHub (el código vive ahí; nada más que cargar — el fork ES la carga).
+2. **Frontend (Pages):** en el dashboard de Cloudflare de ELLOS: Workers & Pages → Create → Pages → Connect to Git → seleccionan su fork → build `npm run build`, output `dist`. Cada push a su `main` despliega (idéntico al flujo que ya usamos nosotros — probado).
+3. **Worker + D1/KV:** dos caminos posibles, a decidir al implementar: (a) GitHub Action en el fork con `cloudflare/wrangler-action@v3` y secrets `CLOUDFLARE_API_TOKEN` + `CLOUDFLARE_ACCOUNT_ID` en Settings→Secrets del repo, o (b) comando único `wrangler deploy` documentado. La creación de la base D1 y el namespace KV va en el manual (dashboard o `wrangler d1 create`).
+4. **Secrets propios:** AUTH_TOKEN, VAPID y claves IA los generan ELLOS y los pegan en su panel (Ajustes) — la app ya los guarda solo en el dispositivo (`stripSecretFields`, H-29-1) y el worker valida por Bearer. Nuestros valores actuales NO viajan en el repo ni en el fork (están fuera del repo, ver Paquete de Credenciales).
+5. **Firebase:** el manual `docs/DESPLEGUE_FIREBASE.md` (entregable **M7** del Agente de Autenticación) cubre consola: proyecto, proveedores Auth, usuario Rectoría + perfil `users/{uid}` ADMIN, reglas.
+6. **Entregables de esta fase:** `.github/workflows/` del bootstrapper (si va el camino Actions), `docs/DESPLEGUE_COMPLETO.md` (índice de todos los manuales + checklist Día Uno) y verificación ensayando el fork en una cuenta limpia.
 
 ### ⏳ Fase Actual (Inmediata): Validación de campo del Worker desplegado
 1. ~~Desplegar el Worker en Cloudflare~~ **HECHO (Ronda 3, 01/09/2026 — versión `f04ead07`)**.
