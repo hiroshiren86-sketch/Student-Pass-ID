@@ -34,6 +34,7 @@ import { AiService } from '../services/aiService';
 import { AiProviderMark } from './AiProviderMark';
 import { ConfirmDialog } from './ConfirmDialog';
 import { enablePush, disablePush, getPushStatus } from '../services/pushService';
+import { BackupRestoreSection } from './BackupRestoreSection'; // Ronda 27 (§3): respaldo local export/import
 import { BellRing, BellOff } from 'lucide-react';
 
 import { SyncOverlay } from './SyncOverlay';
@@ -842,6 +843,11 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ onClose }) => {
               </p>
             )}
           </div>
+
+          {/* Ronda 27 (doc-produccion §3): Respaldo local — export/import de configuración y/o
+              base de datos en UN archivo JSON versionado (INAS_BACKUP v1). Secretos solo con
+              casilla explícita; import con resumen DRY-RUN + respaldo automático previo. */}
+          <BackupRestoreSection />
 
           {/* Secret QR HMAC Key */}
           <div className="pt-2 border-t border-slate-100 dark:border-zinc-800/50">

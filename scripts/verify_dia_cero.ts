@@ -148,6 +148,58 @@ ok(`resetToDemo → ${INITIAL_STUDENTS.length} estudiantes demo restaurados`, de
 ok(`resetToDemo → ${INITIAL_TEACHERS.length} docentes demo restaurados`, demoTeachers.length === INITIAL_TEACHERS.length, `len=${demoTeachers.length}`);
 ok('slots de jornada intactos tras reset', AttendanceStorageService.getScheduleSlots().length === DEFAULT_SCHEDULE_SLOTS.length);
 
+// ---------------------------------------------------------------- (f) round-trip respaldo
+section('(f) RESPALDO round-trip (buildBackup → wipe → applyBackup) — INAS_BACKUP v1');
+const { buildBackup, applyBackup, validateBackup } = await import('../src/services/backupService');
+
+// f.0: estado limpio determinista: 3 estudiantes reales + identidad propia
+cleanAll();
+AttendanceStorageService.getStudents();
+nuevos.forEach(s => AttendanceStorageService.addStudent(s));
+AttendanceStorageService.saveSettings({ ...AttendanceStorageService.getSettings(), schoolName: 'INSTITUCION-BACKUP-TEST' } as any);
+
+// f.1: export BOTH sin secretos
+const bk = buildBackup('BOTH', false);
+ok('formato INAS_BACKUP v1', bk.format === 'INAS_BACKUP' && bk.version === 1);
+ok('counts coherentes (students=3)', bk.counts.students === 3, JSON.stringify(bk.counts));
+ok('sin casilla de secretos: qrSecret NO viaja en el archivo', !((bk.config?.settings as any)?.qrSecret));
+ok('validateBackup acepta el archivo propio', validateBackup(JSON.parse(JSON.stringify(bk))) === null);
+ok('validateBackup rechaza formato ajeno', validateBackup({ format: 'OTRO' }) !== null);
+
+// f.2: wipe total → import BOTH → el dispositivo recupera todo
+cleanAll();
+const bkParsed = JSON.parse(JSON.stringify(bk)); // simula archivo en disco
+applyBackup(bkParsed);
+const afterStudents = AttendanceStorageService.getStudents();
+ok('import BOTH restaura los 3 estudiantes', afterStudents.length === 3, `len=${afterStudents.length}`);
+ok('import BOTH restaura docentes (del respaldo)', AttendanceStorageService.getTeachers().length === bk.data!.teachers.length);
+ok('import restaura plantillas custom', JSON.stringify(AttendanceStorageService.getCustomTemplates()) === JSON.stringify(bk.data!.customTemplates));
+ok('import restaura slots', AttendanceStorageService.getScheduleSlots().length === bk.data!.slots.length);
+
+// f.3: import parsiela — DATA restaura datos SIN tocar la identidad del colegio
+cleanAll();
+AttendanceStorageService.getStudents();
+nuevos.forEach(s => AttendanceStorageService.addStudent(s));
+AttendanceStorageService.saveSettings({ ...AttendanceStorageService.getSettings(), schoolName: 'INSTITUCION-BACKUP-TEST' } as any);
+const bkData = JSON.parse(JSON.stringify(buildBackup('DATA', false)));
+AttendanceStorageService.saveStudents([]); // el dispositivo pierde sus datos (sin borrar settings)
+AttendanceStorageService.saveSettings({ ...AttendanceStorageService.getSettings(), schoolName: 'IDENTIDAD-PROTEGIDA' } as any);
+applyBackup(bkData);
+ok('import DATA NO toca la identidad (schoolName intacto)', AttendanceStorageService.getSettings().schoolName === 'IDENTIDAD-PROTEGIDA');
+ok('import DATA restaura estudiantes', AttendanceStorageService.getStudents().length === 3);
+
+// f.4: import parsiela — CONFIG restaura settings sin crear datos
+cleanAll();
+AttendanceStorageService.getStudents();
+AttendanceStorageService.saveSettings({ ...AttendanceStorageService.getSettings(), schoolName: 'INSTITUCION-BACKUP-TEST' } as any);
+const bkCfg = JSON.parse(JSON.stringify(buildBackup('CONFIG', false)));
+cleanAll();
+AttendanceStorageService.getStudents(); // students = [] persistido post-wipe
+applyBackup(bkCfg);
+ok('import CONFIG restaura settings (sin secretos incluidos)', AttendanceStorageService.getSettings().schoolName === 'INSTITUCION-BACKUP-TEST');
+ok('import CONFIG NO crea estudiantes', AttendanceStorageService.getStudents().length === 0);
+ok('import CONFIG sin secretos deja qrSecret vacío en el archivo (no lo inventa)', !(bkCfg.config?.settings as any)?.qrSecret);
+
 // ---------------------------------------------------------------- resumen
 console.log('\n════════════════════════════════════════');
 console.log(`RESULTADO: ${passed} OK · ${failed} FALLOS`);
