@@ -241,6 +241,10 @@ export interface UserSession {
   username: string;
   role: UserRole;
   token: string;
+  // Ronda 30 (H-30-1): instante (epoch ms) del login REAL que creó la sesión.
+  // Las sesiones sin authAt (era pre-hardening, Rectoría implícita) NO son
+  // restaurables al recargar: solo un login explícito abre la app.
+  authAt?: number;
   studentCode?: string; // Si el rol es ESTUDIANTE_ACUDIENTE
   teacherId?: string;   // Si el rol es DOCENTE
   isRepresentative?: boolean;

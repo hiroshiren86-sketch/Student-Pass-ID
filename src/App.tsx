@@ -41,7 +41,7 @@ import { PushOnboardingBanner } from './components/PushOnboardingBanner'; // Ron
 import { FirstWelcomeTour, FirstWelcomeTourService } from './components/FirstWelcomeTour'; // Ronda 29: asistente de primer ingreso
 import { useExcusesBadge } from './hooks/useExcusesBadge'; // Ronda 24: punto rojo de excusas pendientes
 import { useTheme } from './context/ThemeContext';
-import { SchoolSettings, Student, Teacher, UserRole } from './types/attendance';
+import { SchoolSettings, Student, Teacher, UserSession, UserRole } from './types/attendance';
 import { AttendanceStorageService } from './services/attendanceStorage';
 import { CloudflareSyncService } from './services/cloudflareSync';
 import { FirebaseService } from './services/firebase';
@@ -49,11 +49,14 @@ import { FirebaseService } from './services/firebase';
 export type ActiveTab = 'scan' | 'students' | 'teachers' | 'schedules' | 'cards' | 'attendance' | 'ai-grades' | 'teacher' | 'portal' | 'excuses';
 
 export default function App() {
-  const [isAuthenticated, setIsAuthenticated] = useState<boolean>(true);
+  // Ronda 30 (H-30-1): la app ya NO arranca como Rectoría implícita. Todo dispositivo
+  // abre en la pantalla de login; solo un login real (o la restauración de una sesión
+  // vigente nacida de un login real, ver boot effect) entra a la aplicación.
+  const [isAuthenticated, setIsAuthenticated] = useState<boolean>(false);
   const [currentRole, setCurrentRole] = useState<UserRole>('ADMIN');
   const [activeTab, setActiveTab] = useState<ActiveTab>('students');
   const [loggedUser, setLoggedUser] = useState<{ teacher?: Teacher; student?: Student; username: string }>({
-    username: 'Rectoría / Administrador General'
+    username: ''
   });
 
   const { theme, toggleTheme } = useTheme();
@@ -87,10 +90,17 @@ export default function App() {
     FirebaseService.ensureAnonymousAuth().catch(() => {}); // Ronda 16: fire-and-forget, nunca bloquea
     AttendanceStorageService.initCloudSettingsSync();
     CloudflareSyncService.initAutoSync();
-    // Ronda 24: la app ARRANCA como Rectoría implícita (sin login). Persistir la
-    // sesión desde el primer frame: si el rector activa notificaciones sin haber
-    // pasado por login, la suscripción debe saber que es RECTORIA.
-    persistSession('ADMIN', { username: 'Rectoría / Administrador General' });
+    // Ronda 30 (H-30-1): arranque con PUERTA DE LOGIN. Se intenta restaurar
+    // ÚNICAMENTE una sesión nacida de un login real (authAt) y no expirada (TTL 12h);
+    // si no existe, el dispositivo se queda en LoginScreen. Sustituye al arranque
+    // como Rectoría implícita de la Ronda 24 (cualquiera que abriera la URL en un
+    // dispositivo entraba a Rectoría sin autenticarse).
+    const restored = AttendanceStorageService.restoreValidSession();
+    if (restored) {
+      applyRestoredSession(restored);
+    } else {
+      try { localStorage.removeItem('inas_push_role_v1'); } catch {}
+    }
     const unsubscribe = AttendanceStorageService.subscribe(() => {
       setSettings(AttendanceStorageService.getSettings());
     });
@@ -116,21 +126,55 @@ export default function App() {
     return () => window.clearInterval(intervalId);
   }, []);
 
-  // Ronda 24 (fix crítico): persistir la sesión real del usuario. Históricamente
-  // saveCurrentSession JAMÁS se llamaba → pushService leía una sesión fantasma y
-  // enrutaba TODAS las suscripciones como PORTAL → Rectoría jamás recibía el push
-  // de "nueva excusa" y el estudiante jamás el veredicto.
+  // Ronda 24 (fix crítico) + Ronda 30 (H-30-1): persistir la sesión SOLO en logins
+  // reales (llamado exclusivamente desde handleLoginSuccess). La sesión lleva `authAt`
+  // (estampa del login) que habilita su restauración por < 12h al recargar. La píldora
+  // de cambio de perfil ya NO pasa por aquí (era el agujero: al recargar tras cambiar
+  // de perfil, el dispositivo "renacía" como Docente/Estudiante sin autenticarse).
   const persistSession = (role: UserRole, payload?: { teacher?: Teacher; student?: Student; username: string }) => {
     try {
       AttendanceStorageService.saveCurrentSession({
         username: payload?.username || role,
         role,
         token: 'local-session',
+        authAt: Date.now(),
         studentCode: role === 'ESTUDIANTE_ACUDIENTE' ? payload?.student?.code : undefined,
         teacherId: role === 'DOCENTE' ? payload?.teacher?.id : undefined
       });
       localStorage.setItem('inas_push_role_v1', role === 'ADMIN' ? 'RECTORIA' : 'PORTAL');
     } catch { /* prescindible: el push degrada a PORTAL */ }
+  };
+
+  // Ronda 30 (H-30-1): aplica una sesión restaurada (login real con menos de 12h) al
+  // estado de la app. Si el docente/estudiante referenciado ya no existe en la BD local
+  // (fue borrado mientras la sesión estaba guardada), la sesión se invalida y se
+  // muestra LoginScreen — nunca se restaura un rol fantasma.
+  const applyRestoredSession = (session: UserSession) => {
+    const invalidate = () => {
+      AttendanceStorageService.clearSession();
+      try { localStorage.removeItem('inas_push_role_v1'); } catch {}
+    };
+
+    let userPayload: { teacher?: Teacher; student?: Student; username: string };
+
+    if (session.role === 'DOCENTE') {
+      const teacher = AttendanceStorageService.getTeachers().find(t => t.id === session.teacherId);
+      if (!teacher) { invalidate(); return; }
+      userPayload = { teacher, username: teacher.fullName };
+      setActiveTab('teacher');
+    } else if (session.role === 'ESTUDIANTE_ACUDIENTE') {
+      const student = AttendanceStorageService.getStudents().find(s => s.code === session.studentCode);
+      if (!student) { invalidate(); return; }
+      userPayload = { student, username: `${student.firstName} ${student.lastName}` };
+      setActiveTab('portal');
+    } else {
+      userPayload = { username: session.username || 'Rectoría / Administrador General' };
+      setActiveTab('students');
+    }
+
+    setCurrentRole(session.role);
+    setLoggedUser(userPayload);
+    setIsAuthenticated(true);
   };
 
   // Handle successful login
@@ -156,6 +200,16 @@ export default function App() {
 
   const handleLogout = () => {
     setIsUserMenuOpen(false);
+    // Ronda 30 (H-30-1): logout REAL. Antes solo se ocultaba la app (isAuthenticated
+    //=false) dejando la sesión en localStorage — cualquier persona que abriera el
+    // navegador del dispositivo heredaba el rol autenticado. Ahora la sesión se
+    // destruye, la bandera de enrutamiento push se limpia y el dispositivo vuelve
+    // a la pantalla de login.
+    AttendanceStorageService.clearSession();
+    try { localStorage.removeItem('inas_push_role_v1'); } catch {}
+    setCurrentRole('ADMIN');
+    setActiveTab('students');
+    setLoggedUser({ username: '' });
     setIsAuthenticated(false);
   };
 
@@ -164,11 +218,13 @@ export default function App() {
     setCurrentRole(role);
     setShowRoleModal(false);
     setIsUserMenuOpen(false);
-    persistSession(role, {
-      teacher: role === 'DOCENTE' ? AttendanceStorageService.getTeachers()[0] : undefined,
-      student: role === 'ESTUDIANTE_ACUDIENTE' ? AttendanceStorageService.getStudents()[0] : undefined,
-      username: role === 'ADMIN' ? 'Rectoría / Administrador General' : undefined
-    } as any);
+    // Ronda 30 (H-30-1): la píldora es una VISTA PREVIA dentro de la sesión de
+    // Rectoría — ya NO sobrescribe la sesión persistida (antes persistSession()
+    // reescribía el rol y, al recargar, el dispositivo entraba como Docente o
+    // Estudiante sin haberse autenticado como tal). Solo se actualiza la bandera
+    // de enrutamiento push; la sesión real (authAt) queda intacta hasta logout
+    // o nuevo login.
+    try { localStorage.setItem('inas_push_role_v1', role === 'ADMIN' ? 'RECTORIA' : 'PORTAL'); } catch {}
     if (role === 'DOCENTE') {
       setActiveTab('teacher');
       const firstTeacher = AttendanceStorageService.getTeachers()[0];

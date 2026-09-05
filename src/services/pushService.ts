@@ -51,14 +51,15 @@ function urlBase64ToUint8Array(base64String: string): Uint8Array {
  * Ronda 24 (fix crítico): la sesión `inas_user_session_v5` históricamente NUNCA se
  * escribía (saveCurrentSession sin llamadores) → toda suscripción se registraba como
  * PORTAL y el push de "nueva excusa" (dirigido a RECTORIA) jamás tenía destinatarios.
- * Ahora el rol vive en TRES fuentes, en orden de confianza:
- *   1. `inas_push_role_v1` — escrito por App.tsx en cada login/cambio de rol.
- *   2. `inas_user_session_v5` — respaldo (persistida desde Ronda 24).
- *   3. DEFAULT 'RECTORIA' — la app arranca como Rectoría implícita (isAuthenticated
- *      por defecto, SIN pasar por login): si el rector activa notificaciones sin
- *      haber hecho login, su suscripción DEBE ser RECTORIA. Sin este default, la
- *      suscripción del terminal de Rectoría se registraba PORTAL y jamás recibía
- *      "nueva excusa" (comprobado E2E en producción, Ronda 24).
+ * El rol vive en DOS fuentes, en orden de confianza:
+ *   1. `inas_push_role_v1` — escrito por App.tsx en cada login real (y actualizado
+ *      por la píldora de cambio de perfil, solo como vista previa).
+ *   2. `inas_user_session_v5` — respaldo (sesión con authAt, Ronda 30).
+ * Ronda 30 (H-30-1): la app ya NO arranca como Rectoría implícita — existe una puerta
+ * de login real. Por mínimo privilegio, un dispositivo SIN login no tiene rol:
+ * el default es 'PORTAL' (un default 'RECTORIA' haría que un dispositivo cualquiera
+ * sin autenticar recibiera los pushes de excusas de TODA la escuela). El login de
+ * Rectoría escribe la bandera RECTORIA en el mismo instante de autenticarse.
  */
 function currentRole(): 'RECTORIA' | 'PORTAL' {
   try {
@@ -67,9 +68,9 @@ function currentRole(): 'RECTORIA' | 'PORTAL' {
     const raw = localStorage.getItem('inas_user_session_v5');
     const session = raw ? JSON.parse(raw) : null;
     if (session?.role) return session.role === 'ADMIN' ? 'RECTORIA' : 'PORTAL';
-    return 'RECTORIA'; // terminal recién abierto: Rectoría implícita (arranque por defecto)
+    return 'PORTAL'; // Ronda 30: dispositivo sin login = sin privilegio RECTORIA
   } catch {
-    return 'RECTORIA';
+    return 'PORTAL';
   }
 }
 

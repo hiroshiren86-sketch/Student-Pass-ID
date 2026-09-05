@@ -12,9 +12,7 @@ import {
   EyeOff,
   Cloud,
   Mail,
-  Check,
-  KeyRound,
-  Info
+  Check
 } from 'lucide-react';
 import { UserRole, Teacher, Student } from '../types/attendance';
 import { AttendanceStorageService } from '../services/attendanceStorage';
@@ -27,13 +25,15 @@ interface LoginScreenProps {
 export const LoginScreen: React.FC<LoginScreenProps> = ({ onLoginSuccess }) => {
   const [authMode, setAuthMode] = useState<'ROLE_QUICK' | 'GOOGLE' | 'FIREBASE_EMAIL'>('ROLE_QUICK');
   const [selectedRole, setSelectedRole] = useState<UserRole>('ADMIN');
-  const [identifier, setIdentifier] = useState('admin');
-  const [password, setPassword] = useState('admin2026');
+  // Ronda 30 (H-30-2): el formulario nace VACÍO. Antes venía precargado con
+  // admin/admin2026 — en producción, el navegador de cualquier dispositivo
+  // mostraba la contraseña de Rectoría antes de escribir una sola tecla.
+  const [identifier, setIdentifier] = useState('');
+  const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
-  const [showDemoAccountsModal, setShowDemoAccountsModal] = useState(false);
 
   // Email / Password registration or login for Firebase
   const [firebaseEmail, setFirebaseEmail] = useState('');
@@ -45,20 +45,11 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onLoginSuccess }) => {
 
   const handleRoleSelect = (role: UserRole) => {
     setSelectedRole(role);
+    // Ronda 30 (H-30-2): sin precarga de credenciales demo — cada perfil exige
+    // escribir sus credenciales reales (Rectoría: admin/admin2026; Docente y
+    // Estudiante: la tempPassword impresa/entregada por Rectoría).
     setErrorMessage(null);
     setSuccessMessage(null);
-
-    // Pre-fill demo credentials for convenience
-    if (role === 'ADMIN') {
-      setIdentifier('admin');
-      setPassword('admin2026');
-    } else if (role === 'DOCENTE') {
-      setIdentifier('jperez');
-      setPassword('Profe2026*Mat');
-    } else if (role === 'ESTUDIANTE_ACUDIENTE') {
-      setIdentifier('1000000002'); // Valentina Gómez (6°1 - Representante)
-      setPassword('SJ-1274');
-    }
   };
 
   // 1. Google Authentication via Firebase
@@ -161,9 +152,10 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onLoginSuccess }) => {
         return;
       }
 
-      // Role 1: ADMIN
+      // Role 1: ADMIN — Ronda 30 (H-30-2): credencial única, sin contraseñas maestras
+      // de demostración (antes 'admin' y '123456' también abrían la sesión).
       if (selectedRole === 'ADMIN') {
-        if ((cleanIdent.toLowerCase() === 'admin' || cleanIdent === '123456') && (cleanPass === 'admin2026' || cleanPass === 'admin' || cleanPass === '123456')) {
+        if (cleanIdent.toLowerCase() === 'admin' && cleanPass === 'admin2026') {
           onLoginSuccess('ADMIN', { username: 'Rectoría / Admin' });
         } else {
           setErrorMessage('Credenciales de Rectoría incorrectas. Verifique su usuario y contraseña.');
@@ -187,9 +179,11 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onLoginSuccess }) => {
           return;
         }
 
-        // Validate password
-        if (teacher.tempPassword && cleanPass !== teacher.tempPassword && cleanPass !== '123456' && cleanPass !== 'Profe2026*Mat') {
-          setErrorMessage('Contraseña incorrecta. Por favor intente nuevamente.');
+        // Ronda 30 (H-30-2): solo la tempPassword real del docente — se retiran los
+        // bypass universales ('123456', 'Profe2026*Mat') que dejaban entrar a CUALQUIER
+        // docente con la misma contraseña.
+        if (!teacher.tempPassword || cleanPass !== teacher.tempPassword) {
+          setErrorMessage('Contraseña incorrecta. Use la clave temporal asignada por Rectoría (o la que usted mismo definió en su portal).');
           setIsLoading(false);
           return;
         }
@@ -218,14 +212,13 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onLoginSuccess }) => {
           return;
         }
 
-        // Validate student password (permite tempPassword, 123456, código de carné o carnet)
-        if (student.tempPassword && 
-            cleanPass !== student.tempPassword && 
-            cleanPass !== '123456' && 
-            cleanPass !== student.code &&
-            cleanPass !== 'admin' &&
-            cleanPass !== student.documentId) {
-          setErrorMessage(`Código de acceso incorrecto para ${student.firstName} ${student.lastName}. (Pruebe: ${student.tempPassword} o 123456)`);
+        // Ronda 30 (H-30-2): solo la tempPassword real del estudiante (el código del
+        // reverso del carné o el que el acudiente definió en el portal). Se retiran los
+        // bypass ('123456', 'admin', documento, código) y — crítico — el mensaje de
+        // error ya NO revela la contraseña válida (antes la imprimía en pantalla para
+        // cualquier visitante que tecleara un nombre).
+        if (!student.tempPassword || cleanPass !== student.tempPassword) {
+          setErrorMessage(`Código de acceso incorrecto para ${student.firstName} ${student.lastName}. Verifique el código del reverso del carné o solicite uno nuevo en Rectoría.`);
           setIsLoading(false);
           return;
         }
@@ -335,29 +328,10 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onLoginSuccess }) => {
               })}
             </div>
 
-            {/* Quick Demo Helper Button */}
-            <button
-              type="button"
-              onClick={() => setShowDemoAccountsModal(!showDemoAccountsModal)}
-              className="w-full py-2.5 px-3 rounded-2xl bg-indigo-50/60 dark:bg-indigo-950/40 border border-indigo-100 dark:border-indigo-900/60 text-xs font-bold text-indigo-700 dark:text-indigo-300 flex items-center justify-center gap-2 hover:bg-indigo-100/70 transition-colors"
-            >
-              <KeyRound className="w-4 h-4" />
-              <span>Ver Cuentas Demo de Prueba</span>
-            </button>
-
-            {showDemoAccountsModal && (
-              <div className="p-3.5 rounded-2xl bg-white dark:bg-zinc-950 border border-indigo-200 dark:border-indigo-800 text-[11px] space-y-2 shadow-lg animate-fadeIn">
-                <div className="font-black text-indigo-600 dark:text-indigo-400 flex items-center gap-1.5">
-                  <Info className="w-3.5 h-3.5" />
-                  Credenciales de Demostración:
-                </div>
-                <div className="space-y-1 text-slate-600 dark:text-slate-300">
-                  <p>• <strong>Admin:</strong> <code>admin</code> / <code>admin2026</code></p>
-                  <p>• <strong>Docente:</strong> <code>jperez</code> / <code>Profe2026*Mat</code> (Juan Pablo Pérez)</p>
-                  <p>• <strong>Estudiante / Rep:</strong> <code>1000000002</code> / <code>SJ-1274</code> (Valentina Gómez 6°1)</p>
-                </div>
-              </div>
-            )}
+            {/* Ronda 30 (H-30-2): el panel "Ver Cuentas Demo de Prueba" fue retirado —
+                publicaba la contraseña de Rectoría y las credenciales de docentes y
+                estudiantes en la propia pantalla de login. Las credenciales institucionales
+                viven en el documento de entrega, no en la aplicación. */}
           </div>
 
           {/* Right Column: Credentials Form */}

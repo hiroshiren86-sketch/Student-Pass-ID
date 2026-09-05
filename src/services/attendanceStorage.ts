@@ -129,6 +129,38 @@ export class AttendanceStorageService {
     this.notify();
   }
 
+  /**
+   * Ronda 30 (H-30-1): restauración SEGURA de sesión al recargar la página.
+   *
+   * La app ya NO arranca como Rectoría implícita (isAuthenticated=false): solo un
+   * login explícito abre la aplicación. Al recargar, esta función decide si la
+   * sesión persistida es restorable bajo TRES condiciones:
+   *   1. Existe y tiene `authAt` (estampa del login real — las sesiones legacy de la
+   *      era de Rectoría implícita, sin authAt, se descartan y se borran).
+   *   2. No ha expirado (TTL 12 h, espejo del expiró de la sesión HMAC del servidor
+   *      legado): en un dispositivo compartido, la sesión muere sola cada media jornada.
+   *   3. El rol aún existe en la BD local (App.tsx valida docente/estudiante por id).
+   *
+   * Si algo falla, la sesión se limpia y se devuelve null → LoginScreen.
+   */
+  static restoreValidSession(maxAgeMs: number = 12 * 60 * 60 * 1000): UserSession | null {
+    try {
+      const session = this.getCurrentSession();
+      if (!session || !session.authAt) {
+        this.clearSession();
+        return null;
+      }
+      if (Date.now() - session.authAt > maxAgeMs) {
+        this.clearSession();
+        return null;
+      }
+      return session;
+    } catch {
+      this.clearSession();
+      return null;
+    }
+  }
+
   // ==================== SETTINGS ====================
   private static isCloudSyncInitialized = false;
 
