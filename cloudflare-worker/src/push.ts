@@ -24,6 +24,26 @@ import { corsHeaders } from './index';
 
 const B64URL_RE = /^[A-Za-z0-9_-]+$/;
 
+// ============================================================================
+// H-2 (Ronda 27 — hardening pre-producción): rate limit de /api/push/test.
+// Defensa en profundidad SOBRE el guard AUTH_TOKEN global (index.ts): limita
+// reintentos que gastan cuota de los push services. Límite simple por-aislado
+// (el Map vive mientras viva el isolate — suficiente para abuso casual, no es
+// un contador distribuido): 5 envíos por IP por hora.
+// ============================================================================
+const PUSH_TEST_LIMIT = 5;
+const PUSH_TEST_WINDOW_MS = 60 * 60 * 1000;
+const PUSH_TEST_HITS = new Map<string, number[]>();
+
+function pushTestRateLimited(ip: string): boolean {
+  const now = Date.now();
+  const hits = (PUSH_TEST_HITS.get(ip) || []).filter(t => now - t < PUSH_TEST_WINDOW_MS);
+  PUSH_TEST_HITS.set(ip, hits);
+  if (hits.length >= PUSH_TEST_LIMIT) return true;
+  hits.push(now);
+  return false;
+}
+
 function b64urlToBytes(s: string): Uint8Array {
   const pad = '='.repeat((4 - (s.length % 4)) % 4);
   const b64 = s.replace(/-/g, '+').replace(/_/g, '/') + pad;
@@ -285,6 +305,11 @@ export async function handlePushRoutes(request: Request, env: Env, url: URL, pat
   // entrega (estado HTTP de cada push service). Útil en Ajustes para que Rectoría
   // verifique sus dispositivos sin depender de radicar una excusa real.
   if (path === '/api/push/test' && request.method === 'POST') {
+    // H-2 (Ronda 27): 429 si la IP excede el límite horario de pruebas de push.
+    const ip = request.headers.get('CF-Connecting-IP') || 'desconocida';
+    if (pushTestRateLimited(ip)) {
+      return err('Límite de pruebas de notificación alcanzado (5 por hora). Intenta de nuevo más tarde.', 429);
+    }
     let body: any = {};
     try { body = await request.json(); } catch { /* cuerpo opcional */ }
     const role = ['RECTORIA', 'PORTAL'].includes(String(body.role)) ? String(body.role) : 'RECTORIA';
