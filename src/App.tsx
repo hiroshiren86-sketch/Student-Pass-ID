@@ -38,6 +38,7 @@ import { ExcusesInboxView } from './components/ExcusesInboxView'; // Ronda 21: b
 import { LoginScreen } from './components/LoginScreen';
 import { SettingsModal } from './components/SettingsModal';
 import { PushOnboardingBanner } from './components/PushOnboardingBanner'; // Ronda 24: onboarding visible de notificaciones
+import { FirstWelcomeTour, FirstWelcomeTourService } from './components/FirstWelcomeTour'; // Ronda 29: asistente de primer ingreso
 import { useExcusesBadge } from './hooks/useExcusesBadge'; // Ronda 24: punto rojo de excusas pendientes
 import { useTheme } from './context/ThemeContext';
 import { SchoolSettings, Student, Teacher, UserRole } from './types/attendance';
@@ -58,6 +59,9 @@ export default function App() {
   const { theme, toggleTheme } = useTheme();
   const [showSettingsModal, setShowSettingsModal] = useState(false);
   const [showRoleModal, setShowRoleModal] = useState(false);
+  // Ronda 29: asistente de primer ingreso (guía por perfil, una sola vez por dispositivo)
+  const [showWelcomeTour, setShowWelcomeTour] = useState(false);
+  const [isTourManualReopen, setIsTourManualReopen] = useState(false);
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const [settings, setSettings] = useState<SchoolSettings>(AttendanceStorageService.getSettings());
 
@@ -67,6 +71,16 @@ export default function App() {
 
   // Ronda 24: punto rojo de excusas pendientes (Rectoría) — sondeo 30s, verdad = Worker
   const { pendingCount, refresh: refreshExcuseBadge } = useExcusesBadge(currentRole, activeTab);
+
+  // Ronda 29: asistente de primer ingreso — se dispara al cambiar de perfil/sesión si
+  // este dispositivo nunca ha visto la guía de ese perfil (bandera localStorage).
+  useEffect(() => {
+    if (!isAuthenticated) return;
+    if (!FirstWelcomeTourService.isSeen(currentRole)) {
+      setIsTourManualReopen(false);
+      setShowWelcomeTour(true);
+    }
+  }, [isAuthenticated, currentRole]);
 
   useEffect(() => {
     AttendanceStorageService.ensureActiveTemplateConsistency(); // Ronda 8 (B4): realinea plantilla activa vs slots
@@ -442,6 +456,19 @@ export default function App() {
                         </span>
                       </button>
                     )}
+
+                    {/* Ronda 29: reapertura manual de la guía de primer ingreso (no toca la bandera) */}
+                    <button
+                      onClick={() => {
+                        setIsUserMenuOpen(false);
+                        setIsTourManualReopen(true);
+                        setShowWelcomeTour(true);
+                      }}
+                      className="w-full p-2 rounded-xl text-left flex items-center gap-2 text-xs font-bold text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
+                    >
+                      <Sparkles className="w-4 h-4 text-amber-500" />
+                      <span>Guía rápida</span>
+                    </button>
                   </div>
 
                   {/* Sync Status Badge */}
@@ -490,6 +517,19 @@ export default function App() {
         {activeTab === 'ai-grades' && <GradeAiSummaryView />}
         {activeTab === 'portal' && <StudentPortalView activeStudentCode={loggedUser.student?.code} />}
       </main>
+
+      {/* Ronda 29: Asistente de primer ingreso (una vez por perfil/dispositivo) */}
+      {showWelcomeTour && (
+        <FirstWelcomeTour
+          role={currentRole}
+          isManualReopen={isTourManualReopen}
+          onClose={() => setShowWelcomeTour(false)}
+          onNavigate={(tab) => {
+            setShowWelcomeTour(false);
+            setActiveTab(tab as ActiveTab);
+          }}
+        />
+      )}
 
       {/* Role Selection Modal (Accessible by Admin) */}
       {showRoleModal && (
