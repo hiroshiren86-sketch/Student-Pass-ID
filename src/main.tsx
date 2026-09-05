@@ -49,3 +49,17 @@ createRoot(document.getElementById('root')!).render(
     </ThemeProvider>
   </StrictMode>,
 );
+
+// PWA — Ronda 32: el service worker de alcance raíz (/push-sw.js) lleva el app-shell
+// offline Y las notificaciones push (un único SW por alcance para no romper las
+// suscripciones VAPID). Se registra SIEMPRE al arranque — no solo cuando el usuario
+// activa notificaciones — para que el modo instalado/offline esté disponible desde
+// la primera visita. pushService reutiliza este mismo registro (idempotente).
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('/push-sw.js').catch((err) => {
+      console.warn('[PWA] No se pudo registrar el service worker:', err);
+    });
+  });
+}
+
