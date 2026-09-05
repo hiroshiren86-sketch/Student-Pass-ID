@@ -683,6 +683,25 @@ El proveedor **Email/Password NO está habilitado** en Firebase Console (`accoun
 **⏳ Desbloqueo requerido del propietario (RESUELTO el 03/09 — ver continuación):**
 - ~~(a) Reparar el despliegue automático~~ / ~~(b) Entregar un token~~ → **El propietario entregó token fresco** (guardado en `/home/z/my-project/secrets/` fuera del repo, junto con VAPID y GitHub PAT; son temporales y los rotará él).
 
+### ✅ Ronda 30 (05/09/2026): PUERTA DE LOGIN OBLIGATORIA — FIN DE LA RECTORÍA IMPLÍCITA (H-30-1) + ENDURECIMIENTO DE CREDENCIALES (H-30-2/H-30-3)
+
+**Origen (petición textual del propietario):** "resolver que la página no entre directamente a rectoría en dispositivos pues que no tienen ese rol. Es decir, si yo no me he logueado como rector, no tengo por qué entrar como rector. Es decir, para producción, ¿qué más nos hace falta?". Diagnóstico confirmado: `App.tsx` arrancaba con `isAuthenticated=true` + `currentRole='ADMIN'` (herencia de la decisión Ronda 24 de "Rectoría implícita" para el enrutamiento push) — **cualquier dispositivo que abriera `student-pass-id.pages.dev` entraba a Rectoría completa sin autenticarse** (directorio, buzón, horarios, docentes, carnés, IA, purga de nube).
+
+**H-30-1 — Puerta de login (`App.tsx`, `attendanceStorage.ts`, `types/attendance.ts`):**
+1. `isAuthenticated` arranca en `false`: todo dispositivo abre en `LoginScreen`. Se elimina el `persistSession('ADMIN', …)` del arranque.
+2. `UserSession.authAt` (epoch ms del login real) + `AttendanceStorageService.restoreValidSession(maxAge=12h)`: al recargar, SOLO se restaura una sesión nacida de un login real y no expirada. Las sesiones legacy sin `authAt` (era de Rectoría implícita) se descartan y borran — nadie "hereda" una sesión que no creó.
+3. Restauración con validación de existencia: si el docente (`teacherId`) o estudiante (`studentCode`) referenciado ya no existe en la BD local, la sesión se invalida → LoginScreen (nunca se restaura un rol fantasma).
+4. **Logout REAL:** antes `handleLogout` solo ponía `isAuthenticated=false` dejando la sesión viva en localStorage (cualquiera que reabriera el navegador heredaba el rol). Ahora destruye la sesión, limpia `inas_push_role_v1` y resetea el estado.
+5. **Píldora de cambio de perfil ya no escribe la sesión:** `switchRole` solo actualiza la bandera de enrutamiento push. Antes `persistSession()` reescribía el rol persistido → al recargar tras una vista previa Docente/Estudiante, el dispositivo "renacía" en ese rol sin haberse autenticado como tal. La sesión real (ADMIN con su `authAt` original) queda intacta.
+
+**H-30-2 — Credenciales (`LoginScreen.tsx`):** el formulario nace VACÍO (antes venía precargado con `admin/admin2026` — la contraseña de Rectoría visible en cualquier dispositivo antes de teclear). Eliminados los **bypass maestros**: ADMIN ya no acepta `admin`/`123456` como contraseña (solo `admin2026`); DOCENTE ya no acepta `123456` ni `Profe2026*Mat` universales (solo la `tempPassword` propia, generada automáticamente `Docente####*` al crearlo); ESTUDIANTE ya no acepta `123456`/`admin`/documento/código de carné (solo la `tempPassword`, editable por el acudiente en su portal). **El error de login del estudiante ya NO revela el código válido** (antes imprimía "(Pruebe: SJ-1274 o 123456)" a cualquiera que tecleara un nombre). Retirado el panel "Ver Cuentas Demo de Prueba" que publicaba las 3 credenciales en la pantalla de login (si se necesita en un entorno demo, restaurar el bloque comentado en `LoginScreen.tsx`).
+
+**H-30-3 — Mínimo privilegio en push (`pushService.ts`):** el default de `currentRole()` pasa de `'RECTORIA'` a `'PORTAL'`: un dispositivo sin login no debe poder suscribirse como RECTORIA (recibiría los pushes de excusas de TODA la escuela). El login de Rectoría escribe la bandera RECTORIA en el mismo instante de autenticarse, así que el flujo Ronda 24 (rector recibe "nueva excusa") queda intacto.
+
+**Verificación E2E (vite preview + Chromium aislado, 9/9 OK):** dispositivo fresco → LoginScreen ✅ · bypass `123456` en ADMIN rechazado ✅ · `admin/admin2026` → Rectoría ✅ · recarga → sesión restaurada (con `authAt`) ✅ · píldora→Estudiante + recarga → restaura como ADMIN con `authAt` original intacto ✅ · logout → sesión+bandera destruidas y recarga → LoginScreen ✅ · docente `123456` rechazado / `Docente7890*` aceptado ✅ · sesión docente restaurada en recarga ✅ · estudiante `admin` rechazado sin revelar código / `SJ-1274` aceptado → Portal ✅. `tsc` 0 errores, `vite build` limpio (8.2s). Commit `7b18092`.
+
+**Nota de arquitectura (pendiente honesto para producción):** la credencial de Rectoría sigue verificándose client-side (está en el bundle JS, legible con devtools). El endurecimiento de esta ronda cierra el acceso "por accidente" (URL abierta, sesión heredada, bypass conocido) pero NO el "por inspección del bundle". El paso definitivo es un endpoint `/api/auth/login` en el Worker que verifique contra secrets del worker (y rate-limit), dejando el cliente sin credenciales embebidas — ver Roadmap §4. Lecciones: las decisiones de conveniencia demo (Rectoría implícita R24, precarga de credenciales, bypass maestros) exigen revisión de reversión antes de producción.
+
 ### ✅ Ronda 29 (05/09/2026): CAMPAÑA DE PRUEBAS SANDBOX+PRODUCCIÓN, ASISTENTE DE PRIMER INGRESO, FIX DEL ENVENENAMIENTO DEL TOKEN (H-29-1) Y CIERRE DEL CICLO PURGA
 
 **Origen (petición textual del propietario):** "se va a simular un flujo completo… tú como admin vas a registrar nuevos estudiantes… probar de diferentes ángulos… sin conectar el token para que no se ensucie la nube" → luego RETIRÓ la restricción: "conéctalo… no importa si se ensucia la nube… después se eliminan, pusimos un botón". Pidió además: (1) tomar capturas para un futuro documento de funciones destacadas, (2) implementar un **menú/asistente de primer ingreso** para estudiante/docente/admin ("enlaces directos a las funciones… informativo, no técnico, sin saturar"), (3) probar export/import en todas sus variantes (config, BD, ambas, excluir claves), (4) recopilar TODAS las credenciales del worker y la app "como un paquete completo".
@@ -955,6 +974,14 @@ El proveedor **Email/Password NO está habilitado** en Firebase Console (`accoun
 ---
 
 ## 🚀 4. Hoja de Roadmap y Pasos a Seguir
+
+### 🔴 Prioridad Producción (abierta en Ronda 30 — "¿qué más nos hace falta?")
+Orden sugerido de cierre antes de la matrícula real (Día Cero):
+1. **Autenticación server-side de Rectoría (`/api/auth/login` en el Worker)** — la credencial `admin/admin2026` sigue verificándose en el cliente (visible en el bundle JS con devtools). H-30-1/H-30-2 cierran el acceso por accidente y por bypass, no el acceso por inspección del bundle. Diseño: el Worker guarda `ADMIN_USER`/`ADMIN_PASS_HASH` (PBKDF2) como secrets, el login del cliente consulta el endpoint (con rate-limit existente), y la sesión local pasa a guardar el JWT/nonce firmado por el worker con TTL. Mientras tanto, el único mitigador es rotar `admin2026` por una clave larga — pero sigue embebida en el bundle, así que la rotación solo compra tiempo.
+2. **Cambio de contraseña propia (docentes/rectoría)** — hoy el docente queda casado a la `tempPassword` generada (solo el acudiente puede cambiar la suya desde el portal). Un "Cambiar contraseña" en el portal docente evita claves temporales permanentes.
+3. **PWA instalable (roadmap #14)** — para los terminales de escaneo/aula el "instalar app" evita que el personal navegue a otra cosa y habilita pantalla completa; con la puerta de login ya no hay riesgo de sesión compartida (TTL 12h).
+4. **Consentimiento Ley 1581 visible (#7)** — aviso de tratamiento de datos de menores en el primer login del portal y en el formulario de matrícula.
+5. **Rotación post-pruebas** — antes de entregar: purga de nube (CloudPurgeSection ya la cubre), rotación de AUTH_TOKEN y de la credencial admin, y Plantilla A (no la T de pruebas).
 
 ### ⏳ Fase Actual (Inmediata): Validación de campo del Worker desplegado
 1. ~~Desplegar el Worker en Cloudflare~~ **HECHO (Ronda 3, 01/09/2026 — versión `f04ead07`)**.
