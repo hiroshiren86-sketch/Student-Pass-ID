@@ -170,6 +170,23 @@ export class AttendanceStorageService {
     return fresh;
   }
 
+  /**
+   * Ronda 29 (H-29-1): el doc `school_settings/main` arrastra campos de secretos
+   * legados de la era pre-Ronda 16 (p. ej. `cloudflareApiToken` con un valor que ya
+   * no es el AUTH_TOKEN del Worker). El merge con la nube reintroducía esos valores
+   * y PISABA el token correcto guardado en el dispositivo → 401 en push/pull/excusas
+   * en cada re-init (bug observado en QA R29: el Buzón moría con "No autorizado" tras
+   * cada re-login). Política vigente desde Ronda 16: los secretos viven SOLO en el
+   * localStorage de cada dispositivo; la nube jamás los aporta ni los pisa.
+   * Se aplica a TODAS las lecturas de settings provenientes de Firestore.
+   */
+  private static stripSecretFields(source: Partial<SchoolSettings> | null): Partial<SchoolSettings> {
+    if (!source) return {} as Partial<SchoolSettings>;
+    const { qrSecret, sessionSecret, cloudflareApiToken, customAiApiKey, ...safe } = source as Record<string, unknown>;
+    void qrSecret; void sessionSecret; void cloudflareApiToken; void customAiApiKey;
+    return safe as Partial<SchoolSettings>;
+  }
+
   static saveSettings(settings: SchoolSettings, syncToCloud = true): void {
     localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
     this.notify();
@@ -200,22 +217,27 @@ export class AttendanceStorageService {
       FirebaseService.loadSchoolSettings().then((cloudSettings) => {
         if (cloudSettings) {
           const local = this.getSettings();
+          // Ronda 29 (H-29-1): merge SIN secretos — el token correcto del dispositivo prevalece
+          const safeCloud = this.stripSecretFields(cloudSettings);
           // If local has empty or default worker URL but cloud has it, or if local is older
           const merged: SchoolSettings = {
             ...DEFAULT_SCHOOL_SETTINGS,
             ...local,
-            ...cloudSettings,
-            cloudflareWorkerUrl: cloudSettings.cloudflareWorkerUrl || local.cloudflareWorkerUrl || DEFAULT_SCHOOL_SETTINGS.cloudflareWorkerUrl
+            ...safeCloud,
+            cloudflareWorkerUrl: (safeCloud.cloudflareWorkerUrl as string) || local.cloudflareWorkerUrl || DEFAULT_SCHOOL_SETTINGS.cloudflareWorkerUrl
           };
           this.saveSettings(merged, false);
         }
       }).catch(() => {});
 
       // 2. Real-time listener for multi-device sync
+      //    Ronda 29 (H-29-1): idem — el snapshot de Firestore JAMÁS aporta secretos
+      //    (el write de saveSchoolSettings dispara este listener con el doc mergeado
+      //    que aún contiene el campo legacy cloudflareApiToken).
       FirebaseService.onSchoolSettingsChange((cloudSettings) => {
         if (cloudSettings && (cloudSettings.schoolName || cloudSettings.cloudflareWorkerUrl)) {
           const current = this.getSettings();
-          const updated = { ...current, ...cloudSettings };
+          const updated = { ...current, ...this.stripSecretFields(cloudSettings) };
           this.saveSettings(updated as SchoolSettings, false);
         }
       });
@@ -230,7 +252,8 @@ export class AttendanceStorageService {
           const cloudSettings = await FirebaseService.loadSchoolSettings();
           if (cloudSettings) {
             const current = this.getSettings();
-            const merged = { ...current, ...cloudSettings };
+            // Ronda 29 (H-29-1): merge SIN secretos (mismo vector de envenenamiento)
+            const merged = { ...current, ...this.stripSecretFields(cloudSettings) };
             this.saveSettings(merged, false);
           }
         } catch (e) {

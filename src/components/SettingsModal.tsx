@@ -680,14 +680,14 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ onClose }) => {
             <div className="grid grid-cols-1 gap-3">
               <div>
                 <label className="block text-[10px] font-bold uppercase text-slate-500 dark:text-slate-400 mb-1">
-                  Token de Acceso del Worker — AUTH_TOKEN (Opcional)
+                  Token de Acceso del Worker — AUTH_TOKEN
                 </label>
                 <div className="relative">
                   <input
                     type={showCloudflareToken ? 'text' : 'password'}
                     value={settings.cloudflareApiToken || ''}
                     onChange={(e) => handleChange('cloudflareApiToken', e.target.value)}
-                    placeholder="Dejar vacío mientras el Worker esté en modo abierto"
+                    placeholder="Pega aquí el AUTH_TOKEN del Worker — sin él la nube rechazará todo con 401"
                     className="w-full bg-white dark:bg-black border border-amber-200 dark:border-amber-800 text-slate-900 dark:text-white text-xs pl-2.5 pr-8 py-2 rounded-xl outline-none font-mono"
                   />
                   <button
@@ -699,7 +699,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ onClose }) => {
                   </button>
                 </div>
                 <p className="text-[10px] text-amber-700 dark:text-amber-400 mt-1 leading-snug">
-                  Se envía como Bearer al Worker. Solo se activa si se define el secret AUTH_TOKEN en el Worker (decisión pendiente del propietario — ver AGENTS.md). El navegador NUNCA accede directo a la API de Cloudflare: el Worker es el único con acceso a D1/KV.
+                  Se envía como Bearer al Worker. El AUTH_TOKEN está ACTIVO en producción desde la Ronda 27 (hardening): sin este token, push/pull/excusas responden 401 y la caché local nunca sale del dispositivo (los secretos de cada dispositivo jamás viajan a la nube — política Ronda 16/29). Usa “Probar Conexión” para validar el token; el navegador NUNCA accede directo a la API de Cloudflare: el Worker es el único con acceso a D1/KV.
                 </p>
               </div>
             </div>

@@ -107,10 +107,32 @@ export class CloudflareSyncService {
       }
 
       const data = await response.json();
+
+      // Ronda 29 (H-29-2): /api/health está ABIERTO por diseño (monitor) — un 200 aquí
+      // NO valida el token. Se añade una sonda autenticada de SOLO LECTURA (GET
+      // /api/excuses, el endpoint más ligero tras health) para distinguir
+      // "Worker alcanzable" de "AUTH_TOKEN válido". Sin token → se informa modo abierto.
+      let tokenMsg = 'Sin Token de Acceso configurado (el Worker rechazará push/pull/excusas con 401 si tiene AUTH_TOKEN activo).';
+      if (token) {
+        try {
+          const probeUrl = `${targetUrl}/api/excuses?schoolCode=${encodeURIComponent(settings.schoolCode || 'INAS_2026')}`;
+          const probe = await fetch(probeUrl, { method: 'GET', headers: { Authorization: `Bearer ${token}` } });
+          if (probe.ok) {
+            tokenMsg = 'Token de Acceso (AUTH_TOKEN) VÁLIDO ✓ — push/pull/excusas autorizados.';
+          } else if (probe.status === 401 || probe.status === 403) {
+            tokenMsg = `⚠ Token de Acceso INVÁLIDO (HTTP ${probe.status}): el Worker lo rechazará. Revísalo o pégalo de nuevo.`;
+          } else {
+            tokenMsg = `Sonda de token inconclusa (HTTP ${probe.status}) — revisa la URL/endpoint.`;
+          }
+        } catch (probeErr: any) {
+          tokenMsg = `Sonda de token falló: ${probeErr?.message || probeErr}`;
+        }
+      }
+
       return {
         success: true,
-        message: `✓ Conexión exitosa con Worker (${data.service || 'Cloudflare Edge'}). D1: ${data.storage?.d1 || 'ok'}, KV: ${data.storage?.kv || 'ok'}.`,
-        details: data
+        message: `✓ Conexión exitosa con Worker (${data.service || 'Cloudflare Edge'}). D1: ${data.storage?.d1 || 'ok'}, KV: ${data.storage?.kv || 'ok'}. ${tokenMsg}`,
+        details: { ...data, tokenProbe: tokenMsg }
       };
     } catch (err: any) {
       return {
