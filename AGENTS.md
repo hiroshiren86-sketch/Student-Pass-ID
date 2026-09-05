@@ -683,6 +683,40 @@ El proveedor **Email/Password NO está habilitado** en Firebase Console (`accoun
 **⏳ Desbloqueo requerido del propietario (RESUELTO el 03/09 — ver continuación):**
 - ~~(a) Reparar el despliegue automático~~ / ~~(b) Entregar un token~~ → **El propietario entregó token fresco** (guardado en `/home/z/my-project/secrets/` fuera del repo, junto con VAPID y GitHub PAT; son temporales y los rotará él).
 
+### ✅ Ronda 27 (05/09/2026): DÍA CERO — handoff de producción ejecutado (anti-seed + purga demo + hardening + respaldo export/import)
+
+**Origen:** el agente QA entregó el paquete `handoff-produccion.zip` (Ronda 27): purga de datos demo decidida por el propietario, switch anti-seed, hardening y respaldo export/import. El agente de ejecución (este) lo ejecutó COMPLETO con el token CF del propietario (verificado: `active`, acct `5d4e4bd4…`). Despliegues: frontend `index-BTBWHWCC` (anti-seed) → `index-DCtLlHME` (respaldo); worker `0b2ae3ce` (H-2) — **desde git** (lección H-1).
+
+**Forense pre-purga (deriva vs. inventario QA — documentada):** D1 tenía **153 estudiantes** (NO 51): 5 tandas QA distintas (`TEST-1000..49`, `R18-1000..49`, semilla `1000000001–050` + `1000000998` + 2 sueltos) — **cero duplicados** (PK `code` íntegra, el upsert del push NO buguea). `teachers=0`, `assignments=0`, `schedule_slots=0` (el inventario decía 6/21/7): los slots viajan DENTRO del snapshot KV (la tabla D1 no es fuente de verdad). La purga procede igual sobre todo lo demo; único ajuste: verificación post-purga de slots esperada en 0.
+
+**1. Switch anti-seed (commit `81417b1`, deploy `index-BTBWHWCC`):**
+- `src/services/demoConfig.ts` → `SEED_DEMO_ON_FIRST_LAUNCH = false` (1 línea revierte al modo demo histórico).
+- 5 puntos de seed bajo el switch en `attendanceStorage.ts`: students/teachers/assignments/attendance nacen `[]` **persistido explícito** (patrón Ronda 14, cero re-disparos); slots y settings intactos (qrSecret aleatorio del 1er arranque se conserva).
+- Corrupción: respaldo `_corrupt_backup_*` SIEMPRE (ahora también en teachers/assignments/attendance) + recuperación con `[]` + guía al PULL — **NUNCA re-inyecta demo** (Regla 6).
+- `resetToDemo()` SIN cambios = rollback del Día Cero (Ajustes → "Reiniciar datos de prueba").
+- Empty states (plan §3): Directorio con banner "Sistema listo. Importa tu matrícula" + CTAs (Importar CSV/Nuevo estudiante, solo ADMIN); Docentes con CTA; Planilla con guía de matrícula vacía.
+- **GATE verificado en producción con navegador nuevo: 0 estudiantes, sin demo.**
+
+**2. Purga ejecutada (script del QA, adaptada):**
+- Backups innegociables en `download/backups-purga-r27/`: D1 export SQL (260 KB) + snapshot JSON (54 KB) + `r27-inventario.json`.
+- D1: 8 DELETEs orden FK → `changes`: excuses 76 (38+38 del trigger forense `EXCUSE_ROW_DELETED` de R23 — prueba de que funciona), attendance 54, students 153, audit 120 (82+38), subs 36, snapshots 2.
+- KV: **7 claves borradas con `--remote`** — ⚠ LECCIÓN: la 1.ª pasada sin `--remote` tocó el simulador LOCAL de wrangler v4 y no produjo nada (las "2 claves" seguían vivas; detectado al listar). Borradas las 2 de producción + 5 residuos QA (`INAS_TEST_R18`, `ZZTEST_FK`, `INAS_2026`). KV remota 100% vacía.
+- Verificación: **8 tablas = 0**; `GET /api/excuses/verify-chain` → `{"intact":true,"signed":true,"checked":0}` — **cadena nueva GENESIS:INAS** exactamente como predijo el QA (decisión #3 del propietario); pull vacío. Un snapshot "limpio" reapareció en KV (students:0 + config + 7 slots): lo re-empujó el navegador anti-seed de la propia verificación con auto-sync — estado correcto y deseable (config lista para el primer pull real).
+
+**3. Hardening (commit `48d85c0`, worker `0b2ae3ce` + secrets):**
+- **H-2**: rate limit 5/h por IP en `/api/push/test` (429; Map por-aislado, defensa en profundidad sobre el guard global).
+- **AUTH_TOKEN ACTIVADO** (secret nuevo `AUTH_TOKEN` = hex 32B generado localmente): verificado `sync/pull` sin token → **401**, con token → 200; health sigue abierto (por diseño). El frontend ya enviaba Bearer (pushService L35) — cada dispositivo debe configurarlo en Ajustes → Sync y Seguridad.
+- **VAPID rotado** (par P-256 nuevo, sanity 65B/32B OK): mata subs (ya purgadas); el frontend re-suscribe solo si `applicationServerKey` difiere (lógica R24). **EXCUSE_CHAIN_SECRET rotado** (seguro: cadena vacía — la 1.ª excusa real firma el GENESIS con el secreto nuevo). Secretos guardados temporalmente en `/home/z/my-project/scripts/r27-secrets.json` (fuera del repo; el propietario los rota).
+
+**4. Respaldo Export/Import (commit `5589124`, deploy `index-DCtLlHME`):**
+- `backupService.ts` (lógica pura) + `BackupRestoreSection.tsx` (UI en Ajustes → Sync y Seguridad).
+- UN archivo `INAS_respaldo_<label>_<fecha>.json` — formato `INAS_BACKUP v1`, scope **CONFIG | DATA | BOTH** (pedido textual del propietario); secretos solo con casilla explícita; VAPID jamás exportada.
+- Import: DRY-RUN con resumen → doble confirmación si el schoolCode es OTRA institución → auto-backup previo (BOTH+secretos) → hidratación por colección (parsiela: DATA no toca identidad, CONFIG no toca datos) → push a la nube → recarga.
+
+**Validación:** tsc 0 en cada commit; builds 8.1–8.4 s; suites: **Día Cero 41/41** (nueva, `scripts/verify_dia_cero.ts`: arranque limpio, relectura, alta real, corrupción+backup, resetToDemo, round-trip BOTH/DATA/CONFIG), **R19 111/111**, **R18 48/48**. E2E producción: navegador nuevo → 0 estudiantes; 401/200 verificado con curl.
+
+**Le queda al propietario (checklist §7, pasos de dispositivo):** (1) en CADA dispositivo sincronizado: borrar localStorage del sitio antes del primer uso post-purga; (2) configurar el **AUTH_TOKEN nuevo** en Ajustes → Sync y Seguridad de cada terminal (entregado por chat); (3) importar la matrícula real (CSV) y crear docentes; (4) re-activar notificaciones por dispositivo ("Activar notificaciones" — re-suscribe con la VAPID nueva); (5) prueba push 2 dispositivos (§6.2 del doc QA, 15 min); (6) verificar carnés impresos: si existen, hay que regenerarlos SOLO si se decide rotar qrSecret (el 1er arranque limpio ya genera uno nuevo por dispositivo — usar el de Rectoría como canónico).
+
 ### ✅ Ronda 25 (04/09/2026): CAMPANITA DE EXCUSAS + PRUEBA CON DOS AGENTES AUTÓNOMOS EN PARALELO + MEJORAS DEL INFORME QA EXTERNO (P1/P2/P3-B/P5) — E2E completo en producción
 
 **Origen:** el propietario confirmó el punto rojo en vivo ("el punto sí aparece y se actualiza, habían tres ahora y cuatro") y pidió: (1) **campanita** — "no hace ningún sonido… lo mejor sería que sonara algo, una campanita, como un Teams o un timbre conveniente para el tema de las excusas" (nada de popups: "sería estorboso"); (2) **prueba con dos agentes autónomos en paralelo** en dos navegadores limpios; (3) evaluar el informe QA externo post-Ronda 23 (`propuestas-mejoras-ronda24.md`, anexado en uploads): B-EXC-1 ya resuelto en Ronda 24.
