@@ -1,8 +1,24 @@
 rules_version = '2';
 
 /**
- * Ronda 33 (05/09/2026) — Reglas de Firestore v2: MISIÓN AUTH completada por el
- * agente principal. Sucesora de las reglas endurecidas de Ronda 18.
+ * Ronda 40 (07/09/2026) — H-40-1: cláusula update de users/{uid} reescrita con el
+ * patrón documentado diff().affectedKeys(). La versión Ronda 33 comparaba campos
+ * opcionales por acceso directo (resource.data.linkedTeacherId == null …), y el
+ * acceso a una CLAVE AUSENTE errora en el motor de reglas → error == null es falso
+ * → se denegaba TODO update del dueño cuando el doc no tenía esas claves (los docs
+ * creados por Admin SDK no las traen) → en producción rebota con 403 incluso el
+ * vínculo savedSettings de H-38-4 y el propio updateMask de diagnóstico. La matriz
+ * en vivo de Ronda 39 interpretó ese 403 como "reglas desplegadas ≠ repo": el
+ * despliegue era correcto; el bug estaba en las reglas mismas.
+ *
+ * diff().affectedKeys() es robusto ante claves ausentes y ante escrituras
+ * parciales con máscara (setDoc merge del SDK): permite cualquier write que NO
+ * toque role/linkedTeacherId/linkedStudentCode y prohíbe añadirlos, cambiarlos o
+ * borrarlos (inmutabilidad más estricta que la R33, que permitía AÑADIR el campo
+ * cuando estaba ausente).
+ *
+ * Historial: Ronda 33 (05/09/2026) — MISIÓN AUTH; sucesora de las reglas
+ * endurecidas de Ronda 18.
  *
  * Modelo de autenticación (Ronda 33):
  *  - Firebase Auth (proveedor Email/Password) es la ÚNICA autoridad de credenciales
@@ -41,8 +57,9 @@ service cloud.firestore {
     // ===== Perfiles de usuario (users/{uid}) =====
     // Ronda 33: el perfil es del dueño. En CREATE el rol nace SOLO como DOCENTE
     // (la cuenta ADMIN la provisiona el despliegue/consola, que pasa por encima de
-    // estas reglas vía SDK Admin). En UPDATE el rol y la vinculación son INMUTABLES
-    // para el cliente — la escalada de privilegios queda cerrada por reglas.
+    // estas reglas vía SDK Admin). Ronda 40 (H-40-1): en UPDATE, rol y vinculación
+    // son INMUTABLES para el cliente — verificados con diff().affectedKeys(), que
+    // no errora con claves ausentes ni con máscaras de escritura parciales.
     match /users/{userId} {
       allow read: if isAuthenticated() && request.auth.uid == userId;
       allow create: if isAuthenticated()
@@ -50,11 +67,8 @@ service cloud.firestore {
                     && request.resource.data.role == 'DOCENTE';
       allow update: if isAuthenticated()
                     && request.auth.uid == userId
-                    && request.resource.data.role == resource.data.role
-                    && (resource.data.linkedTeacherId == null
-                        || request.resource.data.linkedTeacherId == resource.data.linkedTeacherId)
-                    && (resource.data.linkedStudentCode == null
-                        || request.resource.data.linkedStudentCode == resource.data.linkedStudentCode);
+                    && !request.resource.data.diff(resource.data).affectedKeys()
+                         .hasAny(['role', 'linkedTeacherId', 'linkedStudentCode']);
       allow delete: if false;
     }
 

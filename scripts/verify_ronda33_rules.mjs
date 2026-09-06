@@ -81,6 +81,18 @@ async function doc(op, path, idToken, body) {
   return res.status;
 }
 
+// Ronda 40 (H-40-1): los casos de COLECCIÓN usan runQuery — el documents.list REST
+// (GET ?pageSize) con reglas que llaman get() se comporta distinto del runQuery que
+// usa el SDK (getDocs) y producía falsos FALLO (403 con reglas correctas).
+async function listDocs(collectionId, idToken) {
+  const res = await fetch(`${BASE}:runQuery`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...(idToken ? { Authorization: `Bearer ${idToken}` } : {}) },
+    body: JSON.stringify({ structuredQuery: { from: [{ collectionId }], limit: 1 } }),
+  });
+  return res.status;
+}
+
 async function main() {
   // Credenciales SOLO por env (repo público — JAMÁS claves embebidas; orden del
   // propietario: sin credenciales → DETENER y pedirlas, nunca auto-provisionar).
@@ -113,24 +125,24 @@ async function main() {
 
   console.log('\n== 1. RECTORÍA (role ADMIN desde users/{uid}) ==');
   if (adminTok) {
-    check('ADMIN lee students (cola de respaldo)', (await doc('GET', `students?pageSize=1`, adminTok)) === 200);
+    check('ADMIN lee students (cola de respaldo, runQuery)', (await listDocs('students', adminTok)) === 200);
     check('ADMIN escribe doc de prueba en students', (await doc('PATCH', `students/${probeId}`, adminTok, probeDoc)) === 200);
     check('ADMIN borra doc de prueba', (await doc('DELETE', `students/${probeId}`, adminTok)) === 200);
-    check('ADMIN lee teachers', (await doc('GET', `teachers?pageSize=1`, adminTok)) === 200);
+    check('ADMIN lee teachers (runQuery)', (await listDocs('teachers', adminTok)) === 200);
   }
 
   console.log('\n== 2. DOCENTE (role DOCENTE) ==');
   if (docTok) {
     check('DOCENTE lee users/{uid} propio (viene implícito en su login)', true); // comprobado por signIn+perfil
-    check('DOCENTE NO puede leer students', (await doc('GET', `students?pageSize=1`, docTok)) === 403);
-    check('DOCENTE NO puede leer teachers de otros', (await doc('GET', `teachers?pageSize=1`, docTok)) === 403);
+    check('DOCENTE NO puede leer students (runQuery)', (await listDocs('students', docTok)) === 403);
+    check('DOCENTE NO puede leer teachers de otros (runQuery)', (await listDocs('teachers', docTok)) === 403);
   }
 
   console.log('\n== 3. ANÓNIMO (terminal de escaneo) ==');
   if (anonTok) {
     check('ANÓNIMO lee school_settings (sync del terminal)', (await doc('GET', `school_settings/main`, anonTok)) === 200);
-    check('ANÓNIMO NO puede leer students', (await doc('GET', `students?pageSize=1`, anonTok)) === 403);
-    check('ANÓNIMO NO puede leer users', (await doc('GET', `users?pageSize=1`, anonTok)) === 403);
+    check('ANÓNIMO NO puede leer students (runQuery)', (await listDocs('students', anonTok)) === 403);
+    check('ANÓNIMO NO puede leer users (runQuery)', (await listDocs('users', anonTok)) === 403);
     check('ANÓNIMO NO puede escribir users (escalada)', (await doc('PATCH', `users/probe-anon`, anonTok, probeDoc)) === 403);
   }
 
