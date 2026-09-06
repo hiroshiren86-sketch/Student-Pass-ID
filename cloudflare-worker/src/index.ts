@@ -207,6 +207,27 @@ export default {
         const records = Array.isArray(data.records) ? data.records : [];
         const teachers = Array.isArray(data.teachers) ? data.teachers : [];
 
+        // Ronda 38 (H-38-1b): PROTECCIÓN ANTI-APLASTADO server-side (defensa en profundidad
+        // de la guarda del cliente en cloudflareSync.ts). Un dispositivo cuyo localStorage
+        // se perdió (perfil reiniciado, corrupción — incidente real detectado en QA Ronda 38)
+        // empujaría un payload con 0 estudiantes y sobreescribiría la matrícula completa de
+        // D1/KV. Si el snapshot vigente tiene estudiantes y el push entrante trae 0, se
+        // rechaza con 409 salvo force:true. Vaciar de verdad sigue siendo posible con
+        // force:true o con la purga del panel.
+        if (students.length === 0 && !body.force && env.DB) {
+          try {
+            const row = await env.DB.prepare(
+              `SELECT students_count FROM sync_snapshots WHERE id = ?`
+            ).bind(`snapshot_${schoolCode}`).first() as any;
+            if (row && (row.students_count || 0) > 0) {
+              return errorResponse(
+                `Push rechazado (anti-aplastado): el payload trae 0 estudiantes pero la nube tiene ${row.students_count}. Si tu terminal perdió sus datos locales, recupéralos con Pull (/api/sync/pull); para vaciar la nube intencionadamente envía force:true.`,
+                409
+              );
+            }
+          } catch { /* si la lectura del snapshot falla, el push sigue su curso previo */ }
+        }
+
         // 1. Guardar Snapshot en D1
         if (env.DB) {
           await env.DB.prepare(

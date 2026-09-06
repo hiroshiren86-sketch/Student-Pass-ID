@@ -42,6 +42,7 @@ import { SEED_DEMO_ON_FIRST_LAUNCH } from './demoConfig';
 import { ExcuseService, justificationLabelOf, isRecordProtected } from './excuseService';
 
 const STUDENTS_KEY = 'inas_students_v5';
+const STUDENTS_PREV_KEY = 'inas_students_prev_v5'; // Ronda 38 (H-38-2): respaldo previo sin fotos
 const ATTENDANCE_KEY = 'inas_attendance_v5';
 const SETTINGS_KEY = 'inas_settings_v5';
 const OFFLINE_QUEUE_KEY = 'inas_offline_queue_v5';
@@ -341,6 +342,23 @@ export class AttendanceStorageService {
   }
 
   static saveStudents(students: Student[]): void {
+    // Ronda 38 (H-38-2): RESPALDO PREVIO anti-pérdida. Antes de sobrescribir la matrícula
+    // se conserva una copia SIN fotos (las dataURL son lo que explota la cuota de
+    // localStorage; nombres/códigos/grados son lo crítico para reconstruir) en
+    // `inas_students_prev_v5`. Así, cualquier truncamiento accidental del almacenamiento
+    // (perfil reiniciado, corrupción, bug de terceros) es recuperable de inmediato —
+    // lección del incidente de QA Ronda 38 donde el estado local se vació y el push
+    // habría pisado la nube si el dispositivo hubiese tenido el token correcto.
+    try {
+      const current = localStorage.getItem(STUDENTS_KEY);
+      if (current && current !== JSON.stringify(students)) {
+        const prev: Student[] = JSON.parse(current);
+        if (Array.isArray(prev) && prev.length > 0) {
+          const light = prev.map(s => ({ ...s, photoUrl: undefined }));
+          localStorage.setItem(STUDENTS_PREV_KEY, JSON.stringify(light));
+        }
+      }
+    } catch { /* la cuota o un JSON corrupto nunca deben impedir un guardado */ }
     localStorage.setItem(STUDENTS_KEY, JSON.stringify(students));
     this.notify();
   }

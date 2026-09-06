@@ -231,6 +231,37 @@ export class CloudflareSyncService {
         }
       };
 
+      // Ronda 38 (H-38-1): PROTECCIÓN ANTI-APLASTADO. El auto-sync empuja el estado local
+      // verbatim; si el dispositivo pierde su localStorage (perfil reiniciado, limpieza del
+      // navegador, corrupción — detectado en QA Ronda 38 con pérdida real de estado local),
+      // un push con 0 estudiantes SOBREESCRIBIRÍA la matrícula completa de la nube sin
+      // confirmación. Si el estado local viene TOTALMENTE vacío y la nube tiene estudiantes,
+      // se aborta con aviso explícito: restaurar primero con "Descargar (Pull)"; vaciar de
+      // verdad sigue siendo posible vía "Purgar datos de la nube…". El primer push de un
+      // colegio nuevo no se ve afectado (remoto vacío o sin snapshot).
+      if (safeStudents.length === 0 && records.length === 0) {
+        try {
+          const probeUrl = baseUrl.endsWith('/api/sync/pull')
+            ? `${baseUrl}?schoolCode=${encodeURIComponent(settings.schoolCode || 'INAS_2026')}`
+            : `${baseUrl}/api/sync/pull?schoolCode=${encodeURIComponent(settings.schoolCode || 'INAS_2026')}`;
+          const probe = await fetch(probeUrl, { headers: this.workerHeaders() });
+          if (probe.ok) {
+            const probeData: any = await probe.json();
+            const remoteCount = probeData?.data?.students?.length ?? probeData?.data?.studentsCount ?? 0;
+            if (remoteCount > 0) {
+              return {
+                success: false,
+                timestamp,
+                syncedRecordsCount: 0,
+                syncedStudentsCount: 0,
+                message: `PUSH BLOQUEADO por seguridad: el estado local está VACÍO pero la nube tiene ${remoteCount} estudiantes. Empujar ahora borraria la matrícula de la nube. Restaura primero con "Descargar (Pull)"; si realmente quieres vaciar la nube, usa "Purgar datos de la nube…".`,
+                target: 'Cloudflare Worker'
+              };
+            }
+          }
+        } catch { /* sonda indiferente a fallos: si no responde, el push seguirá su curso normal */ }
+      }
+
       const pushUrl = baseUrl.endsWith('/api/sync/push')
         ? baseUrl
         : `${baseUrl}/api/sync/push`;
