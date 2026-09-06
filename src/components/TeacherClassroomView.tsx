@@ -339,15 +339,24 @@ export const TeacherClassroomView: React.FC<TeacherClassroomViewProps> = ({
         return;
       }
 
+      // Ronda 43 (v2, manual §2.3): si hay una Tarjeta de Docente activa en este dispositivo
+      // (1-toque "Activar mi asignatura" o tarjeta CLASE:v2 escaneada), el registro hereda SU
+      // atribución: asignatura/docente + teacherId + transparencia QR_CLASE. Sin v2, el aula
+      // usa su selección propia (comportamiento clásico intacto).
+      const activeV2 = AttendanceStorageService.getActiveClass();
+      const v2Ctx = activeV2?.sourceVersion === 'v2' ? activeV2 : null;
       const result = await AttendanceStorageService.registerClassScan({
         scanInput: rawCode.trim(),
         method,
         slotId: activeSlot.id,
         grade: selectedGrade,
-        subject: selectedSubject,
-        teacherName: teacher?.fullName || teacherName,
+        subject: v2Ctx?.subject || selectedSubject,
+        teacherName: v2Ctx?.teacherName || teacher?.fullName || teacherName,
+        teacherId: v2Ctx?.teacherId || teacher?.id,
         scannedBy: 'DOCENTE',
-        scannedByName: teacher?.fullName || teacherName
+        scannedByName: teacher?.fullName || teacherName,
+        contextSource: v2Ctx ? 'QR_CLASE' : undefined,
+        classQrVerified: v2Ctx ? true : undefined
       });
 
       if (result.type === 'success_punctual') {
