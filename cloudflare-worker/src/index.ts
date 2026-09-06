@@ -134,6 +134,65 @@ function purgeRateLimited(ip: string): boolean {
   return false;
 }
 
+// ==============================================================================
+// Ronda 39 (H-39-1) — CONVERGENCIA DE ENLACES DE EXCUSAS EN /api/sync/pull.
+// El snapshot (KV o sync_snapshots) se escribe SOLO en /api/sync/push, pero las
+// radicaciones/aprobaciones de la API de excusas actualizan D1 en vivo
+// (student_excuses + attendance_records.excuse_id) SIN tocar el snapshot. Un
+// dispositivo que hace Pull recibía registros con el enlace obsoleto (excuseId
+// null) y la Planilla le ofrecía "Justificar" sobre una ausencia ya justificada
+// (el Worker lo bloquea con R2 — correcto, pero es confusión evitable).
+// Fix: antes de servir el snapshot, se inyecta el estado VIVO de D1:
+//  - enlace existe en D1 y difiere del snapshot → se inyecta (+stamp para que el
+//    cliente lo aplique por regla 1 de convergencia Ronda 21);
+//  - snapshot trae enlace que D1 ya no tiene (purga/unlink) → se retira con stamp
+//    nuevo (regla 2 del cliente converge al clear).
+// Coste: 2 consultas D1 por pull solo si hay registros en el payload. Nunca lanza
+// (fallos → snapshot intacto; el pull jamás se rompe por esto).
+// ==============================================================================
+async function injectExcuseLinks(env: Env, data: any): Promise<void> {
+  try {
+    if (!env.DB || !data || !Array.isArray(data.records) || data.records.length === 0) return;
+    const CH = 90; // SQLite máx. variables — chunking conservador
+    const ids = data.records.map((r: any) => String(r.id)).filter(Boolean);
+    const d1State = new Map<string, { excuseId: string | null; excuseStatus: string | null }>();
+    for (let i = 0; i < ids.length; i += CH) {
+      const chunk = ids.slice(i, i + CH);
+      const ph = chunk.map(() => '?').join(',');
+      const rows = await env.DB.prepare(
+        `SELECT r.id AS rid, r.excuse_id AS eid, e.status AS est
+         FROM attendance_records r LEFT JOIN student_excuses e ON e.id = r.excuse_id
+         WHERE r.id IN (${ph})`
+      ).bind(...chunk).all<{ rid: string; eid: string | null; est: string | null }>();
+      for (const row of (rows.results || [])) {
+        d1State.set(row.rid, { excuseId: row.eid || null, excuseStatus: row.est || null });
+      }
+    }
+    if (d1State.size === 0) return;
+    const stamp = new Date().toISOString();
+    let patched = 0;
+    data.records = data.records.map((r: any) => {
+      const live = d1State.get(String(r.id));
+      if (!live) return r;
+      if (live.excuseId && (live.excuseId !== r.excuseId || live.excuseStatus !== r.excuseStatus)) {
+        patched++;
+        return { ...r, excuseId: live.excuseId, excuseStatus: live.excuseStatus, excuseUpdatedAt: stamp };
+      }
+      if (!live.excuseId && r.excuseId) {
+        patched++;
+        const { excuseId: _e, excuseStatus: _s, ...rest } = r;
+        return { ...rest, excuseUpdatedAt: stamp };
+      }
+      return r;
+    });
+    if (patched > 0) {
+      console.log(`[sync/pull] H-39-1: ${patched} registro(s) convergido(s) con el estado vivo de excusas en D1.`);
+    }
+  } catch (e: any) {
+    console.warn('[sync/pull] injectExcuseLinks no crítico:', e?.message || e);
+  }
+}
+
 function clientIp(request: Request): string {
   return (
     request.headers.get('CF-Connecting-IP') ||
@@ -362,6 +421,7 @@ export default {
         if (env.ATTENDANCE_KV) {
           const cached = await env.ATTENDANCE_KV.get(`latest_snapshot_${schoolCode}`, 'json') as any;
           if (cached && cached.data) {
+            await injectExcuseLinks(env, cached.data);
             return jsonResponse({
               success: true,
               source: 'Cloudflare KV (Ultra-Fast Edge Cache)',
@@ -378,11 +438,13 @@ export default {
           ).bind(schoolCode, `snapshot_${schoolCode}`).first() as any;
 
           if (row && row.data_json) {
+            const data = JSON.parse(row.data_json);
+            await injectExcuseLinks(env, data);
             return jsonResponse({
               success: true,
               source: 'Cloudflare D1 Database',
               syncedAt: row.updated_at,
-              data: JSON.parse(row.data_json)
+              data
             });
           }
         }
