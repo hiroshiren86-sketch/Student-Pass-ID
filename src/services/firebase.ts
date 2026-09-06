@@ -626,21 +626,32 @@ export class FirebaseService {
       }, { merge: true });
 
       // If user is logged in, link settings copy to user profile
+      // Ronda 39 (H-38-4): el vínculo users/{uid}.savedSettings es OPTATIVO y NUNCA
+      // tumba el guardado principal de settings. Con las reglas R33:
+      //  - identidad ANÓNIMA → CREATE en users exige role=='DOCENTE'; un merge con
+      //    solo savedSettings SIEMPRE es rechazado (403 ruidoso en cada arranque).
+      //    No tiene sentido intentarlo con isAnonymous.
+      //  - sesión real → el UPDATE mantiene el rol inmutable (se cumple), pero un
+      //    rechazo puntual (reglas desplegadas divergentes) se degrada a log honesto.
       const auth = getFirebaseAuth();
       const currentUser = auth?.currentUser;
-      if (currentUser) {
-        const userDocRef = doc(db, 'users', currentUser.uid);
-        await setDoc(userDocRef, {
-          savedSettings: {
-            // Ronda 16: solo valores de ruta — sin tokens ni claves personales
-            cloudflareWorkerUrl: settings.cloudflareWorkerUrl,
-            schoolCode: settings.schoolCode,
-            schoolName: settings.schoolName,
-            aiProvider: settings.aiProvider,
-            aiModel: settings.aiModel
-          },
-          lastActive: serverTimestamp()
-        }, { merge: true });
+      if (currentUser && !currentUser.isAnonymous && currentUser.providerData.length > 0) {
+        try {
+          const userDocRef = doc(db, 'users', currentUser.uid);
+          await setDoc(userDocRef, {
+            savedSettings: {
+              // Ronda 16: solo valores de ruta — sin tokens ni claves personales
+              cloudflareWorkerUrl: settings.cloudflareWorkerUrl,
+              schoolCode: settings.schoolCode,
+              schoolName: settings.schoolName,
+              aiProvider: settings.aiProvider,
+              aiModel: settings.aiModel
+            },
+            lastActive: serverTimestamp()
+          }, { merge: true });
+        } catch (linkErr: any) {
+          console.warn('users/{uid}.savedSettings no persistido (no crítico):', linkErr?.code || linkErr);
+        }
       }
     } catch (e) {
       console.warn('Firestore offline / school settings cloud save deferred:', e);
