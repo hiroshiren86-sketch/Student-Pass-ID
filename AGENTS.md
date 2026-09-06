@@ -9,6 +9,30 @@ Este documento es la **fuente única de verdad técnica (Single Source of Truth)
 
 > **Instrucción del propietario:** esta sección está dirigida EXCLUSIVAMENTE al agente con acceso a la consola de Firebase/Firestore. Léela COMPLETA antes de escribir una línea de código. Cualquier trabajo de autenticación fuera de esta especificación será rechazado en la verificación de aceptación.
 
+> ### 🎯 MISIÓN VIGENTE (07/09/2026) — PUBLICAR LAS REGLAS DEL REPO EN LA BD NOMBRADA (cierre H-38-4). TU ÚNICO TRABAJO.
+> **Orden del propietario: examina esta sección y ejecuta UNA sola acción: publicar `firestore.rules` del repo. NO reescribas reglas, NO toques código de la app, NO toques el Worker.**
+>
+> **POR QUÉ hay que publicarlas (evidencia, no suposición):**
+> - Las reglas VIVAS hoy en la base nombrada NO son las del repo. La matriz en vivo de Ronda 39 (sondas REST con tokens reales) lo probó: `users/{uid}` niega TODO write de cliente — 403 incluso al dueño ADMIN con rol idéntico; mientras que `school_settings/main` y `attendance_records` sí aceptan sesión, y `students/teachers/schedule_assignments` sí aceptan ADMIN. Ese patrón NO corresponde a ninguna versión del repo: es una edición huérfana de consola.
+> - Con la versión del repo (Ronda 33) esas operaciones son CORRECTAS por diseño: el dueño actualiza su perfil con `role` inmutable y `linkedTeacherId`/`linkedStudentCode` intocables (la escalada de privilegios sigue cerrada), y un docente NUEVO puede crear su perfil con `role == 'DOCENTE'` (nada más).
+> - Consecuencias de NO publicar: (1) el vínculo `users/{uid}.savedSettings` del fix H-38-4 (commit `9954c07`, ya en producción) rebota SIEMPRE con 403 — la app lo degrada a `console.warn` y el respaldo de ajustes en el perfil queda MUERTO; (2) el auto-provisionamiento de perfiles de docentes nuevos (M2) también rebota → cuenta de Auth sin doc de perfil; (3) producción y repo siguen divergentes, así que toda auditoría futura mide basura.
+> - La app ya está desplegada y es compatible con AMBAS versiones de reglas (el guard optativo no exige nada). Publicar las reglas es el paso que faltaba del orden seguro **código → reglas**. No se redespliega NADA más: ni Pages, ni Worker, ni cambios de código.
+>
+> **LA ACCIÓN ÚNICA (5 minutos, consola, sin CLI):**
+> 1. Consola de Firebase → Firestore Database → **verifica en el selector de bases que está seleccionada la NOMBRADA** `ai-studio-sistemaderegistr-4ed2ba90-8017-4c3e-ad77-5e55392e495f` (NO la `(default)` — si publicas en la equivocada, la app no cambia de comportamiento y quedas peor).
+> 2. Pestaña **Reglas** → pegar el contenido íntegro de `firestore.rules` del repo (copia exacta y verificada byte a byte en `download/Credenciales_INAS/firestore_rules_para_publicar_H-38-4.rules`; el archivo trae encabezado Ronda 33 con `rules_version = '2'`).
+> 3. **Publicar.**
+>
+> **VERIFICACIÓN OBLIGATORIA post-publicación (evidencia en tu reporte):**
+> - Ejecuta `node scripts/verify_ronda33_rules.mjs` con `FIREBASE_SA_PATH` apuntando a la SA del paquete y `R33_ADMIN_EMAIL`/`R33_ADMIN_PASS` + `R33_DOC_EMAIL`/`R33_DOC_PASS` tomados del **Paquete de Credenciales** (`upload/Paquete_Credenciales_INAS_2026-09-06.md` o copia en `download/Credenciales_INAS/` — el script ya NO trae claves embebidas). Veredicto esperado: 0 FALLO.
+> - Prueba H-38-4 específica: con la sesión de Rectoría en producción, guarda Configuración → la consola del navegador ya NO debe mostrar el warn `users/{uid}.savedSettings no persistido` → cárgala de nuevo y los ajustes deben restaurarse desde el perfil aunque `school_settings/main` tarde.
+> - Si algo FALLA: NO edites las reglas por tu cuenta para "hacerlas pasar". Reporta el caso exacto (operación, token, código HTTP) y detente.
+>
+> **PROHIBICIONES que te aplican (§1 regla #7, orden directa del propietario):**
+> - PROHIBIDO crear cuentas (de cualquier rol) con la Service Account, custom tokens o cualquier impersonación. La SA es solo-lectura para diagnóstico.
+> - PROHIBIDO inventar o "generar" credenciales: si el paquete no está en la ruta indicada o faltan valores, **DETENTE y pregúntale al propietario** — él tiene las claves o te dirá la ruta del paquete.
+> - PROHIBIDO debilitar las reglas (catch-all DENY, rol inmutable, students/teachers/schedule solo-ADMIN son decisiones auditadas de las Rondas 18/33).
+
 > ### ✅ ACTUALIZACIÓN Ronda 33 (05/09/2026) — MISIÓN AUTH EJECUTADA POR EL AGENTE PRINCIPAL (con credenciales entregadas por el propietario)
 > **El propietario entregó al agente principal la cuenta de servicio de Firebase Admin; con ella se completó M1–M7 en el commit de Ronda 33. La misión ya NO está pendiente tuya. Tu papel a partir de hoy es VERIFICAR y COMPLETAR solo lo que requiere consola (listado abajo). NO reescribas lo que ya está — cualquier regresión será rechazada.**
 >

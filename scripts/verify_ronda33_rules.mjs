@@ -82,8 +82,15 @@ async function doc(op, path, idToken, body) {
 }
 
 async function main() {
-  const adminEmail = process.env.R33_ADMIN_EMAIL || 'rectoria@inas.edu.co';
-  const adminPass = process.env.R33_ADMIN_PASS || 'INAS-Rectoria#2026';
+  // Credenciales SOLO por env (repo público — JAMÁS claves embebidas; orden del
+  // propietario: sin credenciales → DETENER y pedirlas, nunca auto-provisionar).
+  // Valores vigentes: Paquete de Credenciales (upload/Paquete_Credenciales_INAS_2026-09-06.md).
+  const adminEmail = process.env.R33_ADMIN_EMAIL;
+  const adminPass = process.env.R33_ADMIN_PASS;
+  if (!adminEmail || !adminPass) {
+    console.error('FATAL: defina R33_ADMIN_EMAIL y R33_ADMIN_PASS (valores del Paquete de Credenciales; el script ya no trae claves embebidas).');
+    process.exit(1);
+  }
 
   console.log('== MINTENDO TOKENS REALES ==');
   const adminTok = await signIn(adminEmail, adminPass);
