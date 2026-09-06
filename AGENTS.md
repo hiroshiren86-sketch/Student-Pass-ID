@@ -226,6 +226,16 @@ Esta sección documenta el mapa exhaustivo de comunicaciones, protocolos, plataf
 
 ## 📋 3. Bitácora de Implementaciones y Correcciones Realizadas
 
+### 🗓️ Ronda 41 (07/09/2026) — HORARIOS DE DEMOSTRACIÓN CREADOS COMO USUARIO REAL (mandato del propietario) + SYNC VERIFICADA E2E
+
+- **Mandato:** "entra a la cuenta rectoría, crea horarios para demostración — tú mismo, como si fueras un usuario, creas horarios en la sección de QR de Clase — para cada clase en todos los grados, aleatorio pero coherente, y haz la prueba de que sí sincroniza".
+- **Diagnóstico previo (por qué "no tenía horarios"):** el snapshot en nube (`INAS-ANTONIA-SANTOS-2026`, pushed por el propietario 19:04Z) YA traía 180 cátedras para los 6 grados con matrícula real (6°4, 7°4, 8°4, 9°3, 10°3, 11°3), pero solo **38/180 tenían `teacherId`** — el import antiguo usaba nombres cortos ("Óscar Torres") que no matchean los nombres completos de la lista de docentes → "Mi Horario" de los docentes quedaba vacío y el propietario percibía "no tengo horarios".
+- **Ejecución 100% por UI (Playwright headless, `scripts/r41_horarios_ui.mjs` del sandbox, sin secretos embebidos):** login Firebase como Rectoría → pestaña "Sync y Seguridad" → **Descargar (Pull)** (restaura 80 estudiantes + 20 docentes reales + 7 bloques del snapshot del propietario) → Horarios → **Importar CSV** (importador oficial de la app, `parseScheduleImport`) → Validar (180/180, 0 errores) → Aplicar con reemplazo escopado → **Sincronizar (Push)** → recarga (persistencia local OK, 0 pageerrors).
+- **Coherencia del horario (`gen_horarios_csv.mjs`, semilla reproducible):** 5 días × 6 bloques × 6 grados = **180 cátedras**, las 17 asignaturas institucionales (Dirección de Grupo abre el lunes con Docente Titular), los **20 docentes reales del propietario** con carga 3–14 h/sem, **cero choques** de docente por (día, bloque), máx. 2 h de la misma materia por día (lectura de cátedra doble), aulas especiales (Sala de Sistemas, Lab de Ciencias, Cancha) sin choque entre grados.
+- **Verificación server-side (read-only):** re-pull del snapshot → `syncedAt` fresco, **180 asignaciones (30×6), 174 con `teacherId` VÁLIDO (100% de las que llevan docente), 0 nombres huérfanos**; students 80 / teachers 20 / slots 7 intactos.
+- **Evidencias:** `download/QA_horarios_r41/` (matriz semanal 6°4, tarjetas QR de Clase, validación del import, CSV fuente) + 11 capturas en `scripts/r41_shots/` del sandbox.
+- **Para el propietario:** en el dispositivo de la presentación → Ajustes → **Descargar (Pull)** y los horarios aparecen (el snapshot de la nube ya es el nuevo). Los docentes ahora SÍ ven su horario en "Mi Horario" (F2) porque las cátedras quedaron ligadas por `teacherId` a sus fichas reales.
+
 ### 🔎 Ronda 40-b (07/09/2026) — VERIFICACIÓN DE ACEPTACIÓN DEL AGENTE PRINCIPAL: H-40-1 ENCONTRADO Y CORREGIDO + DESPLIEGUE VÍA firebaserules API + 15/15 EN VIVO
 
 - **Contexto:** el propietario ordenó verificar el "COMPLETADA" del agente de reglas (Ronda 40, abajo) y corregir errores o falsos positivos. Ocurrió un 4.º rebobinado del workspace durante la sesión (repo restaurado desde `origin/main`, fuente canónica en GitHub).
