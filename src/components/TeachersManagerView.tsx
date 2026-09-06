@@ -634,7 +634,7 @@ export const TeachersManagerView: React.FC = () => {
                 <input
                   type="text"
                   list="inas-subjects-datalist-teacher"
-                  placeholder="Matemáticas, Física, Educación Religiosa, Cátedra de la Paz…"
+                  placeholder="Matemáticas, Religión, Artística, Cátedra de la Paz…"
                   value={formData.subjectsText}
                   onChange={(e) => setFormData({ ...formData, subjectsText: e.target.value })}
                   className="w-full px-3 py-2 bg-white dark:bg-black border border-slate-300 dark:border-zinc-800 rounded-xl text-xs text-slate-900 dark:text-white focus:ring-2 focus:ring-indigo-500 outline-none"

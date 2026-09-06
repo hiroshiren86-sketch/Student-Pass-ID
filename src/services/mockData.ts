@@ -224,7 +224,7 @@ export const INITIAL_TEACHERS: Teacher[] = [
     fullName: 'Carlos Alberto Mendoza Jaramillo',
     email: 'cmendoza@inas.edu.co',
     phone: '3156781234',
-    subjects: ['Ciencias Sociales', 'Historia', 'Democracia', 'Filosofía'],
+    subjects: ['Sociales', 'Filosofía', 'Ciencias Económicas y Políticas'],
     assignedGrades: ['8°1', '8°2', '9°1', '10°1', '11°2'],
     username: 'cmendoza',
     tempPassword: 'Profe2026*Soc',
@@ -239,7 +239,7 @@ export const INITIAL_TEACHERS: Teacher[] = [
     fullName: 'Diana Carolina Valencia Morales',
     email: 'dvalencia@inas.edu.co',
     phone: '3205432198',
-    subjects: ['Ciencias Naturales', 'Química', 'Biología'],
+    subjects: ['Ciencias Naturales (Biología)', 'Química', 'Física'],
     assignedGrades: ['9°1', '9°2', '10°1', '10°2', '11°2'],
     username: 'dvalencia',
     tempPassword: 'Profe2026*Nat',
@@ -265,7 +265,7 @@ export const INITIAL_TEACHERS: Teacher[] = [
     fullName: 'Sebastián Morales Castro',
     email: 'smorales@inas.edu.co',
     phone: '3128765432',
-    subjects: ['Tecnología e Informática', 'Robótica', 'Educación Física'],
+    subjects: ['Informática', 'Educación Física', 'Artística'],
     assignedGrades: ['7°1', '9°1', '10°1', '11°2'],
     username: 'smorales',
     tempPassword: 'Profe2026*Tec',
@@ -289,9 +289,9 @@ export const INITIAL_SCHEDULE_ASSIGNMENTS: import('../types/attendance').ClassSc
   // 10°1 Lunes (Bloque Doble 1ª y 2ª hora: Matemáticas - Prof. Juan Pablo Pérez)
   { id: 'as-1', dayOfWeek: 1, slotId: 'slot-1', grade: '10°1', subject: 'Matemáticas', teacherId: 'prof-1', teacherName: 'Juan Pablo Pérez Gómez', classroom: 'Aula 204', isDoubleBlock: true, doubleBlockRole: 'FIRST_HOUR', doubleBlockLinkedSlotId: 'slot-2' },
   { id: 'as-2', dayOfWeek: 1, slotId: 'slot-2', grade: '10°1', subject: 'Matemáticas', teacherId: 'prof-1', teacherName: 'Juan Pablo Pérez Gómez', classroom: 'Aula 204', isDoubleBlock: true, doubleBlockRole: 'SECOND_HOUR', doubleBlockLinkedSlotId: 'slot-1' },
-  { id: 'as-3', dayOfWeek: 1, slotId: 'slot-3', grade: '10°1', subject: 'Ciencias Sociales', teacherId: 'prof-3', teacherName: 'Carlos Alberto Mendoza Jaramillo', classroom: 'Aula 204' },
+  { id: 'as-3', dayOfWeek: 1, slotId: 'slot-3', grade: '10°1', subject: 'Sociales', teacherId: 'prof-3', teacherName: 'Carlos Alberto Mendoza Jaramillo', classroom: 'Aula 204' },
   { id: 'as-4', dayOfWeek: 1, slotId: 'slot-5', grade: '10°1', subject: 'Inglés', teacherId: 'prof-5', teacherName: 'Andrés Felipe Giraldo Duque', classroom: 'Laboratorio de Idiomas' },
-  { id: 'as-5', dayOfWeek: 1, slotId: 'slot-6', grade: '10°1', subject: 'Tecnología e Informática', teacherId: 'prof-6', teacherName: 'Sebastián Morales Castro', classroom: 'Sala de Sistemas' },
+  { id: 'as-5', dayOfWeek: 1, slotId: 'slot-6', grade: '10°1', subject: 'Informática', teacherId: 'prof-6', teacherName: 'Sebastián Morales Castro', classroom: 'Sala de Sistemas' },
   { id: 'as-6', dayOfWeek: 1, slotId: 'slot-7', grade: '10°1', subject: 'Química', teacherId: 'prof-4', teacherName: 'Diana Carolina Valencia Morales', classroom: 'Laboratorio de Ciencias' },
 
   // 11°2 Miércoles (Bloque Doble 1ª y 2ª hora: Matemáticas - Prof. Juan Pablo Pérez)
@@ -306,7 +306,7 @@ export const INITIAL_SCHEDULE_ASSIGNMENTS: import('../types/attendance').ClassSc
   // 10°2 Lunes (Bloque Doble 1ª y 2ª hora: Lengua Castellana)
   { id: 'as-7', dayOfWeek: 1, slotId: 'slot-1', grade: '10°2', subject: 'Lengua Castellana', teacherId: 'prof-2', teacherName: 'María Camila Restrepo Henao', classroom: 'Aula 205', isDoubleBlock: true, doubleBlockRole: 'FIRST_HOUR', doubleBlockLinkedSlotId: 'slot-2' },
   { id: 'as-8', dayOfWeek: 1, slotId: 'slot-2', grade: '10°2', subject: 'Lengua Castellana', teacherId: 'prof-2', teacherName: 'María Camila Restrepo Henao', classroom: 'Aula 205', isDoubleBlock: true, doubleBlockRole: 'SECOND_HOUR', doubleBlockLinkedSlotId: 'slot-1' },
-  { id: 'as-9', dayOfWeek: 1, slotId: 'slot-3', grade: '10°2', subject: 'Ciencias Sociales', teacherId: 'prof-3', teacherName: 'Carlos Alberto Mendoza Jaramillo', classroom: 'Aula 205' },
+  { id: 'as-9', dayOfWeek: 1, slotId: 'slot-3', grade: '10°2', subject: 'Sociales', teacherId: 'prof-3', teacherName: 'Carlos Alberto Mendoza Jaramillo', classroom: 'Aula 205' },
   { id: 'as-10', dayOfWeek: 1, slotId: 'slot-5', grade: '10°2', subject: 'Química', teacherId: 'prof-4', teacherName: 'Diana Carolina Valencia Morales', classroom: 'Laboratorio de Ciencias' },
 
   // 11°1 Lunes (Bloque Doble 1ª y 2ª hora: Física)
