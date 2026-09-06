@@ -34,7 +34,7 @@ import {
   INITIAL_SCHEDULE_ASSIGNMENTS,
   DAY_TEMPLATES_DEFINITIONS
 } from './mockData';
-import { parseAndVerifyScan, parseAndVerifyClassScan } from '../utils/crypto';
+import { parseAndVerifyScan, parseAndVerifyClassScan, parseAndVerifyTeacherCard, slugifySubject } from '../utils/crypto';
 import { isValidGrade } from '../utils/documentParser';
 import { FirebaseService } from './firebase';
 import { SEED_DEMO_ON_FIRST_LAUNCH } from './demoConfig';
@@ -1698,7 +1698,9 @@ export class AttendanceStorageService {
       const raw = localStorage.getItem(ACTIVE_CLASS_KEY);
       if (!raw) return null;
       const ctx = JSON.parse(raw) as ActiveClassContext;
-      if (!ctx?.grade || !ctx?.slotId || !ctx?.expiresAt) return null;
+      // Ronda 43 (v2): el grado ya no es obligatorio — las tarjetas de docente (v2)
+      // no lo traen (el grado del registro lo aporta el carné del estudiante).
+      if (!ctx?.slotId || !ctx?.expiresAt) return null;
       if (Date.now() > ctx.expiresAt) return null; // expirada: ignorar (anti-replay por diseño)
       return ctx;
     } catch {
@@ -1812,6 +1814,168 @@ export class AttendanceStorageService {
     };
   }
 
+  // ==================== TARJETAS QR DE DOCENTE — v2 (Ronda 43) ====================
+  /**
+   * Ronda 43 — Activación de una TARJETA DE DOCENTE (protocolo CLASE:v2, mandato del
+   * propietario: "cada profesor tenga su tarjeta; no depende del horario").
+   *
+   * Orden de validación (manual v2 §2.2):
+   *   1. Prefijo/ruteo (el llamador) → 2. Formato (6 partes) → 3. Firma HMAC →
+   *   4. Vigencia anual → 5. Docente existe y activo en la matrícula local →
+   *   6. Asignatura ∈ teacher.subjects (match por slug) → 7. Bloque CLASE en curso
+   *   POR RELOJ (capa anti-abuso temporal — reemplaza el check de día de v1) →
+   *   8. Enriquecimiento opcional (aula de la cátedra coincidente, si hay horario).
+   *
+   * El contexto resultante NO trae grado: cualquier estudiante activo de CUALQUIER curso
+   * se registra con la asignatura/docente de la tarjeta y el GRADO DE SU CARNÉ (§2.3).
+   */
+  static async setActiveTeacherCard(token: string, activatedBy: string = 'QR_CLASE_V2'): Promise<ScanResultFeedback> {
+    const settings = this.getSettings();
+    const parsed = await parseAndVerifyTeacherCard(token, settings.qrSecret);
+
+    if (!parsed.isTeacherCard) {
+      return { type: 'error', title: 'Tarjeta de docente no reconocida', message: 'El código no corresponde a una Tarjeta QR de Docente (CLASE:v2).', timestamp: new Date().toISOString() };
+    }
+    if (!parsed.isValidFormat || parsed.teacherId === undefined || parsed.subjectSlug === undefined) {
+      return { type: 'error', title: 'Tarjeta de docente malformada', message: 'El token CLASE:v2 está incompleto o dañado. Genera la tarjeta de nuevo en Mis Tarjetas QR (Portal Docente) o en Horarios → Tarjetas QR de Docentes (Rectoría).', timestamp: new Date().toISOString() };
+    }
+    if (parsed.isSignatureValid === false || parsed.signature === undefined) {
+      return { type: 'error', title: 'Tarjeta con firma inválida', message: 'La firma HMAC no coincide: la tarjeta fue alterada o pertenece a otra institución. No se activó ninguna clase.', timestamp: new Date().toISOString() };
+    }
+    if (parsed.isExpired) {
+      const expiredDate = parsed.expiresAt ? new Date(parsed.expiresAt).toLocaleDateString('es-CO', { day: '2-digit', month: 'short', year: 'numeric' }) : '';
+      return { type: 'error', title: 'Tarjeta expirada', message: `Esta tarjeta venció el ${expiredDate} (fin del año escolar). Genera una tarjeta nueva.`, timestamp: new Date().toISOString() };
+    }
+
+    // (5) Docente existe y está activo en la matrícula local
+    const teacher = this.getTeachers().find(t => t.id === parsed.teacherId);
+    if (!teacher) {
+      return { type: 'error', title: 'Docente no encontrado', message: 'La tarjeta no corresponde a ningún docente de esta institución. Verifica con Rectoría.', timestamp: new Date().toISOString() };
+    }
+    if (!teacher.active) {
+      return { type: 'error', title: 'Docente inactivo', message: `La tarjeta pertenece a ${teacher.fullName}, quien está inactivo en la matrícula actual. Verifica con Rectoría.`, timestamp: new Date().toISOString() };
+    }
+
+    // (6) Asignatura ∈ teacher.subjects (match por slug; devuelve el nombre EXACTO de la ficha)
+    const matchedSubject = (teacher.subjects || []).find(s => slugifySubject(s) === parsed.subjectSlug);
+    if (!matchedSubject) {
+      return { type: 'error', title: 'Asignatura no vigente', message: `El docente ya no imparte esa asignatura según su ficha actual. Genera la tarjeta de nuevo en Mis Tarjetas QR.`, timestamp: new Date().toISOString() };
+    }
+
+    // (7) Bloque CLASE en curso POR RELOJ (la capa anti-abuso temporal de v2)
+    const activeSlotInfo = this.getCurrentActiveSlot();
+    if (!activeSlotInfo || !activeSlotInfo.isWithin) {
+      return {
+        type: 'no_active_slot' as const,
+        title: 'No hay clase en curso',
+        message: activeSlotInfo
+          ? this.buildNoActiveSlotMessage()
+          : 'No hay bloques de clase configurados en la plantilla de jornada activa.',
+        timestamp: new Date().toISOString()
+      };
+    }
+    const slot = activeSlotInfo.slot;
+    const expiresAt = bogotaTodayTimeToEpochMs(slot.endTime);
+    if (Date.now() > expiresAt) {
+      return { type: 'error', title: 'Bloque ya finalizado', message: `${slot.name} terminó a las ${slot.endTime}; no se puede activar una clase vencida.`, timestamp: new Date().toISOString() };
+    }
+
+    // (8) Enriquecimiento opcional: aula de la cátedra coincidente (docente+asignatura+hoy+bloque)
+    const todayDow = new Date().getDay() || 1;
+    const enrichment = this.getScheduleAssignments().find(a =>
+      a.teacherId === teacher.id && a.subject === matchedSubject && a.dayOfWeek === todayDow && a.slotId === slot.id
+    );
+
+    const ctx: ActiveClassContext = {
+      slotId: slot.id,
+      slotName: slot.name,
+      slotStartTime: slot.startTime,
+      slotEndTime: slot.endTime,
+      subject: matchedSubject,
+      teacherName: teacher.fullName,
+      teacherId: teacher.id,
+      classroom: enrichment?.classroom,
+      activatedAt: new Date().toISOString(),
+      expiresAt,
+      activatedBy,
+      tokenSignature: parsed.signature,
+      sourceVersion: 'v2'
+    };
+    localStorage.setItem(ACTIVE_CLASS_KEY, JSON.stringify(ctx));
+    this.notify();
+
+    return {
+      type: 'class_activated',
+      title: 'Clase activa en este dispositivo',
+      message: `${ctx.subject} · ${teacher.fullName} · ${ctx.slotName} (${ctx.slotStartTime}–${ctx.slotEndTime})${ctx.classroom ? ` · ${ctx.classroom}` : ''}. Los próximos escaneos (cualquier curso) quedan vinculados a esta asignatura hasta las ${slot.endTime}.`,
+      timestamp: new Date().toISOString()
+    };
+  }
+
+  /**
+   * Ronda 43 — Variante v2 del 1-toque en Aula Docente: el docente elige una de SUS
+   * asignaturas (de teacher.subjects) y se activa SIN escanear nada (el dispositivo es
+   * suyo). Mismo bloque-por-reloj que la tarjeta escaneada. NO depende del horario:
+   * funciona con la matrícula sola. La variante v1 (activateClassDirect, por cátedra
+   * grado+bloque) se conserva intacta.
+   */
+  static activateTeacherSubjectDirect(teacherId: string, subject: string, activatedBy: string = 'AULA_DOCENTE_V2'): ScanResultFeedback {
+    const teacher = this.getTeachers().find(t => t.id === teacherId);
+    if (!teacher) {
+      return { type: 'error', title: 'Docente no encontrado', message: 'No existe la ficha del docente en la matrícula local. Haz un Pull en Ajustes → Sync y Seguridad.', timestamp: new Date().toISOString() };
+    }
+    const matchedSubject = (teacher.subjects || []).find(s => s === subject);
+    if (!matchedSubject) {
+      return { type: 'error', title: 'Asignatura no vigente', message: `"${subject}" no está en la ficha de ${teacher.fullName}. Genera la tarjeta de nuevo si la asignatura cambió.`, timestamp: new Date().toISOString() };
+    }
+
+    const activeSlotInfo = this.getCurrentActiveSlot();
+    if (!activeSlotInfo || !activeSlotInfo.isWithin) {
+      return {
+        type: 'no_active_slot' as const,
+        title: 'No hay clase en curso',
+        message: activeSlotInfo
+          ? this.buildNoActiveSlotMessage()
+          : 'No hay bloques de clase configurados en la plantilla de jornada activa.',
+        timestamp: new Date().toISOString()
+      };
+    }
+    const slot = activeSlotInfo.slot;
+    const expiresAt = bogotaTodayTimeToEpochMs(slot.endTime);
+    if (Date.now() > expiresAt) {
+      return { type: 'error', title: 'Bloque ya finalizado', message: `${slot.name} terminó a las ${slot.endTime}; no se puede activar una clase vencida.`, timestamp: new Date().toISOString() };
+    }
+
+    const todayDow = new Date().getDay() || 1;
+    const enrichment = this.getScheduleAssignments().find(a =>
+      a.teacherId === teacher.id && a.subject === matchedSubject && a.dayOfWeek === todayDow && a.slotId === slot.id
+    );
+
+    const ctx: ActiveClassContext = {
+      slotId: slot.id,
+      slotName: slot.name,
+      slotStartTime: slot.startTime,
+      slotEndTime: slot.endTime,
+      subject: matchedSubject,
+      teacherName: teacher.fullName,
+      teacherId: teacher.id,
+      classroom: enrichment?.classroom,
+      activatedAt: new Date().toISOString(),
+      expiresAt,
+      activatedBy,
+      tokenSignature: 'DIRECT-ACTIVATION-V2',
+      sourceVersion: 'v2'
+    };
+    localStorage.setItem(ACTIVE_CLASS_KEY, JSON.stringify(ctx));
+    this.notify();
+    return {
+      type: 'class_activated',
+      title: 'Clase activa en este dispositivo',
+      message: `${ctx.subject} · ${teacher.fullName} · ${ctx.slotName} (${ctx.slotStartTime}–${ctx.slotEndTime}). Vence a las ${slot.endTime}.`,
+      timestamp: new Date().toISOString()
+    };
+  }
+
   // ==================== CLASSROOM SCANNER ====================
   static async registerClassScan(params: {
     scanInput: string;
@@ -1825,6 +1989,7 @@ export class AttendanceStorageService {
     scannedByCode?: string;
     customStatus?: AttendanceStatus;
     notes?: string;
+    teacherId?: string; // Ronda 43 (v2): atribución exacta del docente de la tarjeta — campo aditivo
     contextSource?: 'QR_CLASE' | 'HORA'; // Ronda 19: QR de Clase → 'QR_CLASE'; inferencia por reloj → 'HORA'
     classQrVerified?: boolean;
   }): Promise<ScanResultFeedback> {
@@ -1906,6 +2071,7 @@ export class AttendanceStorageService {
         existing.time = currentTime;
         existing.method = params.method;
         existing.scannedBy = params.scannedBy || 'DOCENTE';
+        if (params.teacherId) existing.teacherId = params.teacherId; // Ronda 43 (v2): atribución aditiva
         existing.notes = `Marcado tardío tras auto-cierre (${currentTime})`;
         this.saveAttendance(allRecords);
 
@@ -1958,6 +2124,7 @@ export class AttendanceStorageService {
       slotEndTime: currentSlot.endTime,
       subject: resolvedSubject,
       teacherName: resolvedTeacher,
+      teacherId: params.teacherId, // Ronda 43 (v2): aditivo — registros viejos se leen igual (reportes por teacherName intactos)
       timestamp: new Date().toISOString(),
       date: today,
       time: currentTime,
@@ -2361,6 +2528,28 @@ export class AttendanceStorageService {
     // misma semántica de los sistemas de control de acceso modernos. Grados distintos usan
     // la lógica clásica (el contexto es una lente, no una puerta).
     const activeClass = this.getActiveClass();
+
+    // Ronda 43 — v2 (Tarjeta de Docente): SIN gate de grado. CUALQUIER estudiante activo de
+    // cualquier curso se registra con la asignatura/docente FIRMADOS en la tarjeta y el
+    // GRADO DE SU CARNÉ (el estudiante lo trae consigo) — mandato del propietario.
+    // El v1 conserva su gate de grado (compatibilidad).
+    if (activeClass && activeClass.sourceVersion === 'v2' && student) {
+      return this.registerClassScan({
+        scanInput: params.scanInput,
+        method: params.method || 'CAMERA',
+        slotId: activeClass.slotId,
+        grade: student.grade,
+        subject: activeClass.subject,
+        teacherName: activeClass.teacherName,
+        teacherId: activeClass.teacherId,
+        scannedBy: 'DOCENTE',
+        scannedByName: 'Terminal Escolar Principal',
+        notes: params.notes,
+        contextSource: 'QR_CLASE',
+        classQrVerified: true
+      });
+    }
+
     if (activeClass && student && student.grade === activeClass.grade) {
       return this.registerClassScan({
         scanInput: params.scanInput,

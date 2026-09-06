@@ -205,6 +205,104 @@ export async function parseAndVerifyClassScan(rawInput: string, secret: string =
   };
 }
 
+// ====================================================================
+// Ronda 43 — TARJETAS QR DE DOCENTE (protocolo CLASE:v2)
+// "La tarjeta es la identidad del docente, no el aula" (mandato del propietario:
+// cada profesor lleva SU tarjeta por asignatura; los horarios son opcionales).
+// Formato canónico: "CLASE:v2:<teacherId>:<subjectSlug>:<expMs>:<sig16>"
+//   — 6 partes exactas (el slug no contiene ':' ni '|')
+//   — SIN grado, sin día, sin bloque: la tarjeta es válida TODOS los días del año
+//     escolar; el bloque vigente lo aporta el RELOJ al activar (getCurrentActiveSlot)
+//   — el grado del registro lo aporta el CARNÉ del estudiante (matrícula local)
+// El parser v1 (parseAndVerifyClassScan) queda INTACTO: coexistencia por prefijo.
+// ====================================================================
+
+/**
+ * Slug ASCII de asignatura para el token v2: minúsculas, sin tildes (NFD),
+ * todo lo no-alfanumérico → '-'. Ej.: "C. Naturales (Biología)" → "c-naturales-biologia".
+ * El slug NO contiene ':' ni '|' → el split por ':' del token sigue siendo robusto.
+ */
+export function slugifySubject(name: string): string {
+  return name
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/-+/g, '-')
+    .replace(/^-|-$/g, '');
+}
+
+export interface ParsedTeacherCardResult {
+  isTeacherCard: boolean;    // empieza por CLASE:v2: (el llamador debe rutear aquí ANTES de parseAndVerifyScan)
+  isValidFormat: boolean;    // 6 partes exactas y expMs numérico
+  teacherId?: string;        // id de la ficha del docente (prof-…, estable)
+  subjectSlug?: string;      // slug de la asignatura; se resuelve al nombre exacto contra teacher.subjects
+  expiresAt?: number;        // fin del año escolar (misma convención v1: 19-dic 23:59)
+  isExpired?: boolean;
+  signature?: string;
+  isSignatureValid?: boolean; // firma válida Y no expirado (semántica IEDSJ/v1)
+  rawInput: string;
+}
+
+/**
+ * Genera el payload firmado de la TARJETA DE DOCENTE (v2).
+ * baseData = "teacherId|subjectSlug|expMs" (misma primitiva HMAC-SHA256 truncada a 16 hex
+ * que v1/IEDSJ). Una única tarjeta por docente×asignatura, válida todos los días.
+ */
+export async function generateTeacherCardPayload(
+  teacherId: string,
+  subjectSlug: string,
+  expiresAtMs: number,
+  secret: string = DEFAULT_QR_SECRET
+): Promise<string> {
+  const baseData = `${teacherId}|${subjectSlug}|${expiresAtMs}`;
+  const sig = await generateHmacSignature(baseData, secret);
+  return `CLASE:v2:${teacherId}:${subjectSlug}:${expiresAtMs}:${sig}`;
+}
+
+/**
+ * Analiza y valida una TARJETA DE DOCENTE (v2).
+ * Las validaciones de negocio (docente existe y activo, asignatura ∈ teacher.subjects,
+ * bloque vigente por reloj) viven en attendanceStorage.setActiveTeacherCard para
+ * mantener crypto.ts puro — mismo patrón que v1.
+ */
+export async function parseAndVerifyTeacherCard(rawInput: string, secret: string = DEFAULT_QR_SECRET): Promise<ParsedTeacherCardResult> {
+  const trimmed = rawInput.trim();
+  if (!trimmed.startsWith('CLASE:v2:')) {
+    return { isTeacherCard: false, isValidFormat: false, rawInput: trimmed };
+  }
+  const parts = trimmed.split(':');
+  // CLASE : v2 : teacherId : subjectSlug : exp : sig  → 6 partes exactas
+  if (parts.length !== 6) {
+    return { isTeacherCard: true, isValidFormat: false, rawInput: trimmed };
+  }
+  const teacherId = parts[2];
+  const subjectSlug = parts[3];
+  const expiresAt = parseInt(parts[4], 10);
+  const sig = parts[5];
+
+  if (!teacherId || !subjectSlug || Number.isNaN(expiresAt)) {
+    return { isTeacherCard: true, isValidFormat: false, rawInput: trimmed };
+  }
+
+  const baseData = `${teacherId}|${subjectSlug}|${expiresAt}`;
+  const expectedSig = await generateHmacSignature(baseData, secret);
+  const isSignatureValid = sig === expectedSig;
+  const isExpired = Date.now() > expiresAt;
+
+  return {
+    isTeacherCard: true,
+    isValidFormat: true,
+    teacherId,
+    subjectSlug,
+    expiresAt,
+    isExpired,
+    signature: sig,
+    isSignatureValid: isSignatureValid && !isExpired,
+    rawInput: trimmed
+  };
+}
+
 /**
  * Función PBKDF2 nativa con WebCrypto para autenticación local
  */

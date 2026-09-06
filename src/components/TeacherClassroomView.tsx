@@ -30,11 +30,15 @@ import {
   Key,
   ShieldAlert,
   Flame,
-  Bell
+  Bell,
+  X
 } from 'lucide-react';
 import jsQR from 'jsqr';
+import QRCode from 'qrcode';
+import { generateTeacherCardPayload, slugifySubject } from '../utils/crypto';
+import { TeacherCardQrModal } from './TeacherCardQrModal'; // Ronda 43: modal A6 v2 compartido
 import { Student, AttendanceRecord, SchoolSettings, Teacher, ScheduleSlot, AttendanceStatus, EphemeralScanDelegation } from '../types/attendance';
-import { AttendanceStorageService, getTodayDateString, getCurrentTimeString } from '../services/attendanceStorage';
+import { AttendanceStorageService, getTodayDateString, getCurrentTimeString, schoolYearEndEpochMs } from '../services/attendanceStorage';
 import { ExcuseService } from '../services/excuseService'; // Ronda 21: protección de excusas en el cierre de bloque
 import { INSTITUTIONAL_SUBJECTS } from '../constants/subjects'; // Ronda 34: lista institucional única de asignaturas
 import { SoundService } from '../utils/sound';
@@ -116,11 +120,25 @@ export const TeacherClassroomView: React.FC<TeacherClassroomViewProps> = ({
   const [myAsgError, setMyAsgError] = useState<string>('');
   const [myAsgVersion, setMyAsgVersion] = useState<number>(0); // fuerza re-render de la lista al crear/borrar
 
+  // Ronda 43 — TARJETAS QR DE DOCENTE (v2): "Mis Tarjetas QR" + 1-toque por asignatura
+  const [showMyCards, setShowMyCards] = useState<boolean>(false);
+  const [teacherCardModal, setTeacherCardModal] = useState<{ dataUrl: string; subject: string; teacherName: string } | null>(null);
+  const [v2DirectSubject, setV2DirectSubject] = useState<string>(teacher?.subjects?.[0] || '');
+
+  /** Genera el QR firmado CLASE:v2 de una asignatura de ESTE docente y abre el modal A6. */
+  const openMyTeacherCard = async (subject: string) => {
+    if (!teacher?.id) return;
+    const settings = AttendanceStorageService.getSettings();
+    const payload = await generateTeacherCardPayload(teacher.id, slugifySubject(subject), schoolYearEndEpochMs(), settings.qrSecret);
+    const url = await QRCode.toDataURL(payload, { width: 512, margin: 2 });
+    setTeacherCardModal({ dataUrl: url, subject, teacherName: teacher.fullName });
+  };
+
   // Ronda 19 (hallazgo 10 del informe): Escape cierra los modales de este módulo — el de
   // Delegación era el único que ignoraba la tecla (había que pulsar "Cancelar"). Patrón
   // Regla E10 / ConfirmDialog: listener global mientras el modal está abierto.
   useEffect(() => {
-    if (!showRepModal && !showSubRepModal && !showDelegationModal && !showMyAssignments) return;
+    if (!showRepModal && !showSubRepModal && !showDelegationModal && !showMyAssignments && !showMyCards && !teacherCardModal) return;
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
         e.stopPropagation();
@@ -128,11 +146,13 @@ export const TeacherClassroomView: React.FC<TeacherClassroomViewProps> = ({
         setShowSubRepModal(false);
         setShowDelegationModal(false);
         setShowMyAssignments(false);
+        setShowMyCards(false);
+        setTeacherCardModal(null);
       }
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [showRepModal, showSubRepModal, showDelegationModal, showMyAssignments]);
+  }, [showRepModal, showSubRepModal, showDelegationModal, showMyAssignments, showMyCards, teacherCardModal]);
 
   // Reloj vivo + ventana de aviso de fin de bloque (T-{n}) — notificación única por bloque/día
   const [nowMinuteOfDay, setNowMinuteOfDay] = useState<number>(() => {
@@ -972,6 +992,44 @@ export const TeacherClassroomView: React.FC<TeacherClassroomViewProps> = ({
             Activar en este dispositivo
           </button>
 
+          {/* Ronda 43 — v2 1-toque: el docente activa UNA DE SUS ASIGNATURAS sin escanear nada
+              (el dispositivo es suyo). NO depende del horario: el bloque vigente lo aporta el reloj. */}
+          {teacher?.id && (teacher?.subjects?.length || 0) > 0 && (
+            <div className="flex items-center gap-2 flex-wrap sm:justify-end">
+              <span className="text-[11px] font-bold text-slate-500 dark:text-slate-400 shrink-0">
+                Tarjeta de Docente (v2):
+              </span>
+              <select
+                value={v2DirectSubject}
+                onChange={(e) => setV2DirectSubject(e.target.value)}
+                className="px-2.5 py-2 bg-white dark:bg-black border border-violet-300 dark:border-violet-800 rounded-xl text-[11px] font-bold text-violet-700 dark:text-violet-300 max-w-[220px]"
+                aria-label="Selecciona tu asignatura para activar"
+              >
+                {[...teacher!.subjects].sort((a, b) => a.localeCompare(b, 'es')).map(s => (
+                  <option key={s} value={s}>{s}</option>
+                ))}
+              </select>
+              <button
+                type="button"
+                onClick={() => {
+                  const res = AttendanceStorageService.activateTeacherSubjectDirect(teacher!.id, v2DirectSubject);
+                  if (res.type === 'class_activated') {
+                    setScanFeedback({ type: 'success', message: res.message });
+                  } else {
+                    setScanFeedback({ type: 'error', message: res.message });
+                  }
+                  setTimeout(() => setScanFeedback(null), 5000);
+                }}
+                className="px-3.5 py-2 rounded-xl bg-violet-600 hover:bg-violet-500 text-white text-[11px] font-bold transition-all shadow-md shadow-violet-600/25 flex items-center gap-1.5 shrink-0"
+                title="Activa tu asignatura en este dispositivo: cualquier estudiante escaneado queda vinculado a ella con el grado de su carné"
+                aria-label="Activar mi asignatura en este dispositivo (v2)"
+              >
+                <Zap className="w-3.5 h-3.5" />
+                Activar mi asignatura
+              </button>
+            </div>
+          )}
+
           <div className="flex items-center gap-2 flex-wrap">
             <button
               type="button"
@@ -983,6 +1041,20 @@ export const TeacherClassroomView: React.FC<TeacherClassroomViewProps> = ({
               <BookOpen className="w-4 h-4" />
               <span>Mis Cátedras</span>
             </button>
+
+            {/* Ronda 43 — TARJETAS QR DE DOCENTE (v2): autogestión de la credencial firmada */}
+            {teacher?.id && (teacher?.subjects?.length || 0) > 0 && (
+              <button
+                type="button"
+                onClick={() => setShowMyCards(true)}
+                className="py-2.5 px-3 bg-violet-50 dark:bg-violet-950/60 border border-violet-300 dark:border-violet-800 text-violet-700 dark:text-violet-300 hover:bg-violet-100 dark:hover:bg-violet-900/60 rounded-xl text-xs font-bold flex items-center gap-2 transition-all"
+                title="Tu tarjeta QR por asignatura: sirve todos los días, sin depender del horario"
+                aria-label="Abrir Mis Tarjetas QR (credencial docente firmada)"
+              >
+                <QrCode className="w-4 h-4" />
+                <span>Mis Tarjetas QR</span>
+              </button>
+            )}
 
             <button
               type="button"
@@ -1544,6 +1616,65 @@ export const TeacherClassroomView: React.FC<TeacherClassroomViewProps> = ({
             </div>
           </div>
         </div>
+      )}
+
+      {/* Ronda 43 — Modal: Mis Tarjetas QR (credencial firmada docente×asignatura — mandato del propietario) */}
+      {showMyCards && teacher && (
+        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4" role="dialog" aria-modal="true" aria-label="Mis Tarjetas QR">
+          <div className="bg-white dark:bg-zinc-950 rounded-3xl p-6 w-full max-w-md border border-slate-200 dark:border-zinc-800/50 shadow-2xl space-y-4 max-h-[90vh] overflow-y-auto">
+            <div className="flex items-center justify-between">
+              <h3 className="text-base font-black text-slate-900 dark:text-white flex items-center gap-2">
+                <QrCode className="w-5 h-5 text-violet-600" />
+                <span>Mis Tarjetas QR ({teacher.fullName.split(' ').slice(0, 2).join(' ')})</span>
+              </h3>
+              <button
+                type="button"
+                onClick={() => setShowMyCards(false)}
+                className="p-1.5 text-slate-400 hover:text-slate-600 dark:hover:text-white rounded-xl hover:bg-slate-100 dark:hover:bg-slate-800"
+                aria-label="Cerrar Mis Tarjetas QR"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="p-3 rounded-2xl bg-violet-50/70 dark:bg-violet-950/40 border border-violet-200 dark:border-violet-800 text-[11px] text-slate-600 dark:text-slate-300 leading-relaxed">
+              Una tarjeta <b>por asignatura de tu ficha</b>: dice tu nombre y la asignatura — <b>no lleva hora ni grado</b>, así que sirve <b>todos los días del año</b> aunque cambie el horario. Imprímela, plastifícala y escanéala al entrar al salón para activar la asignatura antes de pasar lista.
+            </div>
+
+            <div className="space-y-2">
+              {[...(teacher.subjects || [])].sort((a, b) => a.localeCompare(b, 'es')).map(subj => (
+                <div key={subj} className="flex items-center justify-between gap-3 p-3 rounded-2xl bg-slate-50 dark:bg-zinc-950/60 border border-slate-200/70 dark:border-zinc-800/60">
+                  <span className="text-xs font-black text-slate-900 dark:text-white">{subj}</span>
+                  <button
+                    type="button"
+                    onClick={() => openMyTeacherCard(subj)}
+                    className="px-3 py-1.5 rounded-xl bg-violet-600 hover:bg-violet-500 text-white text-[11px] font-bold transition-all shadow-md shadow-violet-600/25 flex items-center gap-1.5 shrink-0"
+                    aria-label={`Ver tarjeta QR de ${subj}`}
+                  >
+                    <QrCode className="w-3 h-3" /> Ver tarjeta QR
+                  </button>
+                </div>
+              ))}
+              {(teacher.subjects || []).length === 0 && (
+                <div className="py-4 text-center text-xs text-slate-400 font-bold">
+                  Tu ficha no tiene asignaturas asignadas. Pídelas a Rectoría en Gestión Docentes.
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Ronda 43 — Modal A6 v2 compartido (tarjeta firmada descargable) */}
+      {teacherCardModal && (
+        <TeacherCardQrModal
+          dataUrl={teacherCardModal.dataUrl}
+          subject={teacherCardModal.subject}
+          teacherName={teacherCardModal.teacherName}
+          schoolName={settings.schoolName}
+          downloadName={`tarjeta_docente_${slugifySubject(teacherCardModal.subject)}_${slugifySubject(teacherCardModal.teacherName)}`}
+          onClose={() => setTeacherCardModal(null)}
+        />
       )}
 
       {showChangePasswordModal && teacher && (

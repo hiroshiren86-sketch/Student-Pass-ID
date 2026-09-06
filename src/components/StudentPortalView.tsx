@@ -261,6 +261,21 @@ export const StudentPortalView: React.FC<StudentPortalViewProps> = ({ onLogout, 
   const handleRepRegister = async (rawCode: string, method: 'CAMERA' | 'USB' | 'MANUAL') => {
     if (!activeStudent || !rawCode.trim()) return;
 
+    // Ronda 43 — TARJETAS QR DE DOCENTE (CLASE:v2): la tarjeta del profesor identifica
+    // docente+asignatura; el representante la escanea y su dispositivo queda con la
+    // asignatura activa (el bloque vigente lo aporta el reloj).
+    if (rawCode.trim().startsWith('CLASE:v2:')) {
+      const activation = await AttendanceStorageService.setActiveTeacherCard(rawCode.trim());
+      if (soundEnabled) {
+        if (activation.type === 'class_activated') SoundService.playBeepSuccess();
+        else SoundService.playBeepError();
+      }
+      setRepScanFeedback({ type: activation.type === 'class_activated' ? 'success' : 'error', message: `${activation.title}: ${activation.message}` });
+      setRepManualInput('');
+      setTimeout(() => setRepScanFeedback(null), 6000);
+      return;
+    }
+
     // Ronda 19 — QR DE CLASE: la tarjeta de la pizarra se rutear antes del registro de
     // estudiantes. El representante escanea el QR de clase y su dispositivo queda con el
     // contexto exacto (materia/bloque) para todos los carnés de su curso.

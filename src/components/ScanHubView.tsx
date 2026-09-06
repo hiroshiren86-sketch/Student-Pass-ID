@@ -89,6 +89,18 @@ export const ScanHubView: React.FC<ScanHubViewProps> = ({ onScanSuccess }) => {
     try {
       const cleanInput = rawCode.trim();
 
+      // Ronda 43 — TARJETAS QR DE DOCENTE (CLASE:v2): se rutear antes del límite de tasa y
+      // del registro. La tarjeta identifica docente+asignatura (sin grado/día/bloque).
+      if (cleanInput.startsWith('CLASE:v2:')) {
+        const activation = await AttendanceStorageService.setActiveTeacherCard(cleanInput);
+        setLastFeedback(activation);
+        if (soundEnabled) {
+          if (activation.type === 'class_activated') SoundService.playBeepSuccess();
+          else SoundService.playBeepError();
+        }
+        return;
+      }
+
       // Ronda 19 — QR DE CLASE: se rutear ANTES del límite de tasa y del registro (no es un
       // estudiante: es la tarjeta de la pizarra). Activa el contexto del dispositivo.
       if (cleanInput.startsWith('CLASE:v1:')) {

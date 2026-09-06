@@ -36,10 +36,21 @@ export const ActiveClassBanner: React.FC<{ onClear?: () => void }> = ({ onClear 
       <Radio className="w-4 h-4 text-indigo-600 dark:text-indigo-400 shrink-0 animate-pulse" />
       <div className="flex-1 min-w-0 text-[11px] leading-snug">
         <span className="font-black text-indigo-700 dark:text-indigo-300 uppercase tracking-wide">Clase activa: </span>
-        <span className="font-bold text-slate-700 dark:text-slate-200">
-          {activeClass.subject} · {activeClass.grade} · {activeClass.slotName} ({activeClass.slotStartTime}–{activeClass.slotEndTime})
-        </span>
-        <span className="text-slate-500 dark:text-slate-400"> — los escaneos de {activeClass.grade} se vinculan a esta materia hasta las {activeClass.slotEndTime}.</span>
+        {activeClass.sourceVersion === 'v2' ? (
+          <>
+            <span className="font-bold text-slate-700 dark:text-slate-200">
+              {activeClass.subject} · {activeClass.teacherName} · {activeClass.slotName} ({activeClass.slotStartTime}–{activeClass.slotEndTime})
+            </span>
+            <span className="text-slate-500 dark:text-slate-400"> — los escaneos de CUALQUIER curso se vinculan a esta asignatura (Tarjeta de Docente) hasta las {activeClass.slotEndTime}.</span>
+          </>
+        ) : (
+          <>
+            <span className="font-bold text-slate-700 dark:text-slate-200">
+              {activeClass.subject} · {activeClass.grade} · {activeClass.slotName} ({activeClass.slotStartTime}–{activeClass.slotEndTime})
+            </span>
+            <span className="text-slate-500 dark:text-slate-400"> — los escaneos de {activeClass.grade} se vinculan a esta materia hasta las {activeClass.slotEndTime}.</span>
+          </>
+        )}
       </div>
       <button
         type="button"

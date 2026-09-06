@@ -45,7 +45,8 @@ import {
 import { AttendanceStorageService, schoolYearEndEpochMs } from '../services/attendanceStorage';
 import { INSTITUTIONAL_SUBJECTS } from '../constants/subjects'; // Ronda 34: lista institucional única (incluye Religión, Artística y Cátedra de la Paz)
 import QRCode from 'qrcode';
-import { generateClassQrPayload } from '../utils/crypto';
+import { generateClassQrPayload, generateTeacherCardPayload, slugifySubject } from '../utils/crypto';
+import { TeacherCardQrModal } from './TeacherCardQrModal'; // Ronda 43: modal A6 v2 compartido (rectoría + portal docente)
 import { ToggleSwitch } from './ToggleSwitch';
 import { ConfirmDialog } from './ConfirmDialog';
 
@@ -131,7 +132,7 @@ export const ScheduleBuilderView: React.FC = () => {
     {
       id: 'class-qr',
       label: 'QR de Clase',
-      desc: 'Vincula la materia exacta con un QR firmado: 1 toque en el aula antes de pasar lista.',
+      desc: 'Tarjetas QR de Docentes (v2): 1 tarjeta por docente y asignatura, válida todos los días — sin depender del horario.',
       icon: QrCode,
       accent: true
     },
@@ -164,6 +165,82 @@ export const ScheduleBuilderView: React.FC = () => {
   // Ronda 19 — QR de Clase: modal de generación/descarga de la tarjeta A6 firmada
   const [classQrModal, setClassQrModal] = useState<{ grade: string; dayOfWeek: number; slotId: string; slotName: string; slotStartTime: string; slotEndTime: string; subject: string; teacherName: string; classroom?: string } | null>(null);
   const [classQrDataUrl, setClassQrDataUrl] = useState<string>('');
+
+  // Ronda 43 — TARJETAS QR DE DOCENTES (v2): modal compartido + sub-opción v1 colapsable
+  const [teacherCardModal, setTeacherCardModal] = useState<{ dataUrl: string; subject: string; teacherName: string } | null>(null);
+  const [showV1ClassCards, setShowV1ClassCards] = useState<boolean>(false);
+  const [printingAllCards, setPrintingAllCards] = useState<boolean>(false);
+
+  const openTeacherCard = async (teacher: Teacher, subject: string) => {
+    const settings = AttendanceStorageService.getSettings();
+    const payload = await generateTeacherCardPayload(teacher.id, slugifySubject(subject), schoolYearEndEpochMs(), settings.qrSecret);
+    const url = await QRCode.toDataURL(payload, { width: 512, margin: 2 });
+    setTeacherCardModal({ dataUrl: url, subject, teacherName: teacher.fullName });
+  };
+
+  /**
+   * Ronda 43 — "Imprimir todas (N)": genera el set completo del colegio (una tarjeta por
+   * docente activo × asignatura de su ficha) en una hoja de impresión del navegador.
+   * Para la impresión de inicio de año. Falla con mensaje honesto si el navegador
+   * bloquea la ventana emergente (Regla 6: sin fallbacks silenciosos).
+   */
+  const printAllTeacherCards = async () => {
+    setPrintingAllCards(true);
+    try {
+      const settings = AttendanceStorageService.getSettings();
+      const expMs = schoolYearEndEpochMs();
+      const actives = teachers
+        .filter(t => t.active && (t.subjects?.length || 0) > 0)
+        .sort((a, b) => a.fullName.localeCompare(b.fullName, 'es'));
+      const cards: Array<{ teacher: string; subject: string; url: string }> = [];
+      for (const t of actives) {
+        for (const subj of [...t.subjects].sort((a, b) => a.localeCompare(b, 'es'))) {
+          const payload = await generateTeacherCardPayload(t.id, slugifySubject(subj), expMs, settings.qrSecret);
+          const url = await QRCode.toDataURL(payload, { width: 512, margin: 2 });
+          cards.push({ teacher: t.fullName, subject: subj, url });
+        }
+      }
+      if (cards.length === 0) {
+        showToast('No hay docentes activos con asignaturas en la matrícula local. Haz un Pull en Ajustes → Sync y Seguridad primero.');
+        return;
+      }
+      const cardHtml = cards.map(c => `
+        <div class="card">
+          <div class="subj">${c.subject}</div>
+          <div class="teach">${c.teacher}</div>
+          <div class="school">${settings.schoolName}</div>
+          <img src="${c.url}" alt="QR ${c.subject} - ${c.teacher}" />
+          <div class="foot">CLASE:v2 · Firmado HMAC-SHA256 · Vence el 19-dic · Sirve todos los días</div>
+        </div>`).join('');
+      const html = `<!doctype html><html lang="es"><head><meta charset="utf-8" /><title>Tarjetas QR de Docentes (${cards.length}) — ${settings.schoolName}</title>
+        <style>
+          * { box-sizing: border-box; margin: 0; padding: 0; }
+          body { font-family: system-ui, -apple-system, 'Segoe UI', sans-serif; padding: 16px; background: #fff; }
+          .grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 14px; }
+          .card { border: 2px solid #1e293b; border-radius: 14px; padding: 14px; text-align: center; page-break-inside: avoid; }
+          .subj { font-size: 17px; font-weight: 900; color: #0f172a; }
+          .teach { font-size: 13px; font-weight: 700; color: #334155; margin-top: 2px; }
+          .school { font-size: 10px; font-weight: 700; color: #64748b; margin-top: 1px; }
+          .card img { width: 82%; max-width: 300px; margin: 10px auto 6px; display: block; }
+          .foot { font-family: ui-monospace, monospace; font-size: 9px; color: #94a3b8; }
+          @media print { body { padding: 0; } .grid { gap: 8px; } }
+        </style></head><body>
+        <div class="grid">${cardHtml}</div>
+        <script>window.onload = function() { setTimeout(function() { window.print(); }, 400); };</script>
+        </body></html>`;
+      const w = window.open('', '_blank', 'width=920,height=740');
+      if (!w) {
+        showToast('El navegador bloqueó la ventana de impresión. Permite ventanas emergentes para este sitio e inténtalo de nuevo.');
+        return;
+      }
+      w.document.open();
+      w.document.write(html);
+      w.document.close();
+      w.focus();
+    } finally {
+      setPrintingAllCards(false);
+    }
+  };
 
   // Ronda 19 (Regla E10): Escape cierra la tarjeta QR de Clase
   useEffect(() => {
@@ -1390,9 +1467,82 @@ export const ScheduleBuilderView: React.FC = () => {
         </div>
       )}
 
-      {/* VIEW 5: QR DE CLASE (Ronda 19 — informe de testing, sección 5.3) */}
+      {/* VIEW 5: QR DE CLASE (Ronda 19) — Ronda 43: v2 PRINCIPAL (Tarjetas QR de Docentes) + v1 colapsable */}
       {subView === 'class-qr' && (
         <div className="space-y-4">
+          {/* ===== Ronda 43 — V2: TARJETAS QR DE DOCENTES (principal, sin dependencia del horario) ===== */}
+          <div className="p-4 rounded-2xl bg-emerald-50/70 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800 text-xs text-slate-600 dark:text-slate-300 space-y-1.5 leading-relaxed">
+            <p className="font-black text-emerald-700 dark:text-emerald-300 uppercase tracking-wide text-[11px]">Tarjetas QR de Docentes (v2) — la tarjeta es la identidad del docente, no el aula</p>
+            <p>1. Cada profesor lleva <b>SU tarjeta por asignatura</b> (si dicta dos asignaturas, dos tarjetas): la tarjeta dice la <b>asignatura y el docente</b> — no lleva hora ni grado, así que <b>no depende del horario</b> y sirve <b>todos los días del año</b>.</p>
+            <p>2. Al entrar al salón, el docente (o el representante) <b>escanea la tarjeta</b> con el escáner: se activa esa asignatura en el dispositivo — la <b>fecha y la hora quedan registradas</b> por el reloj, y el bloque vigente es el que está en curso.</p>
+            <p>3. Luego escanea a sus estudiantes con sus carnés: cada registro queda vinculado a la <b>asignatura de la tarjeta</b> y al <b>grado del carné de cada estudiante</b> (contexto <b>QR de Clase (firmado)</b> en la planilla y el CSV).</p>
+          </div>
+
+          <div className="p-4 rounded-3xl bg-white/70 dark:bg-zinc-950/70 border border-slate-200/80 dark:border-zinc-800/50 backdrop-blur-xl shadow-xs space-y-3">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+              <h4 className="text-sm font-black text-slate-900 dark:text-white flex items-center gap-2">
+                <QrCode className="w-4 h-4 text-emerald-600" />
+                <span>Tarjetas por docente ({teachers.filter(t => t.active && (t.subjects?.length || 0) > 0).reduce((acc, t) => acc + (t.subjects?.length || 0), 0)})</span>
+              </h4>
+              <button
+                type="button"
+                onClick={printAllTeacherCards}
+                disabled={printingAllCards}
+                className="px-3.5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 disabled:opacity-60 text-white text-[11px] font-bold transition-all shadow-md shadow-emerald-600/25 flex items-center gap-1.5 shrink-0"
+                title="Genera el set completo del colegio (una tarjeta por docente y asignatura) en una hoja de impresión"
+                aria-label="Imprimir todas las tarjetas QR de docentes"
+              >
+                <Download className="w-3.5 h-3.5" />
+                {printingAllCards ? 'Generando…' : `Imprimir todas (${teachers.filter(t => t.active && (t.subjects?.length || 0) > 0).reduce((acc, t) => acc + (t.subjects?.length || 0), 0)})`}
+              </button>
+            </div>
+
+            {(() => {
+              const actives = teachers.filter(t => t.active && (t.subjects?.length || 0) > 0).sort((a, b) => a.fullName.localeCompare(b.fullName, 'es'));
+              if (actives.length === 0) {
+                return (
+                  <div className="py-4 text-center text-xs text-slate-400 font-bold">
+                    No hay docentes activos con asignaturas en la matrícula local. Haz un Pull en Ajustes → Sync y Seguridad primero.
+                  </div>
+                );
+              }
+              return (
+                <div className="space-y-2">
+                  {actives.map(t => (
+                    <div key={t.id} className="p-3 rounded-2xl bg-slate-50 dark:bg-zinc-950/60 border border-slate-200/70 dark:border-zinc-800/60 space-y-2">
+                      <div className="text-xs font-black text-slate-900 dark:text-white">{t.fullName}</div>
+                      <div className="flex flex-wrap gap-1.5">
+                        {[...t.subjects].sort((a, b) => a.localeCompare(b, 'es')).map(subj => (
+                          <button
+                            key={subj}
+                            type="button"
+                            onClick={() => openTeacherCard(t, subj)}
+                            className="px-2.5 py-1.5 rounded-xl bg-white dark:bg-black border border-emerald-300 dark:border-emerald-800 text-emerald-700 dark:text-emerald-300 hover:bg-emerald-50 dark:hover:bg-emerald-950/60 text-[11px] font-bold transition-all flex items-center gap-1.5"
+                            aria-label={`Ver tarjeta QR de ${subj} de ${t.fullName}`}
+                          >
+                            <QrCode className="w-3 h-3" />
+                            {subj}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              );
+            })()}
+          </div>
+
+          {/* ===== Ronda 43 — v1 conservado como sub-opción (tarjetas por cátedra, pizarra) ===== */}
+          <button
+            type="button"
+            onClick={() => setShowV1ClassCards(v => !v)}
+            className="w-full py-2 rounded-2xl bg-white/70 dark:bg-zinc-950/70 border border-slate-200/80 dark:border-zinc-800/50 text-[11px] font-black text-slate-500 dark:text-slate-400 hover:text-indigo-600 dark:hover:text-indigo-300 transition-all flex items-center justify-center gap-1.5"
+            aria-expanded={showV1ClassCards}
+          >
+            <ChevronDown className={`w-3.5 h-3.5 transition-transform ${showV1ClassCards ? 'rotate-180' : ''}`} />
+            Tarjetas por cátedra (v1 — pizarra): requieren horario y cambian por grado/día/bloque
+          </button>
+          {showV1ClassCards && (<>
           {/* Controls Bar: Curso + Día */}
           <div className="p-4 rounded-3xl bg-white/70 dark:bg-zinc-950/70 border border-slate-200/80 dark:border-zinc-800/50 backdrop-blur-xl shadow-xs flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3">
             <div className="flex items-center gap-2">
@@ -1471,6 +1621,7 @@ export const ScheduleBuilderView: React.FC = () => {
               );
             })}
           </div>
+          </>)}
         </div>
       )}
 
@@ -1524,6 +1675,18 @@ export const ScheduleBuilderView: React.FC = () => {
             </div>
           </div>
         </div>
+      )}
+
+      {/* Ronda 43 — Modal v2: Tarjeta QR de Docente (componente compartido con el Portal Docente) */}
+      {teacherCardModal && (
+        <TeacherCardQrModal
+          dataUrl={teacherCardModal.dataUrl}
+          subject={teacherCardModal.subject}
+          teacherName={teacherCardModal.teacherName}
+          schoolName={AttendanceStorageService.getSettings().schoolName}
+          downloadName={`tarjeta_docente_${slugifySubject(teacherCardModal.subject)}_${slugifySubject(teacherCardModal.teacherName)}`}
+          onClose={() => setTeacherCardModal(null)}
+        />
       )}
 
       {/* Ronda 19 — Modal: Importación masiva de horarios (CSV delimitado, validación línea a línea) */}

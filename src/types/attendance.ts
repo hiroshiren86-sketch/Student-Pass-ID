@@ -382,21 +382,28 @@ export interface AttendanceSummary {
  * Nace cuando el representante/docente escanea un token `CLASE:v1:...` firmado (o lo activa
  * desde el aula) y muere al expirar el bloque o al cancelarlo. Es POR DISPOSITIVO (el que
  * escanea el QR de la pizarra es quien va a pasar lista) — no viaja por la nube.
+ *
+ * Ronda 43 — v2 (Tarjetas QR de Docente, protocolo CLASE:v2): la tarjeta identifica
+ * DOCENTE+ASIGNATURA (sin grado/día/bloque — mandato del propietario). En v2:
+ * `grade` y `dayOfWeek` NO se setean (el grado del registro lo aporta el carné del
+ * estudiante y el bloque lo aporta el reloj); `teacherId` SÍ viaja (atribución exacta).
  */
 export interface ActiveClassContext {
-  grade: string;           // '10°1'
-  dayOfWeek: number;       // 1 = Lunes ... 5 = Viernes (jornada L–V; Ronda 22)
-  slotId: string;          // 'slot-4'
+  grade?: string;          // v1: '10°1'. v2: ausente — el grado lo aporta el carné del estudiante
+  dayOfWeek?: number;      // v1: 1 = Lunes ... 5 = Viernes. v2: ausente (sin dependencia del día)
+  slotId: string;          // v1: bloque firmado. v2: bloque CLASE vigente según el RELOJ al activar
   slotName: string;        // '4ª Hora de Clase'
   slotStartTime: string;   // '09:45'
   slotEndTime: string;     // '10:40'
-  subject: string;         // Resuelto de la asignación vigente al momento de activar
+  subject: string;         // v1: resuelto de la asignación vigente al activar. v2: la asignatura FIRMADA en la tarjeta
   teacherName: string;
-  classroom?: string;
+  teacherId?: string;      // Ronda 43 (v2): id de la ficha del docente — atribución exacta en el registro
+  classroom?: string;      // v2: enriquecimiento opcional desde el horario (si existe la cátedra coincidente)
   activatedAt: string;     // ISO
   expiresAt: number;       // epoch ms = fin del bloque del día de activación
-  activatedBy: string;     // 'QR_CLASE' | 'AULA_DOCENTE'
+  activatedBy: string;     // v1: 'QR_CLASE' | 'AULA_DOCENTE'. v2: 'QR_CLASE_V2' | 'AULA_DOCENTE_V2'
   tokenSignature: string;  // firma HMAC (trazabilidad)
+  sourceVersion?: 'v1' | 'v2'; // Ronda 43: v1 = por cátedra (grado+día+bloque); v2 = credencial docente×asignatura
 }
 
 /**
