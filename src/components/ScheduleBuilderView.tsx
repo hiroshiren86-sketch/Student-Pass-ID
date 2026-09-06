@@ -115,6 +115,13 @@ export const ScheduleBuilderView: React.FC = () => {
   const [assignments, setAssignments] = useState<ClassScheduleAssignment[]>(AttendanceStorageService.getScheduleAssignments());
   const [teachers, setTeachers] = useState<Teacher[]>(AttendanceStorageService.getTeachers());
   const grades = AttendanceStorageService.getUniqueGrades();
+  // Ronda 42 (H-42-1): el catálogo completo (SCHOOL_GRADES_LIST) ponía primero grados sin
+  // horario (p.ej. 6°1) y el constructor abría "vacío" aunque la nube tuviera cátedras para
+  // otros grados → el propietario percibió "no hay horarios" tras su Pull (Ronda 41/42).
+  // El grado inicial ahora es el PRIMERO CON CÁTEDRAS (orden del selector); sin cátedras
+  // se conserva el comportamiento antiguo.
+  const gradesWithCatedras = useMemo(() => Array.from(new Set(assignments.map(a => a.grade))), [assignments]);
+  const initialGrade = grades.find(g => gradesWithCatedras.includes(g)) || grades[0] || '10°1';
 
   // Mode: 'grid' (Timetable matrix) vs 'weekly-matrix' (Full 5-day week) vs 'slots-editor' (Design structure of hours) vs 'templates' (Plantillas + política) vs 'class-qr' (QR de Clase — Ronda 19)
   const [subView, setSubView] = useState<'grid' | 'weekly-matrix' | 'slots-editor' | 'templates' | 'class-qr'>('grid');
@@ -209,7 +216,7 @@ export const ScheduleBuilderView: React.FC = () => {
   const [confirmState, setConfirmState] = useState<{ title: string; message: string; action: () => void } | null>(null);
 
   // Filters for Grid view
-  const [selectedGrade, setSelectedGrade] = useState<string>(grades[0] || '10°1');
+  const [selectedGrade, setSelectedGrade] = useState<string>(initialGrade);
   const [selectedDay, setSelectedDay] = useState<number>(1); // 1 = Lunes
 
   // Assignment Modal
@@ -518,6 +525,18 @@ export const ScheduleBuilderView: React.FC = () => {
           )}
         </div>
       </div>
+
+      {/* Ronda 42 (H-42-1): aviso anti-trampa — si el grado elegido no tiene cátedras pero
+          OTROS grados sí, se dice explícitamente dónde están. El usuario ya no puede confundir
+          "este grado sin horario" con "no hay horarios en el sistema". */}
+      {assignments.length > 0 && gradeStats.totalHours === 0 && gradesWithCatedras.length > 0 && (
+        <div className="p-3.5 rounded-2xl bg-amber-50 dark:bg-amber-950/40 border border-amber-300 dark:border-amber-800 text-amber-800 dark:text-amber-200 text-xs font-bold flex items-start gap-2" role="status">
+          <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
+          <span>
+            El grado {selectedGrade} no tiene cátedras configuradas. Hay horarios listos para: {gradesWithCatedras.join(', ')}. Cambia el selector "Curso / Grado" para verlos, o impórtalos con el botón de importación masiva por CSV.
+          </span>
+        </div>
+      )}
 
       {/* VIEW 1: TIMETABLE GRID MATRIX (SINGLE DAY) */}
       {subView === 'grid' && (

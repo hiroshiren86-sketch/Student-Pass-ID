@@ -239,7 +239,17 @@ export class CloudflareSyncService {
       // se aborta con aviso explícito: restaurar primero con "Descargar (Pull)"; vaciar de
       // verdad sigue siendo posible vía "Purgar datos de la nube…". El primer push de un
       // colegio nuevo no se ve afectado (remoto vacío o sin snapshot).
-      if (safeStudents.length === 0 && records.length === 0) {
+      // Ronda 42 (H-42-3): la misma protección para DOCENTES, CÁTEDRAS y BLOQUES — un
+      // dispositivo con matrícula pero sin horarios locales (estado viejo/perdido) podía
+      // aplastar los horarios de TODA la institución con un push vacío (la nube solo los
+      // conserva en el snapshot KV). El bloque exige colecciones localmente vacías Y nube
+      // poblada, así el flujo normal de edición nunca se ve afectado.
+      const localTeachers = AttendanceStorageService.getTeachers();
+      const localAssignments = AttendanceStorageService.getScheduleAssignments();
+      const localSlots = AttendanceStorageService.getScheduleSlots();
+      const localEmptyEnrollment = safeStudents.length === 0 && records.length === 0;
+      const localMissingCoreCollections = localTeachers.length === 0 || localAssignments.length === 0 || localSlots.length === 0;
+      if (localEmptyEnrollment || localMissingCoreCollections) {
         try {
           const probeUrl = baseUrl.endsWith('/api/sync/pull')
             ? `${baseUrl}?schoolCode=${encodeURIComponent(settings.schoolCode || 'INAS_2026')}`
@@ -247,14 +257,34 @@ export class CloudflareSyncService {
           const probe = await fetch(probeUrl, { headers: this.workerHeaders() });
           if (probe.ok) {
             const probeData: any = await probe.json();
-            const remoteCount = probeData?.data?.students?.length ?? probeData?.data?.studentsCount ?? 0;
-            if (remoteCount > 0) {
+            const remoteData = probeData?.data || {};
+            const remoteCount = remoteData.students?.length ?? probeData?.data?.studentsCount ?? 0;
+            if (localEmptyEnrollment && remoteCount > 0) {
               return {
                 success: false,
                 timestamp,
                 syncedRecordsCount: 0,
                 syncedStudentsCount: 0,
                 message: `PUSH BLOQUEADO por seguridad: el estado local está VACÍO pero la nube tiene ${remoteCount} estudiantes. Empujar ahora borraria la matrícula de la nube. Restaura primero con "Descargar (Pull)"; si realmente quieres vaciar la nube, usa "Purgar datos de la nube…".`,
+                target: 'Cloudflare Worker'
+              };
+            }
+            // Ronda 42 (H-42-3): colecciones que viven SOLO en el snapshot (KV) — si el
+            // dispositivo no las tiene y la nube sí, el push las destruiría para todos.
+            const missingParts: string[] = [];
+            const remoteTeachers = remoteData.teachers?.length ?? 0;
+            const remoteAssignments = remoteData.assignments?.length ?? 0;
+            const remoteSlots = remoteData.slots?.length ?? 0;
+            if (localTeachers.length === 0 && remoteTeachers > 0) missingParts.push(`${remoteTeachers} docente(s)`);
+            if (localAssignments.length === 0 && remoteAssignments > 0) missingParts.push(`${remoteAssignments} cátedra(s) de horario`);
+            if (localSlots.length === 0 && remoteSlots > 0) missingParts.push(`${remoteSlots} bloque(s) de jornada`);
+            if (missingParts.length > 0) {
+              return {
+                success: false,
+                timestamp,
+                syncedRecordsCount: 0,
+                syncedStudentsCount: 0,
+                message: `PUSH BLOQUEADO por seguridad: tu dispositivo no tiene ${missingParts.join(' ni ')}, pero la nube sí. Empujar ahora los borraría de la nube para TODOS los terminales. Restaura primero con "Descargar (Pull)" en Ajustes → Sync y Seguridad; si de verdad quieres vaciar la nube, usa "Purgar datos de la nube…".`,
                 target: 'Cloudflare Worker'
               };
             }
@@ -345,6 +375,10 @@ export class CloudflareSyncService {
 
       let importedStudents = 0;
       let importedRecords = 0;
+      let importedTeachers = 0;
+      let importedAssignments = 0;
+      let importedSlots = 0;
+      let importedTemplates = 0;
 
       if (Array.isArray(students) && students.length > 0) {
         AttendanceStorageService.saveStudents(students);
@@ -400,27 +434,41 @@ export class CloudflareSyncService {
 
       if (Array.isArray(teachers) && teachers.length > 0) {
         AttendanceStorageService.saveTeachers(teachers);
+        importedTeachers = teachers.length;
       }
 
       if (Array.isArray(assignments) && assignments.length > 0) {
         AttendanceStorageService.saveScheduleAssignments(assignments);
+        importedAssignments = assignments.length;
       }
 
       if (Array.isArray(slots) && slots.length > 0) {
         AttendanceStorageService.saveScheduleSlots(slots);
+        importedSlots = slots.length;
       }
 
       // Ronda 4 (F5): plantillas CUSTOM y horarios personales viajan en el snapshot.
       if (Array.isArray(customTemplates)) {
         AttendanceStorageService.saveCustomTemplates(customTemplates);
+        importedTemplates = customTemplates.length;
       }
       if (studentSchedules && typeof studentSchedules === 'object' && !Array.isArray(studentSchedules)) {
         AttendanceStorageService.saveAllStudentSchedules(studentSchedules);
       }
 
+      // Ronda 42 (H-42-2): el mensaje anterior solo mencionaba estudiantes y asistencias;
+      // docentes y cátedras se importaban EN SILENCIO y el propietario concluyó "no bajan
+      // horarios ni profesores". Ahora el resumen cuenta TODO lo restaurado.
+      const summaryParts: string[] = [`${importedStudents} estudiante${importedStudents === 1 ? '' : 's'}`];
+      if (importedTeachers > 0) summaryParts.push(`${importedTeachers} docente${importedTeachers === 1 ? '' : 's'}`);
+      if (importedAssignments > 0) summaryParts.push(`${importedAssignments} cátedra${importedAssignments === 1 ? '' : 's'} de horarios`);
+      if (importedSlots > 0) summaryParts.push(`${importedSlots} bloque${importedSlots === 1 ? '' : 's'} de jornada`);
+      if (importedTemplates > 0) summaryParts.push(`${importedTemplates} plantilla${importedTemplates === 1 ? '' : 's'} de jornada`);
+      summaryParts.push(`${importedRecords} ${importedRecords === 1 ? 'nueva asistencia' : 'nuevas asistencias'}`);
+
       return {
         success: true,
-        message: `✓ Datos descargados del Cloudflare Worker: ${importedStudents} estudiantes actualizados y ${importedRecords} nuevas asistencias integradas.`,
+        message: `✓ Datos descargados del Cloudflare Worker: ${summaryParts.join(', ')} — todo integrado en este dispositivo.`,
         data: result.data
       };
     } catch (err: any) {
