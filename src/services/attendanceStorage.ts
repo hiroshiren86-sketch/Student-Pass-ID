@@ -108,6 +108,25 @@ export function isActiveClassV2(ctx: ActiveClassContext | null | undefined): boo
   return !!ctx && (ctx.source === 'QR_CLASE_V2' || ctx.source === 'AULA_DOCENTE_V2');
 }
 
+/**
+ * Ronda 46 — Etiqueta humana única del rol del escaneador (fuente única de verdad para
+ * planilla, CSV y mensajes). Resuelve la cascada completa (Titular/Suplente/Efímero) y
+ * los roles operativos; el default es 'Docente' para conservar el comportamiento previo
+ * de cualquier registro legacy sin `scannedBy`.
+ */
+export function scannedByRoleLabel(role?: ScannedByRole | null | undefined): string {
+  switch (role) {
+    case 'REPRESENTANTE_TITULAR': return 'Representante Titular';
+    case 'REPRESENTANTE_SUPLENTE': return 'Representante Suplente';
+    case 'DELEGADO_EFIMERO': return 'Delegado Efímero';
+    case 'REPRESENTANTE': return 'Representante';
+    case 'AUTO_CIERRE': return 'Auto-Cierre';
+    case 'ADMIN': return 'Administración';
+    case 'DOCENTE': return 'Docente';
+    default: return 'Docente';
+  }
+}
+
 export class AttendanceStorageService {
   private static listeners: Array<() => void> = [];
 
@@ -2054,6 +2073,7 @@ export class AttendanceStorageService {
     teacherId?: string; // Ronda 43 (v2): atribución exacta del docente de la tarjeta — campo aditivo
     contextSource?: 'QR_CLASE' | 'HORA'; // Ronda 19: QR de Clase → 'QR_CLASE'; inferencia por reloj → 'HORA'
     classQrVerified?: boolean;
+    presenceCapture?: 'CARD_SCAN' | 'CLASS_UNLOCK_AUTO'; // Ronda 46: método honesto de captura (no es una firma)
   }): Promise<ScanResultFeedback> {
     const settings = this.getSettings();
     const parsed = await parseAndVerifyScan(params.scanInput, settings.qrSecret);
@@ -2134,6 +2154,7 @@ export class AttendanceStorageService {
         existing.method = params.method;
         existing.scannedBy = params.scannedBy || 'DOCENTE';
         if (params.teacherId) existing.teacherId = params.teacherId; // Ronda 43 (v2): atribución aditiva
+        if (params.presenceCapture) existing.presenceCapture = params.presenceCapture; // Ronda 46
         existing.notes = `Marcado tardío tras auto-cierre (${currentTime})`;
         this.saveAttendance(allRecords);
 
@@ -2201,7 +2222,8 @@ export class AttendanceStorageService {
       synced: true,
       // Ronda 19 — QR de Clase: transparencia de vinculación (planilla + CSV)
       contextSource: params.contextSource || 'HORA',
-      classQrVerified: params.classQrVerified
+      classQrVerified: params.classQrVerified,
+      presenceCapture: params.presenceCapture // Ronda 46: método honesto de captura (no es una firma)
     };
 
     allRecords.unshift(newRecord);
@@ -2217,7 +2239,91 @@ export class AttendanceStorageService {
     };
   }
 
+  /**
+   * Ronda 46 - AUTO-REGISTRO DEL REPRESENTANTE al desbloquear el QR de Clase.
+   *
+   * El representante (titular/suplente) o el delegado efímero es a la vez el ESCANEADOR y
+   * un ESTUDIANTE que necesita su propia asistencia. Hasta ahora, al escanear la tarjeta
+   * del docente (CLASE:v2) o la tarjeta de pizarra (CLASE:v1) solo se ACTIVABA el contexto:
+   * el rep quedaba registrando a sus compañeros pero NADIE lo registraba a él. Cuando el
+   * cierre de bloque marca ausentes (presentCount > 0 => ya NO aplica la Regla de Oro de
+   * 0 escaneos), el rep caia como AUSENTE pese a estar presente (quien activa la clase está
+   * en el aula) - y la regla del 30% solo evita el problema si el rep es de los pocos
+   * escaneados (rectángulo PENDIENTE_REVISION), no en el caso normal.
+   *
+   * SOLUCIÓN: reutiliza registerClassScan como punto único => hereda la unicidad
+   * estudiante+día+bloque (si ya se escaneó, devuelve already_scanned y no duplica), el
+   * cálculo PUNTUAL/TARDANZA con grace, contextSource:'QR_CLASE' y la atribución teacherId.
+   * El grado SIEMPRE es el del carné del representante; el bloque sale del RELOJ primero.
+   *
+   * CASCADA REAL (A5): la autoridad se resuelve con getScannerAuthority (Titular → Suplente →
+   * Efímero), no con un booleano. Si el escaneador NO es un representante autorizado para su
+   * grado, NO se auto-registra (la activación de la clase ya ocurrió y no debe revertirse) —
+   * se informa sin bloquear el flujo.
+   *
+   * HONESTIDAD FORENSE: NO se sintetiza un carné y NO se pone verifiedHmac:true a mano. El
+   * auto-registro se documenta con presenceCapture:'CLASS_UNLOCK_AUTO' (presencia real: quien
+   * desbloquea la clase está en el aula); verifiedHmac queda en false y classQrVerified refleja
+   * si la tarjeta que desbloqueó pasó HMAC.
+   *
+   * @param studentCode  código del representante (su carné personal)
+   * @param method       método con que se desbloqueó la tarjeta (CAMERA/USB/MANUAL)
+   */
+  static async registerRepresentativeSelf(studentCode: string, method: AttendanceMethod = 'CAMERA'): Promise<ScanResultFeedback> {
+    const activeClass = this.getActiveClass();
+    if (!activeClass) {
+      return { type: 'error', title: 'No hay clase activa', message: 'Escanea la tarjeta del docente (QR de Clase) para activar la clase antes de pasar lista. El representante se registra automaticamente al desbloquearla.', timestamp: new Date().toISOString() };
+    }
+    const student = this.getStudentByCodeOrDoc(studentCode);
+    if (!student) {
+      return { type: 'not_found', title: 'Representante no encontrado', message: 'No existe ningun estudiante registrado con el codigo: ' + studentCode + '.', timestamp: new Date().toISOString() };
+    }
+    if (!student.active) {
+      return { type: 'error', title: 'Representante inactivo', message: 'El estudiante ' + student.firstName + ' ' + student.lastName + ' esta inactivo en la matricula.', timestamp: new Date().toISOString(), student };
+    }
+
+    // Bloque del RELOJ primero (igual que la rama v2 de registerScan); solo usa el bloque
+    // de activacion si el reloj esta fuera de un bloque.
+    const slotInfo = this.getCurrentActiveSlot();
+    const slotId = slotInfo?.isWithin ? slotInfo.slot.id : activeClass.slotId;
+
+    // A5 — CASCADA REAL de sub-roles: resuelve Titular → Suplente → Efímero. No autorizado
+    // => no auto-registrar (flujo informativo, la activación ya ocurrió).
+    const authority = this.getScannerAuthority(student.code, student.grade, slotId);
+    if (!authority.authorized) {
+      return {
+        type: 'error',
+        title: 'Sin autoridad de escaneo',
+        message: `${student.firstName} ${student.lastName} no figura como representante (titular, suplente o delegado efímero) de ${student.grade}. La clase quedó activa, pero el auto-registro no aplica.`,
+        timestamp: new Date().toISOString(),
+        student
+      };
+    }
+
+    // classQrVerified honesto: true solo si la tarjeta que desbloqueó fue un QR firmado
+    // (no aplica para activación directa de Aula Docente, cuyo tokenSignature es un marcador).
+    const qrSigned = activeClass.source === 'QR_CLASE' || activeClass.source === 'QR_CLASE_V2';
+
+    return this.registerClassScan({
+      scanInput: student.code,
+      method,
+      slotId,
+      grade: student.grade,
+      subject: activeClass.subject,
+      teacherName: activeClass.teacherName,
+      teacherId: activeClass.teacherId,
+      scannedBy: authority.role,
+      scannedByName: `${student.firstName} ${student.lastName} (${scannedByRoleLabel(authority.role)}, auto-registro)`,
+      scannedByCode: student.code,
+      contextSource: 'QR_CLASE',
+      classQrVerified: qrSigned,
+      presenceCapture: 'CLASS_UNLOCK_AUTO',
+      notes: `Auto-registro del representante (${scannedByRoleLabel(authority.role)}) al desbloquear el QR de Clase`
+    });
+  }
+
   // ==================== AUTO-CIERRE & VENTANA PROPORCIONAL ====================
+
   static closeBlockAttendance(params: {
     grade: string;
     slotId: string;
@@ -2532,7 +2638,7 @@ export class AttendanceStorageService {
       `"${r.scannedBy || 'DOCENTE'}"`,
       `"${r.scannedByName || ''}"`,
       `"${r.method}"`,
-      `"${r.verifiedHmac ? 'Token QR Firmado (VÁLIDO)' : (r.method === 'AUTO_CIERRE' ? 'N/A (Auto-Cierre)' : 'Manual / Teclado (N/A)')}"`,
+      `"${r.verifiedHmac ? 'Token QR Firmado (VÁLIDO)' : (r.presenceCapture === 'CLASS_UNLOCK_AUTO' ? 'Auto-registro por desbloqueo de clase (sin firma)' : (r.method === 'AUTO_CIERRE' ? 'N/A (Auto-Cierre)' : 'Manual / Teclado (N/A)'))}"`,
       `"${r.contextSource === 'QR_CLASE' ? 'QR de Clase (firmado)' : 'Inferencia por hora'}"`,
       `"${justificationLabelOf(r)}"`,
       `"${r.notes || ''}"`

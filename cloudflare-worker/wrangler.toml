@@ -4,8 +4,11 @@ compatibility_date = "2024-09-23"
 compatibility_flags = ["nodejs_compat"]
 
 # Variables de entorno públicas
+# Ronda 46 (Fase 0, auditoría A3): el default del Worker era "INAS_2026" (legacy) mientras
+# la app y los datos viven bajo "INAS-ANTONIA-SANTOS-2026". Si un cliente omite `schoolCode`,
+# el Worker caía al namespace equivocado → riesgo de contaminación cruzada. Alineado al código real.
 [vars]
-SCHOOL_CODE = "INAS_2026"
+SCHOOL_CODE = "INAS-ANTONIA-SANTOS-2026"
 SCHOOL_NAME = "Institución Educativa Antonia Santos"
 # NOTA: la IA ya NO se integra en el Worker (se ejecuta local en el navegador, BYOK).
 # El secret residual GROQ_API_KEY fue ELIMINADO del dashboard el 01/09/2026 (Ronda 3

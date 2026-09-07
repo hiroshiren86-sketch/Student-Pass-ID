@@ -38,7 +38,7 @@ import QRCode from 'qrcode';
 import { generateTeacherCardPayload, slugifySubject } from '../utils/crypto';
 import { TeacherCardQrModal } from './TeacherCardQrModal'; // Ronda 43: modal A6 v2 compartido
 import { Student, AttendanceRecord, SchoolSettings, Teacher, ScheduleSlot, AttendanceStatus, EphemeralScanDelegation } from '../types/attendance';
-import { AttendanceStorageService, getTodayDateString, getCurrentTimeString, schoolYearEndEpochMs, isActiveClassV2 } from '../services/attendanceStorage';
+import { AttendanceStorageService, getTodayDateString, getCurrentTimeString, schoolYearEndEpochMs, isActiveClassV2, scannedByRoleLabel } from '../services/attendanceStorage';
 import { ExcuseService } from '../services/excuseService'; // Ronda 21: protección de excusas en el cierre de bloque
 import { INSTITUTIONAL_SUBJECTS } from '../constants/subjects'; // Ronda 34: lista institucional única de asignaturas
 import { SoundService } from '../utils/sound';
@@ -1303,7 +1303,7 @@ export const TeacherClassroomView: React.FC<TeacherClassroomViewProps> = ({
                     <td className="py-3.5 px-4 text-slate-500 dark:text-slate-400 text-[11px]">
                       {rec ? (
                         <span>
-                          {rec.scannedByName || (rec.scannedBy === 'REPRESENTANTE' ? 'Representante' : rec.scannedBy === 'DELEGADO_EFIMERO' ? 'Delegado Efímero' : 'Docente')}
+                          {rec.scannedByName || scannedByRoleLabel(rec.scannedBy)}
                         </span>
                       ) : '—'}
                     </td>

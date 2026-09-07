@@ -190,6 +190,12 @@ export interface AttendanceRecord {
   // por reloj/plantilla (comportamiento clásico). El CSV exporta una columna "Contexto".
   contextSource?: 'QR_CLASE' | 'HORA';
   classQrVerified?: boolean; // la firma del token CLASE:v1 que activó el contexto era válida
+  // Ronda 46 — método de captura de presencia (transparencia forense, NO una firma).
+  // 'CLASS_UNLOCK_AUTO' = el escaneador desbloqueó el QR de Clase (está en el aula) y se
+  // auto-registró; verifiedHmac permanece false (no se sintetiza carné) y classQrVerified
+  // refleja si la tarjeta que desbloqueó pasó HMAC. 'CARD_SCAN' reservado para capturas
+  // físicas futuras. Ausente = captura estándar (escaneo de carné o inferencia por hora).
+  presenceCapture?: 'CARD_SCAN' | 'CLASS_UNLOCK_AUTO';
   // Ronda 21 — Excusas (spec-excusas-2026 §1.2): OVERLAY, no un 4º estado. El registro
   // conserva status='AUSENTE' y referencia la excusa que lo protege. "Falta injustificada"
   // = AUSENTE sin excuseId. excuseStatus es un SNAPSHOT para pintar la etiqueta derivada

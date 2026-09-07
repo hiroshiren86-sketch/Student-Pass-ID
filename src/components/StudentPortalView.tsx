@@ -33,7 +33,7 @@ import {
 import jsQR from 'jsqr';
 import QRCode from 'qrcode';
 import { Student, AttendanceRecord, StudentAttendanceStats, StudentPersonalSchedule, StudentPersonalScheduleEntry, SchoolSettings } from '../types/attendance';
-import { AttendanceStorageService, getTodayDateString, getCurrentTimeString } from '../services/attendanceStorage';
+import { AttendanceStorageService, getTodayDateString, getCurrentTimeString, scannedByRoleLabel } from '../services/attendanceStorage';
 import { generateStudentQrPayload, generateSignedQRPayload } from '../utils/crypto';
 import { generateStudentCardPdf, downloadPdfBlob } from '../utils/pdfGenerator';
 import { generateBarcodeDataUrl } from '../utils/barcode';
@@ -266,6 +266,16 @@ export const StudentPortalView: React.FC<StudentPortalViewProps> = ({ onLogout, 
     // asignatura activa (el bloque vigente lo aporta el reloj).
     if (rawCode.trim().startsWith('CLASE:v2:')) {
       const activation = await AttendanceStorageService.setActiveTeacherCard(rawCode.trim());
+      // Ronda 46 — auto-registro del representante: quien desbloquea la clase está presente.
+      if (activation.type === 'class_activated') {
+        const self = await AttendanceStorageService.registerRepresentativeSelf(activeStudent.code, method);
+        if (self.type === 'success_punctual' || self.type === 'success_tardy' || self.type === 'already_scanned') {
+          activation.message = `${activation.message} · Además quedaste registrado (${self.record?.status || 'presente'}) con esta materia.`;
+        } else if (self.type === 'error' || self.type === 'not_found') {
+          // Honestidad: si no es un representante autorizado, se informa sin bloquear la clase.
+          activation.message = `${activation.message} · Aviso: ${self.message}`;
+        }
+      }
       if (soundEnabled) {
         if (activation.type === 'class_activated') SoundService.playBeepSuccess();
         else SoundService.playBeepError();
@@ -281,6 +291,16 @@ export const StudentPortalView: React.FC<StudentPortalViewProps> = ({ onLogout, 
     // contexto exacto (materia/bloque) para todos los carnés de su curso.
     if (rawCode.trim().startsWith('CLASE:v1:')) {
       const activation = await AttendanceStorageService.setActiveClassFromToken(rawCode.trim());
+      // Ronda 46 — auto-registro del representante (misma regla que v2).
+      if (activation.type === 'class_activated') {
+        const self = await AttendanceStorageService.registerRepresentativeSelf(activeStudent.code, method);
+        if (self.type === 'success_punctual' || self.type === 'success_tardy' || self.type === 'already_scanned') {
+          activation.message = `${activation.message} · Además quedaste registrado (${self.record?.status || 'presente'}) con esta materia.`;
+        } else if (self.type === 'error' || self.type === 'not_found') {
+          // Honestidad: si no es un representante autorizado, se informa sin bloquear la clase.
+          activation.message = `${activation.message} · Aviso: ${self.message}`;
+        }
+      }
       if (soundEnabled) {
         if (activation.type === 'class_activated') SoundService.playBeepSuccess();
         else SoundService.playBeepError();
@@ -313,13 +333,18 @@ export const StudentPortalView: React.FC<StudentPortalViewProps> = ({ onLogout, 
     }
     const slotId = activeSlotInfo.slot.id;
 
+    // Ronda 46 (A6) — el rol del escaneador se resuelve con la CASCADA real (getScannerAuthority:
+    // Titular → Suplente → Efímero), no con el genérico 'REPRESENTANTE'. Si no es un representante
+    // autorizado para su grado, se conserva el valor legacy 'REPRESENTANTE' (backwards-compat).
+    const repAuthority = AttendanceStorageService.getScannerAuthority(activeStudent.code, activeStudent.grade, slotId);
+    const repScannedBy = repAuthority.authorized ? repAuthority.role : 'REPRESENTANTE';
     const res = await AttendanceStorageService.registerClassScan({
       scanInput: rawCode.trim(),
       method,
       slotId,
       grade: activeStudent.grade,
-      scannedBy: 'REPRESENTANTE',
-      scannedByName: `${activeStudent.firstName} ${activeStudent.lastName} (Representante)`,
+      scannedBy: repScannedBy,
+      scannedByName: `${activeStudent.firstName} ${activeStudent.lastName} (${scannedByRoleLabel(repScannedBy)})`,
       scannedByCode: activeStudent.code
     });
 

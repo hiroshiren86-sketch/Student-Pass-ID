@@ -222,7 +222,7 @@ export default {
           status: 'online',
           service: 'INAS Attendance Cloudflare Edge Worker',
           school: env.SCHOOL_NAME || 'Institución Educativa Antonia Santos',
-          schoolCode: env.SCHOOL_CODE || 'INAS_2026',
+          schoolCode: env.SCHOOL_CODE || 'INAS-ANTONIA-SANTOS-2026',
           storage: {
             d1: hasD1 ? 'connected' : 'unconfigured',
             kv: hasKV ? 'connected' : 'unconfigured'
@@ -260,7 +260,7 @@ export default {
       // =========================================================================
       if (path === '/api/sync/push' && request.method === 'POST') {
         const body = await request.json() as any;
-        const schoolCode = body.schoolCode || env.SCHOOL_CODE || 'INAS_2026';
+        const schoolCode = body.schoolCode || env.SCHOOL_CODE || 'INAS-ANTONIA-SANTOS-2026';
         const data = body.data || body;
         const students = Array.isArray(data.students) ? data.students : [];
         const records = Array.isArray(data.records) ? data.records : [];
@@ -415,7 +415,7 @@ export default {
       // RUTA: SYNC PULL (Descarga de datos para sincronizar nuevos dispositivos)
       // =========================================================================
       if (path === '/api/sync/pull' && request.method === 'GET') {
-        const schoolCode = url.searchParams.get('schoolCode') || env.SCHOOL_CODE || 'INAS_2026';
+        const schoolCode = url.searchParams.get('schoolCode') || env.SCHOOL_CODE || 'INAS-ANTONIA-SANTOS-2026';
 
         // Primero intentar lectura ultrarrápida desde KV
         if (env.ATTENDANCE_KV) {
@@ -460,7 +460,7 @@ export default {
       // forense de cada "era" de datos. Requiere AUTH_TOKEN (guard global).
       // =========================================================================
       if (path === '/api/sync/export' && request.method === 'GET') {
-        const schoolCode = url.searchParams.get('schoolCode') || env.SCHOOL_CODE || 'INAS_2026';
+        const schoolCode = url.searchParams.get('schoolCode') || env.SCHOOL_CODE || 'INAS-ANTONIA-SANTOS-2026';
 
         const count = async (table: string): Promise<number> => {
           if (!env.DB) return 0;
