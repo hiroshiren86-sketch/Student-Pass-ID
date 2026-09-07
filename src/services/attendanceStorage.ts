@@ -23,6 +23,7 @@ import {
   StudentPersonalSchedule,
   StudentPersonalScheduleEntry,
   ActiveClassContext,
+  ActiveClassSource,
   ParsedScheduleRow
 } from '../types/attendance';
 import { 
@@ -34,7 +35,7 @@ import {
   INITIAL_SCHEDULE_ASSIGNMENTS,
   DAY_TEMPLATES_DEFINITIONS
 } from './mockData';
-import { parseAndVerifyScan, parseAndVerifyClassScan, parseAndVerifyTeacherCard, slugifySubject } from '../utils/crypto';
+import { parseAndVerifyScan, parseAndVerifyClassScan, parseAndVerifyTeacherCard, slugifySubject, prettifySubjectSlug } from '../utils/crypto';
 import { isValidGrade } from '../utils/documentParser';
 import { FirebaseService } from './firebase';
 import { SEED_DEMO_ON_FIRST_LAUNCH } from './demoConfig';
@@ -95,6 +96,16 @@ export function getCurrentTimeString(): string {
   };
   const formatter = new Intl.DateTimeFormat('es-CO', options);
   return formatter.format(d);
+}
+
+/**
+ * Ronda 44 (handoff v2) — ¿es una clase activa de TARJETA DE DOCENTE (v2)?
+ * Una única fuente de verdad para registerScan, el banner y el Aula Docente: en v2 el
+ * registro NO lleva gate de grado (el grado lo aporta cada carné) y el contexto firma
+ * "quién + para qué", no "dónde + cuándo".
+ */
+export function isActiveClassV2(ctx: ActiveClassContext | null | undefined): boolean {
+  return !!ctx && (ctx.source === 'QR_CLASE_V2' || ctx.source === 'AULA_DOCENTE_V2');
 }
 
 export class AttendanceStorageService {
@@ -1692,17 +1703,37 @@ export class AttendanceStorageService {
   /**
    * Devuelve la clase activa del dispositivo, o null si no hay/expiró. NO notifica
    * (puede llamarse durante render): la expiración se limpia perezosamente.
+   *
+   * Ronda 44 (handoff v2): normaliza AL LEER los contextos persistidos por versiones
+   * anteriores del contrato — `activatedBy`/`sourceVersion` → `source`, y v2 sin grado →
+   * '*'. Así un dispositivo que activó una tarjeta con el build R43 sigue funcionando
+   * sin migración (el contexto es efímero: muere al fin del bloque como máximo).
    */
   static getActiveClass(): ActiveClassContext | null {
     try {
       const raw = localStorage.getItem(ACTIVE_CLASS_KEY);
       if (!raw) return null;
-      const ctx = JSON.parse(raw) as ActiveClassContext;
+      const stored = JSON.parse(raw) as Record<string, unknown> & { slotId?: string; expiresAt?: number };
       // Ronda 43 (v2): el grado ya no es obligatorio — las tarjetas de docente (v2)
       // no lo traen (el grado del registro lo aporta el carné del estudiante).
-      if (!ctx?.slotId || !ctx?.expiresAt) return null;
-      if (Date.now() > ctx.expiresAt) return null; // expirada: ignorar (anti-replay por diseño)
-      return ctx;
+      if (!stored?.slotId || !stored?.expiresAt) return null;
+      if (Date.now() > stored.expiresAt) return null; // expirada: ignorar (anti-replay por diseño)
+
+      const { activatedBy: legacyActivatedBy, sourceVersion: legacySourceVersion, ...rest } = stored as Record<string, unknown> & { activatedBy?: string; sourceVersion?: 'v1' | 'v2' };
+      const legacyBy = (legacyActivatedBy || '') as ActiveClassSource | '';
+      const source: ActiveClassSource = stored.source as ActiveClassSource
+        ?? (legacyBy === 'QR_CLASE_V2' || legacyBy === 'AULA_DOCENTE_V2' || legacyBy === 'AULA_DOCENTE' || legacyBy === 'QR_CLASE'
+          ? legacyBy
+          : legacySourceVersion === 'v2' ? 'QR_CLASE_V2' : 'QR_CLASE');
+      const isV2 = source === 'QR_CLASE_V2' || source === 'AULA_DOCENTE_V2';
+      const grade = (rest.grade as string | undefined) ?? (isV2 ? '*' : undefined);
+      if (!grade) return null; // v1 sin grado = contexto dañado (la v1 SIEMPRE trae grado)
+      return {
+        ...(rest as unknown as ActiveClassContext),
+        grade,
+        source,
+        teacherVerified: (rest.teacherVerified as boolean | undefined) ?? (isV2 ? true : undefined)
+      };
     } catch {
       return null;
     }
@@ -1718,7 +1749,7 @@ export class AttendanceStorageService {
    * firma HMAC → vigencia (expiresAt) → día correcto → asignación vigente.
    * Devuelve un ScanResultFeedback listo para mostrar en cualquiera de los 3 escáneres.
    */
-  static async setActiveClassFromToken(token: string, activatedBy: string = 'QR_CLASE'): Promise<ScanResultFeedback> {
+  static async setActiveClassFromToken(token: string, activatedBy: ActiveClassSource = 'QR_CLASE'): Promise<ScanResultFeedback> {
     const settings = this.getSettings();
     const parsed = await parseAndVerifyClassScan(token, settings.qrSecret);
 
@@ -1759,7 +1790,7 @@ export class AttendanceStorageService {
       classroom: assignment?.classroom,
       activatedAt: new Date().toISOString(),
       expiresAt: parsed.expiresAt!,
-      activatedBy,
+      source: activatedBy,
       tokenSignature: parsed.signature
     };
 
@@ -1778,7 +1809,7 @@ export class AttendanceStorageService {
    * Activación directa desde el Aula Docente ("con un toque", sección 5.3 del informe):
    * usa la selección vigente del docente (curso/bloque) y resuelve la asignación.
    */
-  static activateClassDirect(grade: string, slotId: string, activatedBy: string = 'AULA_DOCENTE'): ScanResultFeedback {
+  static activateClassDirect(grade: string, slotId: string, activatedBy: ActiveClassSource = 'AULA_DOCENTE'): ScanResultFeedback {
     const slot = this.getScheduleSlots().find(s => s.id === slotId);
     if (!slot || slot.type !== 'CLASS') {
       return { type: 'error', title: 'Bloque no apto', message: 'Selecciona un bloque de CLASE para activar la clase.', timestamp: new Date().toISOString() };
@@ -1801,7 +1832,7 @@ export class AttendanceStorageService {
       classroom: assignment?.classroom,
       activatedAt: new Date().toISOString(),
       expiresAt,
-      activatedBy,
+      source: activatedBy,
       tokenSignature: 'DIRECT-ACTIVATION'
     };
     localStorage.setItem(ACTIVE_CLASS_KEY, JSON.stringify(ctx));
@@ -1819,17 +1850,22 @@ export class AttendanceStorageService {
    * Ronda 43 — Activación de una TARJETA DE DOCENTE (protocolo CLASE:v2, mandato del
    * propietario: "cada profesor tenga su tarjeta; no depende del horario").
    *
-   * Orden de validación (manual v2 §2.2):
+   * Orden de validación (manual v2 §2.2 + refinamientos Ronda 44):
    *   1. Prefijo/ruteo (el llamador) → 2. Formato (6 partes) → 3. Firma HMAC →
-   *   4. Vigencia anual → 5. Docente existe y activo en la matrícula local →
-   *   6. Asignatura ∈ teacher.subjects (match por slug) → 7. Bloque CLASE en curso
-   *   POR RELOJ (capa anti-abuso temporal — reemplaza el check de día de v1) →
-   *   8. Enriquecimiento opcional (aula de la cátedra coincidente, si hay horario).
+   *   4. Vigencia anual → 5. Docente ACTIVO en la matrícula local (si está; C.3: si NO está,
+   *   la tarjeta se ACEPTA con teacherVerified:false — la firma es fresca y la asignatura
+   *   viene de la lista institucional del colegio que la emitió) →
+   *   6. Asignatura ∈ teacher.subjects SOLO si la ficha trae asignaturas (C.2/D2: una ficha
+   *   vacía no prueba obsolescencia — no se rechaza; match por slug) →
+   *   7. Bloque CLASE en curso POR RELOJ (capa anti-abuso temporal — reemplaza el check de
+   *   día de v1; Refinamiento B) → 8. Enriquecimiento opcional (aula de la cátedra
+   *   coincidente, si hay horario).
    *
-   * El contexto resultante NO trae grado: cualquier estudiante activo de CUALQUIER curso
-   * se registra con la asignatura/docente de la tarjeta y el GRADO DE SU CARNÉ (§2.3).
+   * El contexto resultante trae grade:'*': cualquier estudiante activo de CUALQUIER curso
+   * se registra con la asignatura/docente de la tarjeta y el GRADO DE SU CARNÉ (§2.3,
+   * Refinamiento A).
    */
-  static async setActiveTeacherCard(token: string, activatedBy: string = 'QR_CLASE_V2'): Promise<ScanResultFeedback> {
+  static async setActiveTeacherCard(token: string, activatedBy: ActiveClassSource = 'QR_CLASE_V2'): Promise<ScanResultFeedback> {
     const settings = this.getSettings();
     const parsed = await parseAndVerifyTeacherCard(token, settings.qrSecret);
 
@@ -1837,7 +1873,7 @@ export class AttendanceStorageService {
       return { type: 'error', title: 'Tarjeta de docente no reconocida', message: 'El código no corresponde a una Tarjeta QR de Docente (CLASE:v2).', timestamp: new Date().toISOString() };
     }
     if (!parsed.isValidFormat || parsed.teacherId === undefined || parsed.subjectSlug === undefined) {
-      return { type: 'error', title: 'Tarjeta de docente malformada', message: 'El token CLASE:v2 está incompleto o dañado. Genera la tarjeta de nuevo en Mis Tarjetas QR (Portal Docente) o en Horarios → Tarjetas QR de Docentes (Rectoría).', timestamp: new Date().toISOString() };
+      return { type: 'error', title: 'Tarjeta de docente malformada', message: 'El token CLASE:v2 está incompleto o dañado. Genera la tarjeta de nuevo en Mis Tarjetas QR (Portal Docente) o en Horarios → QR de Clase (Rectoría).', timestamp: new Date().toISOString() };
     }
     if (parsed.isSignatureValid === false || parsed.signature === undefined) {
       return { type: 'error', title: 'Tarjeta con firma inválida', message: 'La firma HMAC no coincide: la tarjeta fue alterada o pertenece a otra institución. No se activó ninguna clase.', timestamp: new Date().toISOString() };
@@ -1847,22 +1883,44 @@ export class AttendanceStorageService {
       return { type: 'error', title: 'Tarjeta expirada', message: `Esta tarjeta venció el ${expiredDate} (fin del año escolar). Genera una tarjeta nueva.`, timestamp: new Date().toISOString() };
     }
 
-    // (5) Docente existe y está activo en la matrícula local
+    // (5) Docente en la matrícula local. C.3/D2 (Refinamiento C): NO encontrado ≠ obsoleto —
+    // el dispositivo puede no haber sincronizado docentes todavía; la firma es fresca y la
+    // asignatura la firmó la institución al emitir la tarjeta → se ACEPTA con
+    // teacherVerified:false y la credencial se muestra por su id (cero ambigüedad).
     const teacher = this.getTeachers().find(t => t.id === parsed.teacherId);
-    if (!teacher) {
-      return { type: 'error', title: 'Docente no encontrado', message: 'La tarjeta no corresponde a ningún docente de esta institución. Verifica con Rectoría.', timestamp: new Date().toISOString() };
-    }
-    if (!teacher.active) {
+    if (teacher && !teacher.active) {
       return { type: 'error', title: 'Docente inactivo', message: `La tarjeta pertenece a ${teacher.fullName}, quien está inactivo en la matrícula actual. Verifica con Rectoría.`, timestamp: new Date().toISOString() };
     }
 
-    // (6) Asignatura ∈ teacher.subjects (match por slug; devuelve el nombre EXACTO de la ficha)
-    const matchedSubject = (teacher.subjects || []).find(s => slugifySubject(s) === parsed.subjectSlug);
-    if (!matchedSubject) {
-      return { type: 'error', title: 'Asignatura no vigente', message: `El docente ya no imparte esa asignatura según su ficha actual. Genera la tarjeta de nuevo en Mis Tarjetas QR.`, timestamp: new Date().toISOString() };
+    // (6) Asignatura ∈ teacher.subjects SOLO si la ficha tiene asignaturas (C.2/D2):
+    // con ficha poblada, una tarjeta de asignatura retirada se rechaza con error explícito
+    // que lista las vigentes (cero fallbacks); con ficha vacía NO se puede probar
+    // obsolescencia → se acepta con el nombre formateado del propio slug firmado.
+    let subjectName: string;
+    let teacherVerified: boolean;
+    if (teacher) {
+      const ficha = teacher.subjects || [];
+      if (ficha.length > 0) {
+        const matchedSubject = ficha.find(s => slugifySubject(s) === parsed.subjectSlug);
+        if (!matchedSubject) {
+          return {
+            type: 'error',
+            title: 'Asignatura ya no asignada',
+            message: `El docente ${teacher.fullName} ya no dicta "${prettifySubjectSlug(parsed.subjectSlug)}". Genera una tarjeta nueva con: ${ficha.join(', ')}.`,
+            timestamp: new Date().toISOString()
+          };
+        }
+        subjectName = matchedSubject;
+      } else {
+        subjectName = prettifySubjectSlug(parsed.subjectSlug);
+      }
+      teacherVerified = true;
+    } else {
+      subjectName = prettifySubjectSlug(parsed.subjectSlug);
+      teacherVerified = false;
     }
 
-    // (7) Bloque CLASE en curso POR RELOJ (la capa anti-abuso temporal de v2)
+    // (7) Bloque CLASE en curso POR RELOJ (la capa anti-abuso temporal de v2 — Refinamiento B)
     const activeSlotInfo = this.getCurrentActiveSlot();
     if (!activeSlotInfo || !activeSlotInfo.isWithin) {
       return {
@@ -1882,24 +1940,27 @@ export class AttendanceStorageService {
 
     // (8) Enriquecimiento opcional: aula de la cátedra coincidente (docente+asignatura+hoy+bloque)
     const todayDow = new Date().getDay() || 1;
-    const enrichment = this.getScheduleAssignments().find(a =>
-      a.teacherId === teacher.id && a.subject === matchedSubject && a.dayOfWeek === todayDow && a.slotId === slot.id
-    );
+    const enrichment = teacher
+      ? this.getScheduleAssignments().find(a =>
+          a.teacherId === teacher.id && a.subject === subjectName && a.dayOfWeek === todayDow && a.slotId === slot.id
+        )
+      : undefined;
 
     const ctx: ActiveClassContext = {
+      grade: '*', // v2: multi-grado — el grado del registro lo aporta el CARNÉ de cada estudiante (Refinamiento A)
       slotId: slot.id,
       slotName: slot.name,
       slotStartTime: slot.startTime,
       slotEndTime: slot.endTime,
-      subject: matchedSubject,
-      teacherName: teacher.fullName,
-      teacherId: teacher.id,
+      subject: subjectName,
+      teacherName: teacher ? teacher.fullName : `Docente (id ${parsed.teacherId})`,
+      teacherId: parsed.teacherId,
+      teacherVerified,
       classroom: enrichment?.classroom,
       activatedAt: new Date().toISOString(),
       expiresAt,
-      activatedBy,
-      tokenSignature: parsed.signature,
-      sourceVersion: 'v2'
+      source: activatedBy,
+      tokenSignature: parsed.signature
     };
     localStorage.setItem(ACTIVE_CLASS_KEY, JSON.stringify(ctx));
     this.notify();
@@ -1907,7 +1968,7 @@ export class AttendanceStorageService {
     return {
       type: 'class_activated',
       title: 'Clase activa en este dispositivo',
-      message: `${ctx.subject} · ${teacher.fullName} · ${ctx.slotName} (${ctx.slotStartTime}–${ctx.slotEndTime})${ctx.classroom ? ` · ${ctx.classroom}` : ''}. Los próximos escaneos (cualquier curso) quedan vinculados a esta asignatura hasta las ${slot.endTime}.`,
+      message: `${ctx.subject} · ${ctx.teacherName} · ${ctx.slotName} (${ctx.slotStartTime}–${ctx.slotEndTime})${ctx.classroom ? ` · ${ctx.classroom}` : ''}.${teacherVerified ? '' : ' (Docente no registrado en este dispositivo: tarjeta aceptada por su firma válida.)'} Los próximos escaneos (cualquier curso, el grado lo aporta cada carné) quedan vinculados a esta asignatura hasta las ${slot.endTime}.`,
       timestamp: new Date().toISOString()
     };
   }
@@ -1919,7 +1980,7 @@ export class AttendanceStorageService {
    * funciona con la matrícula sola. La variante v1 (activateClassDirect, por cátedra
    * grado+bloque) se conserva intacta.
    */
-  static activateTeacherSubjectDirect(teacherId: string, subject: string, activatedBy: string = 'AULA_DOCENTE_V2'): ScanResultFeedback {
+  static activateTeacherSubjectDirect(teacherId: string, subject: string, activatedBy: ActiveClassSource = 'AULA_DOCENTE_V2'): ScanResultFeedback {
     const teacher = this.getTeachers().find(t => t.id === teacherId);
     if (!teacher) {
       return { type: 'error', title: 'Docente no encontrado', message: 'No existe la ficha del docente en la matrícula local. Haz un Pull en Ajustes → Sync y Seguridad.', timestamp: new Date().toISOString() };
@@ -1952,6 +2013,7 @@ export class AttendanceStorageService {
     );
 
     const ctx: ActiveClassContext = {
+      grade: '*', // v2: multi-grado — el grado del registro lo aporta el CARNÉ de cada estudiante (Refinamiento A)
       slotId: slot.id,
       slotName: slot.name,
       slotStartTime: slot.startTime,
@@ -1959,12 +2021,12 @@ export class AttendanceStorageService {
       subject: matchedSubject,
       teacherName: teacher.fullName,
       teacherId: teacher.id,
+      teacherVerified: true, // 1-toque: el docente SIEMPRE existe en la matrícula local (se resolvió arriba)
       classroom: enrichment?.classroom,
       activatedAt: new Date().toISOString(),
       expiresAt,
-      activatedBy,
-      tokenSignature: 'DIRECT-ACTIVATION-V2',
-      sourceVersion: 'v2'
+      source: activatedBy,
+      tokenSignature: 'DIRECT-ACTIVATION-V2'
     };
     localStorage.setItem(ACTIVE_CLASS_KEY, JSON.stringify(ctx));
     this.notify();
@@ -2533,11 +2595,15 @@ export class AttendanceStorageService {
     // cualquier curso se registra con la asignatura/docente FIRMADOS en la tarjeta y el
     // GRADO DE SU CARNÉ (el estudiante lo trae consigo) — mandato del propietario.
     // El v1 conserva su gate de grado (compatibilidad).
-    if (activeClass && activeClass.sourceVersion === 'v2' && student) {
+    // Ronda 44 (Refinamiento A.2 del handoff): el slotId del registro sale del RELOJ primero
+    // (getCurrentActiveSlot) y solo usa el bloque de activación si el reloj está fuera de
+    // un bloque — el bloque es un dato del RELOJ, igual que el grado es un dato del carné.
+    if (activeClass && isActiveClassV2(activeClass) && student) {
+      const slotInfo = this.getCurrentActiveSlot();
       return this.registerClassScan({
         scanInput: params.scanInput,
         method: params.method || 'CAMERA',
-        slotId: activeClass.slotId,
+        slotId: slotInfo?.isWithin ? slotInfo.slot.id : activeClass.slotId,
         grade: student.grade,
         subject: activeClass.subject,
         teacherName: activeClass.teacherName,

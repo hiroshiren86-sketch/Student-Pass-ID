@@ -269,7 +269,7 @@ await section('I. QR de Clase — activación del contexto (servicio)', async ()
     const ctx = svc.getActiveClass();
     check('contexto activo con datos correctos', !!ctx && ctx.grade === '10°1' && ctx.slotId === classSlot.id && ctx.expiresAt > Date.now());
     check('materia resuelta de la asignación vigente', !!ctx && (asg ? ctx.subject === asg.subject : ctx.subject === 'Cátedra General'), ctx?.subject);
-    check('activación registrada como QR_CLASE', ctx?.activatedBy === 'QR_CLASE');
+    check('activación registrada como QR_CLASE', ctx?.source === 'QR_CLASE'); // Ronda 44: activatedBy → source
 
     svc.clearActiveClass();
     check('clearActiveClass apaga el contexto', svc.getActiveClass() === null);
@@ -370,8 +370,12 @@ await section('K. QR de Clase — transparencia en planilla/CSV (fuente)', () =>
   check('aula: botón Activar en este dispositivo + banner', tcv.includes('activateClassDirect') && tcv.includes('<ActiveClassBanner />'));
 
   const sbv = readFileSync('src/components/ScheduleBuilderView.tsx', 'utf8');
-  check('horarios: pestaña QR de Clase con tarjeta descargable', sbv.includes("'class-qr'") && sbv.includes('generateClassQrPayload') && sbv.includes('Descargar PNG'));
-  check('horarios: tarjeta QR cierra con Escape', sbv.includes('setClassQrModal(null)') && sbv.includes("e.key === 'Escape'"));
+  // Ronda 44 (mandato del propietario): la generación v1 por cátedra quedó OCULTA de la UI;
+  // la tarjeta descargable del tab class-qr es ahora la de Docentes (modal compartido, con Escape).
+  // El protocolo v1 sigue vivo en crypto.ts (check siguiente) para aceptar tarjetas ya impresas.
+  const tcm = readFileSync('src/components/TeacherCardQrModal.tsx', 'utf8');
+  check('horarios: pestaña QR de Clase con tarjetas de docente descargables (v1 oculta por mandato R44)', sbv.includes("'class-qr'") && sbv.includes('generateTeacherCardPayload') && !sbv.includes('generateClassQrPayload') && tcm.includes('Descargar PNG'));
+  check('horarios: tarjeta QR cierra con Escape (modal compartido)', tcm.includes("e.key === 'Escape'") && sbv.includes('teacherCardModal'));
 
   const crypto = readFileSync('src/utils/crypto.ts', 'utf8');
   check('crypto: protocolo CLASE:v1 completo', crypto.includes('generateClassQrPayload') && crypto.includes('parseAndVerifyClassScan') && crypto.includes('CLASE:v1:'));

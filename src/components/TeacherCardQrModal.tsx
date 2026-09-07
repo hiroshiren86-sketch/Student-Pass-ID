@@ -63,7 +63,7 @@ export const TeacherCardQrModal: React.FC<TeacherCardQrModalProps> = ({
           <p className="text-xs font-bold text-slate-600 dark:text-slate-300">
             {teacherName}{schoolName ? ` · ${schoolName}` : ''}
           </p>
-          <p className="text-[10px] text-slate-400 font-mono break-all">CLASE:v2 · Firmado HMAC-SHA256 · Vence el 19-dic · Sirve todos los días</p>
+          <p className="text-[10px] text-slate-400 font-mono break-all">Firmado HMAC-SHA256 · Vence el 19-dic · Sirve todos los días</p>
         </div>
 
         <div className="flex items-center justify-end gap-2 pt-1">

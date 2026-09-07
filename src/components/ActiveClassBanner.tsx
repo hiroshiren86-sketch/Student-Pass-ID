@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { X, Radio } from 'lucide-react';
-import { AttendanceStorageService } from '../services/attendanceStorage';
+import { AttendanceStorageService, isActiveClassV2 } from '../services/attendanceStorage';
 import { ActiveClassContext } from '../types/attendance';
 
 /**
@@ -8,6 +8,8 @@ import { ActiveClassContext } from '../types/attendance';
  * (terminal ScanHub, representante, aula docente). Se suscribe al storage y se
  * auto-refresca cada 20 s para detectar la expiración del bloque (anti-replay).
  * Renderiza null cuando no hay clase activa.
+ * Ronda 44 (D1 del handoff v2): en modo Tarjeta de Docente el chip muestra materia +
+ * docente y aclara que EL GRADO SE TOMA DE CADA CARNÉ (contexto multi-grado '*').
  */
 export const ActiveClassBanner: React.FC<{ onClear?: () => void }> = ({ onClear }) => {
   const [activeClass, setActiveClass] = useState<ActiveClassContext | null>(
@@ -36,12 +38,15 @@ export const ActiveClassBanner: React.FC<{ onClear?: () => void }> = ({ onClear 
       <Radio className="w-4 h-4 text-indigo-600 dark:text-indigo-400 shrink-0 animate-pulse" />
       <div className="flex-1 min-w-0 text-[11px] leading-snug">
         <span className="font-black text-indigo-700 dark:text-indigo-300 uppercase tracking-wide">Clase activa: </span>
-        {activeClass.sourceVersion === 'v2' ? (
+        {isActiveClassV2(activeClass) ? (
           <>
             <span className="font-bold text-slate-700 dark:text-slate-200">
               {activeClass.subject} · {activeClass.teacherName} · {activeClass.slotName} ({activeClass.slotStartTime}–{activeClass.slotEndTime})
             </span>
-            <span className="text-slate-500 dark:text-slate-400"> — los escaneos de CUALQUIER curso se vinculan a esta asignatura (Tarjeta de Docente) hasta las {activeClass.slotEndTime}.</span>
+            <span className="text-slate-500 dark:text-slate-400">
+              {' '}— el grado se toma de cada carné: los escaneos de CUALQUIER curso se vinculan a esta asignatura hasta las {activeClass.slotEndTime}.
+              {activeClass.teacherVerified === false && ' (Docente no registrado en este dispositivo.)'}
+            </span>
           </>
         ) : (
           <>

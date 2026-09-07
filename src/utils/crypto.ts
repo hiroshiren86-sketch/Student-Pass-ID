@@ -232,6 +232,21 @@ export function slugifySubject(name: string): string {
     .replace(/^-|-$/g, '');
 }
 
+/**
+ * Ronda 44 (Refinamiento C.3/D2 del handoff v2) — presentación honesta del slug cuando la
+ * asignatura NO puede resolverse contra la ficha del docente (docente no hallado en el
+ * dispositivo o ficha sin asignaturas). NO es un fallback silencioso: el nombre mostrado
+ * ES el dato firmado en la tarjeta, solo formateado para humanos.
+ * "c-naturales-biologia" → "C Naturales Biologia".
+ */
+export function prettifySubjectSlug(slug: string): string {
+  return slug
+    .split('-')
+    .filter(Boolean)
+    .map(w => w.charAt(0).toUpperCase() + w.slice(1))
+    .join(' ');
+}
+
 export interface ParsedTeacherCardResult {
   isTeacherCard: boolean;    // empieza por CLASE:v2: (el llamador debe rutear aquí ANTES de parseAndVerifyScan)
   isValidFormat: boolean;    // 6 partes exactas y expMs numérico
@@ -248,6 +263,10 @@ export interface ParsedTeacherCardResult {
  * Genera el payload firmado de la TARJETA DE DOCENTE (v2).
  * baseData = "teacherId|subjectSlug|expMs" (misma primitiva HMAC-SHA256 truncada a 16 hex
  * que v1/IEDSJ). Una única tarjeta por docente×asignatura, válida todos los días.
+ *
+ * Ronda 44 (Refinamiento C.1 del handoff v2 — Cero Fallbacks): rechaza CON ERROR EXPLÍCITO
+ * en español (nunca trunca ni corrige en silencio) si faltan datos o contienen los
+ * delimitadores reservados del token (':' partiría el parseo, '|' la firma).
  */
 export async function generateTeacherCardPayload(
   teacherId: string,
@@ -255,6 +274,18 @@ export async function generateTeacherCardPayload(
   expiresAtMs: number,
   secret: string = DEFAULT_QR_SECRET
 ): Promise<string> {
+  if (!teacherId || !teacherId.trim()) {
+    throw new Error('Falta el identificador del docente.');
+  }
+  if (!subjectSlug || !subjectSlug.trim()) {
+    throw new Error('Falta la asignatura de la tarjeta.');
+  }
+  if (teacherId.includes(':') || teacherId.includes('|')) {
+    throw new Error('El identificador del docente contiene caracteres reservados (:) o (|).');
+  }
+  if (subjectSlug.includes(':') || subjectSlug.includes('|')) {
+    throw new Error('La asignatura contiene caracteres reservados (:) o (|). Usa el catálogo institucional.');
+  }
   const baseData = `${teacherId}|${subjectSlug}|${expiresAtMs}`;
   const sig = await generateHmacSignature(baseData, secret);
   return `CLASE:v2:${teacherId}:${subjectSlug}:${expiresAtMs}:${sig}`;

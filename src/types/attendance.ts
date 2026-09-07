@@ -385,25 +385,32 @@ export interface AttendanceSummary {
  *
  * Ronda 43 — v2 (Tarjetas QR de Docente, protocolo CLASE:v2): la tarjeta identifica
  * DOCENTE+ASIGNATURA (sin grado/día/bloque — mandato del propietario). En v2:
- * `grade` y `dayOfWeek` NO se setean (el grado del registro lo aporta el carné del
- * estudiante y el bloque lo aporta el reloj); `teacherId` SÍ viaja (atribución exacta).
+ * `dayOfWeek` NO se setea, `teacherId` SÍ viaja (atribución exacta) y el grado del registro
+ * lo aporta el carné de cada estudiante.
+ *
+ * Ronda 44 — Refinamientos (handoff v2): `grade` adopta el comodín '*' en v2 (multi-grado),
+ * `activatedBy` pasa a llamarse `source` (contrato canónico del handoff) y `teacherVerified`
+ * informa si el docente de la tarjeta existe en la matrícula local (false = aceptada solo
+ * por firma válida — Refinamiento C.3/D2).
  */
+export type ActiveClassSource = 'QR_CLASE' | 'QR_CLASE_V2' | 'AULA_DOCENTE' | 'AULA_DOCENTE_V2';
+
 export interface ActiveClassContext {
-  grade?: string;          // v1: '10°1'. v2: ausente — el grado lo aporta el carné del estudiante
+  grade: string;           // v1: '10°1' · v2: '*' (comodín multi-grado — el grado lo aporta cada carné)
   dayOfWeek?: number;      // v1: 1 = Lunes ... 5 = Viernes. v2: ausente (sin dependencia del día)
   slotId: string;          // v1: bloque firmado. v2: bloque CLASE vigente según el RELOJ al activar
   slotName: string;        // '4ª Hora de Clase'
   slotStartTime: string;   // '09:45'
   slotEndTime: string;     // '10:40'
   subject: string;         // v1: resuelto de la asignación vigente al activar. v2: la asignatura FIRMADA en la tarjeta
-  teacherName: string;
-  teacherId?: string;      // Ronda 43 (v2): id de la ficha del docente — atribución exacta en el registro
+  teacherName: string;     // v2 (C.3): si el docente no está en la matrícula local → 'Docente (id prof-…)'
+  teacherId?: string;      // v2: id de la ficha firmado en la tarjeta — atribución exacta en el registro
+  teacherVerified?: boolean; // v2 (Refinamiento C.3): false = docente no hallado en la matrícula local; la tarjeta se aceptó por su firma válida
   classroom?: string;      // v2: enriquecimiento opcional desde el horario (si existe la cátedra coincidente)
   activatedAt: string;     // ISO
   expiresAt: number;       // epoch ms = fin del bloque del día de activación
-  activatedBy: string;     // v1: 'QR_CLASE' | 'AULA_DOCENTE'. v2: 'QR_CLASE_V2' | 'AULA_DOCENTE_V2'
+  source: ActiveClassSource; // antes `activatedBy` (Ronda 44: contrato del handoff v2)
   tokenSignature: string;  // firma HMAC (trazabilidad)
-  sourceVersion?: 'v1' | 'v2'; // Ronda 43: v1 = por cátedra (grado+día+bloque); v2 = credencial docente×asignatura
 }
 
 /**

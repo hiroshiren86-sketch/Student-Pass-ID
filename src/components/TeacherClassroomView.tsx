@@ -38,7 +38,7 @@ import QRCode from 'qrcode';
 import { generateTeacherCardPayload, slugifySubject } from '../utils/crypto';
 import { TeacherCardQrModal } from './TeacherCardQrModal'; // Ronda 43: modal A6 v2 compartido
 import { Student, AttendanceRecord, SchoolSettings, Teacher, ScheduleSlot, AttendanceStatus, EphemeralScanDelegation } from '../types/attendance';
-import { AttendanceStorageService, getTodayDateString, getCurrentTimeString, schoolYearEndEpochMs } from '../services/attendanceStorage';
+import { AttendanceStorageService, getTodayDateString, getCurrentTimeString, schoolYearEndEpochMs, isActiveClassV2 } from '../services/attendanceStorage';
 import { ExcuseService } from '../services/excuseService'; // Ronda 21: protección de excusas en el cierre de bloque
 import { INSTITUTIONAL_SUBJECTS } from '../constants/subjects'; // Ronda 34: lista institucional única de asignaturas
 import { SoundService } from '../utils/sound';
@@ -125,13 +125,20 @@ export const TeacherClassroomView: React.FC<TeacherClassroomViewProps> = ({
   const [teacherCardModal, setTeacherCardModal] = useState<{ dataUrl: string; subject: string; teacherName: string } | null>(null);
   const [v2DirectSubject, setV2DirectSubject] = useState<string>(teacher?.subjects?.[0] || '');
 
-  /** Genera el QR firmado CLASE:v2 de una asignatura de ESTE docente y abre el modal A6. */
+  /** Genera el QR firmado CLASE:v2 de una asignatura de ESTE docente y abre el modal A6.
+   * Ronda 44 (Refinamiento C.1): el generador rechaza con error explícito — se muestra,
+   * jamás en silencio (Regla Cero Fallbacks). */
   const openMyTeacherCard = async (subject: string) => {
     if (!teacher?.id) return;
     const settings = AttendanceStorageService.getSettings();
-    const payload = await generateTeacherCardPayload(teacher.id, slugifySubject(subject), schoolYearEndEpochMs(), settings.qrSecret);
-    const url = await QRCode.toDataURL(payload, { width: 512, margin: 2 });
-    setTeacherCardModal({ dataUrl: url, subject, teacherName: teacher.fullName });
+    try {
+      const payload = await generateTeacherCardPayload(teacher.id, slugifySubject(subject), schoolYearEndEpochMs(), settings.qrSecret);
+      const url = await QRCode.toDataURL(payload, { width: 512, margin: 2 });
+      setTeacherCardModal({ dataUrl: url, subject, teacherName: teacher.fullName });
+    } catch (e: any) {
+      setScanFeedback({ type: 'error', message: e?.message || 'No se pudo generar la tarjeta QR de esta asignatura.' });
+      setTimeout(() => setScanFeedback(null), 6000);
+    }
   };
 
   // Ronda 19 (hallazgo 10 del informe): Escape cierra los modales de este módulo — el de
@@ -344,11 +351,14 @@ export const TeacherClassroomView: React.FC<TeacherClassroomViewProps> = ({
       // atribución: asignatura/docente + teacherId + transparencia QR_CLASE. Sin v2, el aula
       // usa su selección propia (comportamiento clásico intacto).
       const activeV2 = AttendanceStorageService.getActiveClass();
-      const v2Ctx = activeV2?.sourceVersion === 'v2' ? activeV2 : null;
+      const v2Ctx = isActiveClassV2(activeV2) ? activeV2 : null;
+      // Ronda 44 (Refinamiento A.2): con v2 activa el bloque real lo aporta el RELOJ; el
+      // bloque seleccionado del aula solo aplica si el reloj está fuera de bloque.
+      const v2ClockSlot = v2Ctx ? AttendanceStorageService.getCurrentActiveSlot() : null;
       const result = await AttendanceStorageService.registerClassScan({
         scanInput: rawCode.trim(),
         method,
-        slotId: activeSlot.id,
+        slotId: v2Ctx ? (v2ClockSlot?.isWithin ? v2ClockSlot.slot.id : activeSlot.id) : activeSlot.id,
         grade: selectedGrade,
         subject: v2Ctx?.subject || selectedSubject,
         teacherName: v2Ctx?.teacherName || teacher?.fullName || teacherName,
@@ -1006,7 +1016,7 @@ export const TeacherClassroomView: React.FC<TeacherClassroomViewProps> = ({
           {teacher?.id && (teacher?.subjects?.length || 0) > 0 && (
             <div className="flex items-center gap-2 flex-wrap sm:justify-end">
               <span className="text-[11px] font-bold text-slate-500 dark:text-slate-400 shrink-0">
-                Tarjeta de Docente (v2):
+                Tarjeta de Docente:
               </span>
               <select
                 value={v2DirectSubject}
@@ -1031,7 +1041,7 @@ export const TeacherClassroomView: React.FC<TeacherClassroomViewProps> = ({
                 }}
                 className="px-3.5 py-2 rounded-xl bg-violet-600 hover:bg-violet-500 text-white text-[11px] font-bold transition-all shadow-md shadow-violet-600/25 flex items-center gap-1.5 shrink-0"
                 title="Activa tu asignatura en este dispositivo: cualquier estudiante escaneado queda vinculado a ella con el grado de su carné"
-                aria-label="Activar mi asignatura en este dispositivo (v2)"
+                aria-label="Activar mi asignatura en este dispositivo"
               >
                 <Zap className="w-3.5 h-3.5" />
                 Activar mi asignatura

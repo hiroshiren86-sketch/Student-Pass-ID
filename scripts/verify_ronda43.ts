@@ -1,17 +1,16 @@
 /**
- * Ronda 43 — Suite LOCAL (determinista, sin red). Ejecutar: TZ=America/Bogota bun scripts/verify_ronda43.ts
+ * Ronda 43/44 — Suite LOCAL (determinista, sin red). Ejecutar: TZ=America/Bogota bun scripts/verify_ronda43.ts
  * Cubre el protocolo CLASE:v2 (Tarjetas QR de Docente — mandato del propietario:
- * "cada profesor tenga su tarjeta; no depende del horario") y su integración:
- *   A: slugifySubject + generador + parser v2 (formato/firma/tamper/expiración)
- *   B: setActiveTeacherCard (orden de validación §2.2 del manual v2)
+ * "cada profesor tenga su tarjeta; no depende del horario"), sus REFINAMIENTOS Ronda 44
+ * (handoff QR_v2_refinements_HANDOFF.md) y su integración:
+ *   A: slugifySubject/prettifySubjectSlug + generador + parser v2 (formato/firma/tamper/expiración/guards C.1)
+ *   B: setActiveTeacherCard (orden de validación §2.2 + A/grade:'*', C.2/C.3/D2, B/bloque-por-reloj)
  *   C: 1-toque v2 en Aula Docente (activateTeacherSubjectDirect)
- *   D: registerScan sin gate de grado (el grado lo aporta el carné) + unicidad + v1 intacto
- * La v1 (CLASE:v1) NO se toca: coexistencia por prefijo, verificada al final.
+ *   D: registerScan sin gate de grado (grado del carné + slotId del reloj) + unicidad + v1 intacto
+ * La v1 (CLASE:v1) NO se toca: coexistencia por prefijo, verificada al final. Su UI quedó
+ * OCULTA por completo (mandato del propietario, Ronda 44).
  * NOTA de reloj: TODA la app deriva el tiempo de America/Bogota (getCurrentTimeString/getTodayDateString)
  * y Date.parse interpreta en la TZ del runtime — la suite DEBE correr con TZ=America/Bogota.
- * En sección D se simula SOLO la ventana de jornada (día lectivo) porque el guard real L–V
- * (Ronda 22) bloquearía un domingo real y NO es el objeto de esta suite (se verifica en E2E
- * con page.clock). Los bloques, el gate v2 y la unicidad usan el código real.
  */
 (() => {
   if (typeof globalThis.localStorage === 'undefined') {
@@ -52,13 +51,22 @@ function timePlus(minutes: number): string {
   return `${String(Math.floor(total / 60) % 24).padStart(2, '0')}:${String(total % 60).padStart(2, '0')}`;
 }
 
-await section('A — slugifySubject (nombres reales del colegio)', () => {
+/** Ejecuta fn y captura su mensaje de error (para probar los guards que lanzan). */
+async function safe(fn: () => Promise<unknown>): Promise<{ error?: string }> {
+  try { await fn(); return {}; }
+  catch (e: any) { return { error: e?.message || String(e) };
+  }
+}
+
+await section('A — slugifySubject / prettifySubjectSlug / guards del generador (C.1)', () => {
   check('A1 sin tildes: Lengua Castellana', crypto.slugifySubject('Lengua Castellana') === 'lengua-castellana');
   check('A2 puntuación/tildes: C. Naturales (Biología)', crypto.slugifySubject('C. Naturales (Biología)') === 'c-naturales-biologia');
   check('A3 colapsa guiones y recorta', crypto.slugifySubject('Educación   Física --y-- Deporte ') === 'educacion-fisica-y-deporte');
   check('A4 mayúsculas y ñ: Español Ñandú', crypto.slugifySubject('Español Ñandú') === 'espanol-nandu');
   const problematic = ['Matemáticas', 'C. Económicas y Políticas', 'Informática', 'Artística', 'Religión', 'Ética', 'Sociales'];
   check('A5 ningún slug institucional contiene ":" o "|"', problematic.every(s => !crypto.slugifySubject(s).includes(':') && !crypto.slugifySubject(s).includes('|')));
+  check('A6 prettify: c-naturales-biologia → C Naturales Biologia', crypto.prettifySubjectSlug('c-naturales-biologia') === 'C Naturales Biologia');
+  check('A7 prettify: lengua-castellana → Lengua Castellana', crypto.prettifySubjectSlug('lengua-castellana') === 'Lengua Castellana');
 });
 
 await section('B — protocolo CLASE:v2 (generador + parser)', async () => {
@@ -92,6 +100,16 @@ await section('B — protocolo CLASE:v2 (generador + parser)', async () => {
 
   const foreign = await crypto.parseAndVerifyTeacherCard(payload, 'otra-institucion');
   check('B10 qrSecret distinto → firma inválida (otra institución)', foreign.isSignatureValid === false);
+
+  // Ronda 44 — Refinamiento C.1: el generador RECHAZA con error explícito en español
+  const g1 = await safe(() => crypto.generateTeacherCardPayload('', 'matematicas', exp, secret));
+  check('B14 guard C.1: falta teacherId → error explícito', g1.error === 'Falta el identificador del docente.');
+  const g2 = await safe(() => crypto.generateTeacherCardPayload('prof-x', '', exp, secret));
+  check('B15 guard C.1: falta asignatura → error explícito', g2.error === 'Falta la asignatura de la tarjeta.');
+  const g3 = await safe(() => crypto.generateTeacherCardPayload('pro:f-x', 'matematicas', exp, secret));
+  check('B16 guard C.1: teacherId con ":" reservado → error explícito', g3.error === 'El identificador del docente contiene caracteres reservados (:) o (|).');
+  const g4 = await safe(() => crypto.generateTeacherCardPayload('prof-x', 'mate|rias', exp, secret));
+  check('B17 guard C.1: asignatura con "|" reservado → error explícito', g4.error === 'La asignatura contiene caracteres reservados (:) o (|). Usa el catálogo institucional.');
 
   // Coexistencia v1/v2 por prefijo (los parsers se excluyen mutuamente)
   const v1 = await crypto.generateClassQrPayload('10°1', 'slot-4', 4, Date.now() + 3600_000, secret);
@@ -132,7 +150,7 @@ await section('C — setActiveTeacherCard (orden de validación §2.2)', async (
 
   const ctx = svc.getActiveClass();
   check('C3 contexto v2 guardado: materia/docente/teacherId', !!ctx && ctx.subject === 'Matemáticas' && ctx.teacherName === 'María Camila Restrepo Henao' && ctx.teacherId === 'prof-r43-1');
-  check('C4 contexto v2: SIN grado ni día (sourceVersion v2, bloque del reloj)', !!ctx && ctx.grade === undefined && ctx.dayOfWeek === undefined && ctx.sourceVersion === 'v2' && ctx.slotId === 'slot-r43-now');
+  check('C4 contexto v2: grade="*" (Refinamiento A), sin día, source QR_CLASE_V2, teacherVerified', !!ctx && ctx.grade === '*' && ctx.dayOfWeek === undefined && ctx.source === 'QR_CLASE_V2' && ctx.teacherVerified === true && ctx.slotId === 'slot-r43-now');
 
   // (8) Enriquecimiento opcional con horario: aula de la cátedra coincidente
   const todayDow = new Date().getDay() || 1;
@@ -143,18 +161,25 @@ await section('C — setActiveTeacherCard (orden de validación §2.2)', async (
   const ctx2 = svc.getActiveClass();
   check('C5 enriquecimiento: aula de la cátedra coincidente (sin bloquear nada)', enriched.type === 'class_activated' && ctx2?.classroom === 'Aula 204');
 
-  // (5) docente inexistente / inactivo
+  // (5) docente INACTIVO sí se rechaza (conocimiento local positivo); NO encontrado se acepta (C.3/D2)
   const ghost = await crypto.generateTeacherCardPayload('prof-fantasma', 'matematicas', exp, secret);
   const ghostRes = await svc.setActiveTeacherCard(ghost);
-  check('C6 docente inexistente → rechazo con mensaje claro', ghostRes.type === 'error' && ghostRes.title === 'Docente no encontrado');
+  check('C6 docente NO hallado en el dispositivo → tarjeta ACEPTADA (Refinamiento C.3/D2)', ghostRes.type === 'class_activated', JSON.stringify(ghostRes).slice(0, 160));
+  const ghostCtx = svc.getActiveClass();
+  check('C6b contexto fantasma: teacherVerified=false + credencial por id + slug formateado', !!ghostCtx && ghostCtx.teacherVerified === false && ghostCtx.teacherName === 'Docente (id prof-fantasma)' && ghostCtx.subject === 'Matematicas' && ghostCtx.teacherId === 'prof-fantasma');
   const inactiveCard = await crypto.generateTeacherCardPayload('prof-r43-2', crypto.slugifySubject('Química'), exp, secret);
   const inactiveRes = await svc.setActiveTeacherCard(inactiveCard);
   check('C7 docente inactivo → rechazo', inactiveRes.type === 'error' && inactiveRes.title === 'Docente inactivo');
 
-  // (6) asignatura fuera de la ficha
+  // (6) asignatura fuera de la ficha (ficha POBLADA) → rechazo con lista de vigentes (C.2)
   const wrongSubj = await crypto.generateTeacherCardPayload('prof-r43-1', 'quimica-avanzada', exp, secret);
   const wrongRes = await svc.setActiveTeacherCard(wrongSubj);
-  check('C8 asignatura no vigente → pedir regeneración', wrongRes.type === 'error' && wrongRes.title === 'Asignatura no vigente');
+  check('C8 asignatura ya no asignada → pedir regeneración listando vigentes', wrongRes.type === 'error' && wrongRes.title === 'Asignatura ya no asignada' && wrongRes.message.includes('Lengua Castellana, Matemáticas'));
+
+  // (6-C.2) ficha VACÍA: no se puede probar obsolescencia → se acepta con el slug formateado
+  const emptyCard = await crypto.generateTeacherCardPayload('prof-r43-3', 'biologia', exp, secret);
+  const emptyRes = await svc.setActiveTeacherCard(emptyCard);
+  check('C13 ficha sin asignaturas → aceptada (D2) con subject del propio slug', emptyRes.type === 'class_activated' && svc.getActiveClass()?.subject === 'Biologia' && svc.getActiveClass()?.teacherVerified === true);
 
   // firma inválida
   const evil = cardMatematicas.slice(0, -1) + (cardMatematicas.endsWith('0') ? '1' : '0');
@@ -169,8 +194,20 @@ await section('C — setActiveTeacherCard (orden de validación §2.2)', async (
   // 1-toque v2 en Aula Docente
   const direct = svc.activateTeacherSubjectDirect('prof-r43-1', 'Matemáticas');
   check('C11 1-toque v2 (sin escanear) → activa la asignatura del docente', direct.type === 'class_activated' && svc.getActiveClass()?.teacherId === 'prof-r43-1');
+  check('C11b 1-toque: source AULA_DOCENTE_V2 + grade "*" + teacherVerified', svc.getActiveClass()?.source === 'AULA_DOCENTE_V2' && svc.getActiveClass()?.grade === '*' && svc.getActiveClass()?.teacherVerified === true);
   const directBad = svc.activateTeacherSubjectDirect('prof-r43-1', 'Filosofía');
   check('C12 1-toque con materia ajena a la ficha → rechazo', directBad.type === 'error');
+
+  // Ronda 44 — normalización legacy de getActiveClass (contextos pre-R44 en localStorage)
+  const legacyV2 = { slotId: 'slot-r43-now', slotName: '1ª Hora', slotStartTime: '00:00', slotEndTime: '23:59', subject: 'Matemáticas', teacherName: 'María Camila Restrepo Henao', teacherId: 'prof-r43-1', activatedAt: new Date().toISOString(), expiresAt: Date.now() + 3600_000, activatedBy: 'QR_CLASE_V2', tokenSignature: 'LEGACY' };
+  localStorage.setItem('inas_active_class_v1', JSON.stringify(legacyV2));
+  const legacyCtx = svc.getActiveClass();
+  check('C14 legacy R43 (activatedBy, sin grade) → source QR_CLASE_V2 + grade "*"', !!legacyCtx && legacyCtx.source === 'QR_CLASE_V2' && legacyCtx.grade === '*' && (legacyCtx as any).activatedBy === undefined);
+  const legacyV1 = { ...legacyV2, grade: '10°3', dayOfWeek: 1, activatedBy: 'QR_CLASE', teacherId: undefined };
+  localStorage.setItem('inas_active_class_v1', JSON.stringify(legacyV1));
+  const legacyCtx1 = svc.getActiveClass();
+  check('C15 legacy v1 (activatedBy QR_CLASE) → source QR_CLASE con grado intacto', !!legacyCtx1 && legacyCtx1.source === 'QR_CLASE' && legacyCtx1.grade === '10°3');
+  svc.clearActiveClass();
 });
 
 await section('D — registerScan con clase v2 activa (sin gate de grado)', async () => {
@@ -212,7 +249,7 @@ await section('D — registerScan con clase v2 activa (sin gate de grado)', asyn
   const v1Token = await crypto.generateClassQrPayload('10°3', 'slot-r43-v1', dowToday, Date.now() + 3600_000, secret);
   const v1Act = await svc.setActiveClassFromToken(v1Token);
   check('D5 v1 intacto: activación por cátedra funciona', v1Act.type === 'class_activated', JSON.stringify(v1Act).slice(0, 160));
-  check('D6 v1: contexto trae grado y sin sourceVersion', svc.getActiveClass()?.grade === '10°3' && svc.getActiveClass()?.sourceVersion === undefined);
+  check('D6 v1: contexto trae grado y source QR_CLASE', svc.getActiveClass()?.grade === '10°3' && svc.getActiveClass()?.source === 'QR_CLASE');
 
   const r4 = await svc.registerScan({ scanInput: '2000000002', method: 'USB' });
   check('D7 v1 conserva el gate de grado: 6°4 NO se contamina (ruta HORA)', r4.type !== 'already_scanned' && r4.record?.contextSource === 'HORA' && r4.record?.subject !== 'Matemáticas');
