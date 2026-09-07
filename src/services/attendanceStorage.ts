@@ -2300,6 +2300,20 @@ export class AttendanceStorageService {
       };
     }
 
+    // Coherencia de grado: el auto-registro SOLO aplica si la clase activa corresponde al
+    // grado del representante. v2 es multi-grado ('*' — el grado lo aporta cada carné);
+    // v1 es de un curso concreto y debe ser EXACTAMENTE el suyo. Evita registrar al rep en
+    // un curso ajeno (p. ej. si por error se desbloqueó la planilla de otra sección).
+    if (!isActiveClassV2(activeClass) && activeClass.grade !== student.grade) {
+      return {
+        type: 'error',
+        title: 'Clase de otro grado',
+        message: `La clase activa es de ${activeClass.grade} y ${student.firstName} ${student.lastName} pertenece a ${student.grade}. El auto-registro solo aplica a su propio curso.`,
+        timestamp: new Date().toISOString(),
+        student
+      };
+    }
+
     // classQrVerified honesto: true solo si la tarjeta que desbloqueó fue un QR firmado
     // (no aplica para activación directa de Aula Docente, cuyo tokenSignature es un marcador).
     const qrSigned = activeClass.source === 'QR_CLASE' || activeClass.source === 'QR_CLASE_V2';

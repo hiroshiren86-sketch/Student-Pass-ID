@@ -32,6 +32,19 @@
   if (typeof (globalThis as any).window === 'undefined') {
     (globalThis as any).window = globalThis;
   }
+  // Ronda 46 — reloj CONGELADO determinista: la suite no depende de la hora/día reales
+  // (evita falsos fallos cerca de medianoche y cumple la Regla #8: no se toca la lógica de
+  // producción; solo se mockea la hora del test). Lunes 06:35 Bogotá = lectivo, dentro del
+  // bloque 1 y dentro de la gracia (PUNTUAL).
+  const RealDate = Date;
+  const FIXED_MS = RealDate.parse('2026-09-08T06:35:00-05:00');
+  class MockDate extends RealDate {
+    constructor(...args: any[]) {
+      super(args.length === 0 ? FIXED_MS : (args[0] as any));
+    }
+    static now() { return FIXED_MS; }
+  }
+  (globalThis as any).Date = MockDate;
 })();
 setTimeout(() => { console.log('⏱ TIMEOUT GLOBAL DE LA SUITE R46'); process.exit(2); }, 90000);
 
@@ -233,6 +246,21 @@ await section('H — Coexistencia v1: activación CLASE:v1 + auto-registro', asy
   check('H1 auto-registro del rep en v1 → success (PUNTUAL/TARDANZA)', self.type === 'success_punctual' || self.type === 'success_tardy');
   check('H2 scannedBy por cascada (TITULAR) en v1', self.record?.scannedBy === 'REPRESENTANTE_TITULAR');
   check('H3 presenceCapture CLASS_UNLOCK_AUTO en v1 + verifiedHmac false', self.record?.presenceCapture === 'CLASS_UNLOCK_AUTO' && self.record?.verifiedHmac === false);
+});
+
+await section('I — Coherencia de grado: CLASE:v1 de OTRO grado → rechazo', async () => {
+  svc.saveAttendance([]);
+  svc.saveStudents([
+    { code: '1111111111', documentId: '1111111111', firstName: 'Rep', lastName: 'Once Uno', grade: '11°1', section: '1', active: true, createdAt: new Date().toISOString(), isRepresentative: true, representativeGrade: '11°1' }
+  ] as any);
+  seedSlot();
+  const dowToday = new Date().getDay() || 1;
+  const v1Token = await crypto.generateClassQrPayload('10°1', SLOT, dowToday, Date.now() + 3600_000, SECRET);
+  const act = await svc.setActiveClassFromToken(v1Token);
+  check('I0 precondición: CLASE:v1 activada para 10°1', act.type === 'class_activated');
+  const self = await svc.registerRepresentativeSelf('1111111111', 'CAMERA');
+  check('I1 rep de 11°1 con clase 10°1 → "Clase de otro grado" (no auto-registra)', self.type === 'error' && self.title === 'Clase de otro grado', JSON.stringify(self).slice(0, 200));
+  check('I2 NO se crea registro del rep en el curso ajeno', svc.getAllAttendance().filter(r => r.studentCode === '1111111111').length === 0);
 });
 
 console.log(`\n══════════════════════════════════════`);
