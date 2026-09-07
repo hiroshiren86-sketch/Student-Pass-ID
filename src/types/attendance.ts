@@ -329,12 +329,16 @@ export interface SchoolSettings {
   // Ronda 16: cloudflareAccountId/cloudflareD1DatabaseId ELIMINADOS del modelo —
   // el navegador no habla con la API de Cloudflare; D1/KV son exclusivos del Worker
   // (su configuración vive en cloudflare-worker/wrangler.toml).
-  cloudflareApiToken?: string; // AUTH_TOKEN opcional del Worker (Bearer)
+  cloudflareApiToken?: string; // AUTH_TOKEN (ADMIN) opcional del Worker (Bearer) — retrocompat
+  cloudflareOperatorToken?: string; // Ronda 47 (Fase 2): OPERATOR_TOKEN — lo hereda el docente
   cloudflareKvNamespaceId?: string;
   cloudflareWorkerUrl?: string;
   cloudflareAutoSync?: boolean;
   cloudflareSyncIntervalMinutes?: number;
   lastCloudflareSync?: string;
+  // Ronda 47 (Fase 2 — Flanco 3): versión de catálogo conocida por este terminal. Se
+  // actualiza en cada Pull y se envía en cada push de catálogo para el CAS (409 si obsoleta).
+  cloudflareCatalogVersion?: number;
 }
 
 export interface SubjectAttendanceSummary {

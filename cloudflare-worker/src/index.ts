@@ -46,6 +46,14 @@ export interface Env {
   // Secretos institucionales configurados con `wrangler secret put`
   AUTH_TOKEN?: string;
 
+  // Ronda 47 (Fase 2 — Flanco 1): token con alcance de OPERADOR (docente/encargada).
+  // ADITIVO y retrocompatible: AUTH_TOKEN sigue siendo el token ADMIN (escribe catálogo
+  // + hechos); OPERATOR_TOKEN solo puede escribir HECHOS (attendance_records), nunca el
+  // catálogo. Si OPERATOR_TOKEN no está configurado, el Worker se comporta como hoy
+  // (solo AUTH_TOKEN = admin en todos los terminales). Configurar con:
+  //   wrangler secret put OPERATOR_TOKEN  (npx wrangler@3 — v4 exige Node ≥22)
+  OPERATOR_TOKEN?: string;
+
   // Ronda 21 (Excusas, spec-excusas-2026) — configuración opcional:
   EXCUSE_CHAIN_SECRET?: string;       // secret de la cadena de auditoría HMAC (fallback: AUTH_TOKEN)
   EXCUSE_AUTO_APPROVE_HOURS?: string; // ventana R8 en horas (default 72; 0 desactiva el auto-aprobo)
@@ -105,11 +113,180 @@ function timingSafeEqual(a: string, b: string): boolean {
 
 // Verificación de token Bearer opcional o institucional
 function verifyAuth(request: Request, env: Env): boolean {
-  if (!env.AUTH_TOKEN) return true; // Si no hay token configurado, acceso abierto en modo desarrollo
+  if (!env.AUTH_TOKEN && !env.OPERATOR_TOKEN) return true; // Sin tokens → acceso abierto (solo desarrollo)
   const authHeader = request.headers.get('Authorization');
   if (!authHeader) return false;
   const token = authHeader.replace(/^Bearer\s+/i, '').trim();
-  return timingSafeEqual(token, env.AUTH_TOKEN.trim());
+  // ADMIN si coincide con AUTH_TOKEN; OPERADOR si coincide con OPERATOR_TOKEN; si el
+  // token coincide con ambos (iguales) gana ADMIN.
+  if (env.AUTH_TOKEN && timingSafeEqual(token, env.AUTH_TOKEN.trim())) return true;
+  if (env.OPERATOR_TOKEN && timingSafeEqual(token, env.OPERATOR_TOKEN.trim())) return true;
+  return false;
+}
+
+// ==============================================================================
+// Ronda 47 (Fase 2 — Flanco 1): resolución del ALCANCE del token. Devuelve el rol
+// efectivo del terminal para una petición: 'ADMIN' | 'OPERATOR' | null (token inválido).
+// Regla de retrocompatibilidad: si no hay NINGÚN token configurado (modo abierto), un
+// terminal equivale a ADMIN (hoy todos lo son y nada rompe). Si hay AUTH_TOKEN pero la
+// petición viene con OPERATOR_TOKEN → OPERATOR (limitado a hechos). Si viene con
+// AUTH_TOKEN → ADMIN.
+// ==============================================================================
+type TokenRole = 'ADMIN' | 'OPERATOR';
+
+export function resolveTokenScope(request: Request, env: Env): TokenRole | null {
+  const authHeader = request.headers.get('Authorization');
+  if (!authHeader) return (env.AUTH_TOKEN || env.OPERATOR_TOKEN) ? null : 'ADMIN';
+  const token = authHeader.replace(/^Bearer\s+/i, '').trim();
+  if (!(env.AUTH_TOKEN || env.OPERATOR_TOKEN)) return 'ADMIN'; // modo abierto (desarrollo)
+  if (env.AUTH_TOKEN && timingSafeEqual(token, env.AUTH_TOKEN.trim())) return 'ADMIN';
+  if (env.OPERATOR_TOKEN && timingSafeEqual(token, env.OPERATOR_TOKEN.trim())) return 'OPERATOR';
+  return null;
+}
+
+// ------------------------------------------------------------------------------
+// Flanco 2 — identidad de dispositivo: origen determinista y estable del terminal.
+// Acepta el header X-Device-Id (preferente, enviado por el cliente) o el cuerpo; si no
+// hay, cae a un hash de la IP + user-agent (identidad de fallback, no perfecta pero
+// trazable). El nombre amigable viene del cuerpo (deviceName) o del header X-Device-Name.
+// ------------------------------------------------------------------------------
+function getDeviceContext(request: Request, body: any, env: Env): { deviceId: string; deviceName: string } {
+  const ip = clientIp(request);
+  const ua = request.headers.get('User-Agent') || '';
+  const deviceId =
+    (typeof body?.deviceId === 'string' && body.deviceId.trim()) ||
+    request.headers.get('X-Device-Id')?.trim() ||
+    `device-${hashString(ip)}-${hashString(ua).slice(0, 6)}`;
+  const deviceName =
+    (typeof body?.deviceName === 'string' && body.deviceName.trim()) ||
+    request.headers.get('X-Device-Name')?.trim() ||
+    'Terminal sin nombre';
+  return { deviceId, deviceName };
+}
+
+// Hash simple FNV-1a no criptográfico para el deviceId de fallback (no es un secreto).
+function hashString(s: string): string {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < s.length; i++) {
+    h ^= s.charCodeAt(i);
+    h = Math.imul(h, 0x01000193);
+  }
+  return (h >>> 0).toString(16);
+}
+
+// ------------------------------------------------------------------------------
+// Flanco 2/3 — tablas del guard de sync (creadas bajo demanda, idempotentes).
+// ------------------------------------------------------------------------------
+async function ensureSyncGuardTables(env: Env): Promise<void> {
+  if (!env.DB) return;
+  try {
+    await env.DB.prepare(
+      `CREATE TABLE IF NOT EXISTS catalog_versions (
+         id INTEGER PRIMARY KEY CHECK (id = 1),
+         school_code TEXT NOT NULL,
+         version INTEGER NOT NULL DEFAULT 0,
+         updated_by_device TEXT,
+         updated_by_role TEXT,
+         updated_at TEXT DEFAULT (datetime('now'))
+       )`
+    ).run();
+    await env.DB.prepare(
+      `CREATE TABLE IF NOT EXISTS device_sync_log (
+         id TEXT PRIMARY KEY,
+         device_id TEXT NOT NULL,
+         device_name TEXT,
+         role TEXT NOT NULL,
+         action TEXT NOT NULL,
+         school_code TEXT,
+         catalog_version INTEGER,
+         students_count INTEGER,
+         records_count INTEGER,
+         details_json TEXT,
+         created_at TEXT DEFAULT (datetime('now'))
+       )`
+    ).run();
+  } catch (e: any) {
+    console.warn('[sync_guard] ensure tables no crítico:', e?.message || e);
+  }
+}
+
+async function getCatalogVersion(env: Env, schoolCode: string): Promise<number> {
+  if (!env.DB) return 0;
+  try {
+    await ensureSyncGuardTables(env);
+    const row = await env.DB.prepare(
+      `SELECT version FROM catalog_versions WHERE id = 1 AND school_code = ?`
+    ).bind(schoolCode).first<{ version: number }>();
+    return row?.version ?? 0;
+  } catch {
+    return 0;
+  }
+}
+
+async function bumpCatalogVersion(env: Env, schoolCode: string, deviceId: string, role: string): Promise<number> {
+  if (!env.DB) return 0;
+  try {
+    await ensureSyncGuardTables(env);
+    const cur = await getCatalogVersion(env, schoolCode);
+    const next = cur + 1;
+    await env.DB.prepare(
+      `INSERT INTO catalog_versions (id, school_code, version, updated_by_device, updated_by_role, updated_at)
+       VALUES (1, ?, ?, ?, ?, datetime('now'))
+       ON CONFLICT(id) DO UPDATE SET
+         version=excluded.version, updated_by_device=excluded.updated_by_device,
+         updated_by_role=excluded.updated_by_role, updated_at=datetime('now')`
+    ).bind(schoolCode, next, deviceId, role).run();
+    return next;
+  } catch {
+    return 0;
+  }
+}
+
+// Registro APPEND-ONLY en device_sync_log. El Worker SOLO inserta — jamás UPDATE/DELETE.
+async function logDeviceSync(env: Env, entry: {
+  deviceId: string; deviceName: string; role: string; action: string;
+  schoolCode: string; catalogVersion?: number | null; studentsCount: number; recordsCount: number; details?: any;
+}): Promise<void> {
+  if (!env.DB) return;
+  try {
+    await ensureSyncGuardTables(env);
+    const id = `dsl-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+    await env.DB.prepare(
+      `INSERT INTO device_sync_log
+        (id, device_id, device_name, role, action, school_code, catalog_version, students_count, records_count, details_json)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ).bind(
+      id, entry.deviceId, entry.deviceName, entry.role, entry.action, entry.schoolCode,
+      entry.catalogVersion ?? null, entry.studentsCount, entry.recordsCount,
+      entry.details ? JSON.stringify(entry.details).slice(0, 2000) : null
+    ).run();
+  } catch { /* el log jamás rompe el push */ }
+}
+
+// Merge de HECHOS por id + updatedAt (Flanco 4): el updatedAt del DATO decide; si el
+// registro previo no trae updatedAt, el entrante gana. Se usa para fusionar los registros
+// del operador dentro del snapshot vigente sin machacar el catálogo.
+export function mergeRecordsByUpdatedAt(existing: any[], incoming: any[]): any[] {
+  const map = new Map<string, any>();
+  for (const r of existing || []) if (r && r.id) map.set(String(r.id), r);
+  for (const r of incoming || []) {
+    if (!r || !r.id) continue;
+    const prev = map.get(String(r.id));
+    if (!prev) { map.set(String(r.id), r); continue; }
+    const prevA = prev.updatedAt || prev.timestamp || '';
+    const inA = r.updatedAt || r.timestamp || '';
+    // Gana el más nuevo por updatedAt (o timestamp como fallback). Reglas:
+    //  - entrante SIN fecha: solo gana si el previo tampoco la tiene (no pisar dato
+    //    fechado con uno sin fecha).
+    //  - previo SIN fecha: el entrante gana (el previo es no-datable, se confía en el push).
+    //  - ambos con fecha: gana el mayor; empate → entrante.
+    if (!inA) {
+      if (!prevA) map.set(String(r.id), r);
+    } else if (!prevA || inA >= prevA) {
+      map.set(String(r.id), r);
+    }
+  }
+  return Array.from(map.values());
 }
 
 // ==============================================================================
@@ -266,14 +443,45 @@ export default {
         const records = Array.isArray(data.records) ? data.records : [];
         const teachers = Array.isArray(data.teachers) ? data.teachers : [];
 
+        // =========================================================================
+        // Ronda 47 (Fase 2 — Flanco 1/2/3): ALCANCE DEL TOKEN EN EL PUSH.
+        // - ADMIN (AUTH_TOKEN / modo abierto) → push COMPLETO: reemplaza el snapshot
+        //   (catálogo + hechos), upserta catálogo, incrementa catalog_version.
+        // - OPERATOR (OPERATOR_TOKEN, docente/encargada) → push de HECHOS SOLO: sus
+        //   registros de asistencia se fusionan por id+updatedAt dentro del snapshot
+        //   vigente (SIN machacar el catálogo que escribió Rectoría) y NO se incrementa
+        //   catalog_version. Un terminal con el catálogo viejo ya no puede aplastar los
+        //   cambios de Rectoría.
+        // =========================================================================
+        const tokenRole = resolveTokenScope(request, env) || 'ADMIN';
+        const device = getDeviceContext(request, body, env);
+        const isOperator = tokenRole === 'OPERATOR';
+        const isAdmin = !isOperator; // ADMIN o modo abierto (retrocompat)
+        const bodyCatalogVersion = (typeof body.catalogVersion === 'number') ? body.catalogVersion : null;
+
+        // Flanco 3 — CAS de catálogo para pushes ADMIN: si el terminal declara una
+        // catalog_version MENOR que la vigente, Rectoría no debe pisar la nube sin antes
+        // re-ubicarse. Solo se aplica si el cliente la envía (retrocompat: clientes viejos
+        // no la mandan → sin fricción). force:true es el escape explícito de Rectoría.
+        if (isAdmin && bodyCatalogVersion !== null && !body.force && env.DB) {
+          const currentVersion = await getCatalogVersion(env, schoolCode);
+          if (bodyCatalogVersion < currentVersion) {
+            return errorResponse(
+              `Push rechazado (catálogo obsoleto): tu terminal tiene el catálogo v${bodyCatalogVersion} pero la nube está en v${currentVersion}. Descarga primero con Pull (/api/sync/pull) y reintenta. Si eres Rectoría y sabes lo que haces, envía force:true.`,
+              409,
+              { catalogVersion: currentVersion, sentVersion: bodyCatalogVersion }
+            );
+          }
+        }
+
         // Ronda 38 (H-38-1b): PROTECCIÓN ANTI-APLASTADO server-side (defensa en profundidad
         // de la guarda del cliente en cloudflareSync.ts). Un dispositivo cuyo localStorage
         // se perdió (perfil reiniciado, corrupción — incidente real detectado en QA Ronda 38)
         // empujaría un payload con 0 estudiantes y sobreescribiría la matrícula completa de
         // D1/KV. Si el snapshot vigente tiene estudiantes y el push entrante trae 0, se
         // rechaza con 409 salvo force:true. Vaciar de verdad sigue siendo posible con
-        // force:true o con la purga del panel.
-        if (students.length === 0 && !body.force && env.DB) {
+        // force:true o con la purga del panel. Solo aplica a pushes ADMIN de catálogo.
+        if (isAdmin && students.length === 0 && !body.force && env.DB) {
           try {
             const row = await env.DB.prepare(
               `SELECT students_count FROM sync_snapshots WHERE id = ?`
@@ -287,8 +495,10 @@ export default {
           } catch { /* si la lectura del snapshot falla, el push sigue su curso previo */ }
         }
 
-        // 1. Guardar Snapshot en D1
-        if (env.DB) {
+        // 1. Guardar Snapshot en D1 — SOLO en push de catálogo (ADMIN). Un operador
+        //    NO reemplaza el snapshot (su catálogo podría estar obsoleto); solo fusiona
+        //    sus hechos en el snapshot vigente (ver camino de operador más abajo).
+        if (isAdmin && env.DB) {
           await env.DB.prepare(
             `INSERT OR REPLACE INTO sync_snapshots (id, school_code, school_name, data_json, students_count, records_count, updated_at)
              VALUES (?, ?, ?, ?, ?, ?, datetime('now'))`
@@ -339,9 +549,61 @@ export default {
               await env.DB.batch(studentBatch.slice(i, i + 50));
             }
           }
+        }
 
-          // 3. Guardar Registros de Asistencia en D1 en batches
-          if (records.length > 0) {
+        // 2b. CAMINO DE OPERADOR (Flanco 1): si solo trae HECHOS (OPERATOR_TOKEN), fusiona
+        //     sus registros en el snapshot vigente SIN tocar el catálogo. Así un terminal con
+        //     el catálogo viejo no aplasta los cambios de Rectoría; solo aporta las asistencias
+        //     nuevas del día. El catálogo del snapshot queda intacto.
+        if (isOperator && env.DB) {
+          try {
+            // Leer snapshot vigente (D1) para conservar su catálogo.
+            const existing = await env.DB.prepare(
+              `SELECT data_json, students_count, records_count, school_name FROM sync_snapshots WHERE id = ?`
+            ).bind(`snapshot_${schoolCode}`).first<{ data_json: string; students_count: number; records_count: number; school_name: string | null }>();
+            let mergedData: any;
+            let mergedRecords: any[];
+            let catalogCount = 0;
+            if (existing?.data_json) {
+              const prev = JSON.parse(existing.data_json);
+              mergedRecords = mergeRecordsByUpdatedAt(prev.records || [], records);
+              // conservar catálogo previo; solo actualizar records
+              mergedData = { ...prev, records: mergedRecords };
+              catalogCount = Array.isArray(prev.students) ? prev.students.length : existing.students_count || 0;
+            } else {
+              // No hay snapshot previo: almacenar solo los hechos de este operador (sin catálogo).
+              mergedRecords = [...records];
+              mergedData = { ...data, records: mergedRecords };
+            }
+            await env.DB.prepare(
+              `INSERT OR REPLACE INTO sync_snapshots (id, school_code, school_name, data_json, students_count, records_count, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?, datetime('now'))`
+            ).bind(
+              `snapshot_${schoolCode}`,
+              schoolCode,
+              (body.schoolName || existing?.school_name || env.SCHOOL_NAME || ''),
+              JSON.stringify(mergedData),
+              catalogCount,
+              mergedRecords.length
+            ).run();
+
+            // Reflejar el snapshot fusionado en KV para que /api/sync/pull lo sirva fresco
+            // (el pull lee KV primero). El catálogo conservado es el vigente, no el del operador.
+            if (env.ATTENDANCE_KV) {
+              await env.ATTENDANCE_KV.put(`latest_snapshot_${schoolCode}`, JSON.stringify({
+                syncedAt: new Date().toISOString(),
+                studentsCount: catalogCount,
+                recordsCount: mergedRecords.length,
+                data: mergedData
+              }));
+            }
+          } catch (e: any) {
+            console.warn('[sync/push] merge de operador no crítico:', e?.message || e);
+          }
+        }
+
+        // 3. Guardar Registros de Asistencia en D1 en batches (ADMIN y OPERATOR)
+        if (env.DB && records.length > 0) {
             // Ronda 21 (spec §1.2): upsert con PROTECCIÓN DEL OVERLAY. INSERT OR REPLACE
             // reemplazaba la fila completa: un dispositivo que aún no conocía una excusa
             // (excuseId NULL local) BORRABA la vinculación vigente en D1 al pushear su
@@ -384,10 +646,11 @@ export default {
               await env.DB.batch(recordBatch.slice(i, i + 50));
             }
           }
-        }
 
-        // 4. Guardar en Cloudflare KV para acceso instantáneo (<20ms) desde porterías
-        if (env.ATTENDANCE_KV) {
+        // 4. Guardar en Cloudflare KV para acceso instantáneo (<20ms) desde porterías.
+        //    SOLO en push de catálogo (ADMIN). Un operador no debe refrescar el snapshot
+        //    KV con su catálogo (posiblemente obsoleto) ni el índice de estudiantes.
+        if (isAdmin && env.ATTENDANCE_KV) {
           await env.ATTENDANCE_KV.put(`latest_snapshot_${schoolCode}`, JSON.stringify({
             syncedAt: new Date().toISOString(),
             studentsCount: students.length,
@@ -402,12 +665,38 @@ export default {
           await env.ATTENDANCE_KV.put(`students_index_${schoolCode}`, JSON.stringify(studentIndex));
         }
 
+        // 5. Flanco 3 (CAS): SOLO un push de catálogo (ADMIN) incrementa catalog_version.
+        //    Un operador jamás la toca → el desfase de catálogo se detecta en el próximo
+        //    push de Rectoría sin que un terminal viejo "gane" la carrera.
+        let newCatalogVersion: number | null = null;
+        if (isAdmin) {
+          newCatalogVersion = await bumpCatalogVersion(env, schoolCode, device.deviceId, tokenRole);
+        }
+
+        // 6. Flanco 2 (trazabilidad append-only): registro de la operación por dispositivo.
+        await logDeviceSync(env, {
+          deviceId: device.deviceId,
+          deviceName: device.deviceName,
+          role: tokenRole,
+          action: isAdmin ? 'PUSH_CATALOG' : 'PUSH_FACTS',
+          schoolCode,
+          catalogVersion: newCatalogVersion,
+          studentsCount: isAdmin ? students.length : 0,
+          recordsCount: records.length,
+          details: { force: !!body.force, sentCatalogVersion: bodyCatalogVersion }
+        });
+
         return jsonResponse({
           success: true,
-          message: `Sincronización Cloudflare completada: ${students.length} estudiantes y ${records.length} asistencias guardadas en D1 y KV.`,
+          message: isAdmin
+            ? `Sincronización Cloudflare completada: ${students.length} estudiantes y ${records.length} asistencias guardadas en D1 y KV (catálogo v${newCatalogVersion ?? '?'}).`
+            : `Asistencias sincronizadas (vía operador): ${records.length} registros fusionados en la nube. El catálogo no fue modificado.`,
           timestamp: new Date().toISOString(),
-          studentsSaved: students.length,
-          recordsSaved: records.length
+          studentsSaved: isAdmin ? students.length : 0,
+          recordsSaved: records.length,
+          catalogVersion: newCatalogVersion,
+          role: tokenRole,
+          deviceId: device.deviceId
         });
       }
 
@@ -422,10 +711,12 @@ export default {
           const cached = await env.ATTENDANCE_KV.get(`latest_snapshot_${schoolCode}`, 'json') as any;
           if (cached && cached.data) {
             await injectExcuseLinks(env, cached.data);
+            const catalogVersion = await getCatalogVersion(env, schoolCode);
             return jsonResponse({
               success: true,
               source: 'Cloudflare KV (Ultra-Fast Edge Cache)',
               syncedAt: cached.syncedAt,
+              catalogVersion,
               data: cached.data
             });
           }
@@ -440,16 +731,64 @@ export default {
           if (row && row.data_json) {
             const data = JSON.parse(row.data_json);
             await injectExcuseLinks(env, data);
+            const catalogVersion = await getCatalogVersion(env, schoolCode);
             return jsonResponse({
               success: true,
               source: 'Cloudflare D1 Database',
               syncedAt: row.updated_at,
+              catalogVersion,
               data
             });
           }
         }
 
         return errorResponse('No se encontraron datos de sincronización previos para este colegio.', 404);
+      }
+
+      // =========================================================================
+      // RUTA: SYNC LOG (Ronda 47 — Fase 2, Flanco 2): bitácora append-only de los
+      // dispositivos/roles que sincronizaron. SOLO ADMIN (un operador no debe leer la
+      // trazabilidad de otros terminales). Se trunca a los últimos 100 registros.
+      // =========================================================================
+      if (path === '/api/sync/log' && request.method === 'GET') {
+        const tokenRole = resolveTokenScope(request, env);
+        if (tokenRole !== 'ADMIN') {
+          return errorResponse('Solo Rectoría (ADMIN) puede consultar el registro de sincronización.', 403);
+        }
+        if (!env.DB) {
+          return errorResponse('D1 no configurada.', 503);
+        }
+        const schoolCode = url.searchParams.get('schoolCode') || env.SCHOOL_CODE || 'INAS-ANTONIA-SANTOS-2026';
+        await ensureSyncGuardTables(env);
+        const rows = await env.DB.prepare(
+          `SELECT device_id, device_name, role, action, school_code, catalog_version,
+                  students_count, records_count, details_json, created_at
+           FROM device_sync_log
+           WHERE school_code = ?
+           ORDER BY created_at DESC
+           LIMIT 100`
+        ).bind(schoolCode).all<{
+          device_id: string; device_name: string | null; role: string; action: string;
+          school_code: string; catalog_version: number | null; students_count: number;
+          records_count: number; details_json: string | null; created_at: string;
+        }>();
+        const catalogVersion = await getCatalogVersion(env, schoolCode);
+        return jsonResponse({
+          success: true,
+          schoolCode,
+          catalogVersion,
+          entries: (rows.results || []).map(e => ({
+            deviceId: e.device_id,
+            deviceName: e.device_name,
+            role: e.role,
+            action: e.action,
+            catalogVersion: e.catalog_version,
+            studentsCount: e.students_count,
+            recordsCount: e.records_count,
+            details: e.details_json ? JSON.parse(e.details_json) : null,
+            createdAt: e.created_at
+          }))
+        });
       }
 
       // =========================================================================
@@ -565,7 +904,9 @@ export default {
           'schedule_slots',
           'sync_snapshots',
           'push_subscriptions',
-          'audit_logs'
+          'audit_logs',
+          'catalog_versions',
+          'device_sync_log'
         ];
 
         if (env.DB) {

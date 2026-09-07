@@ -70,12 +70,50 @@ export class CloudflareSyncService {
     return (settings.cloudflareWorkerUrl || '').trim().replace(/\/+$/, '');
   }
 
-  /** Headers comunes para el Worker (Bearer AUTH_TOKEN opcional) */
-  private static workerHeaders(): Record<string, string> {
+  /**
+   * Identidad de dispositivo estable y persistente (Flanco 2). Se genera una sola
+   * vez por navegador y se viaja en el header X-Device-Id para que el Worker la
+   * registre (append-only) y pueda atribuir cada push/purga a un terminal concreto.
+   */
+  private static getDeviceId(): string {
+    const KEY = 'inas_device_id';
+    try {
+      let id = localStorage.getItem(KEY);
+      if (!id) {
+        id = 'dev-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 10);
+        localStorage.setItem(KEY, id);
+      }
+      return id;
+    } catch {
+      return 'dev-anonymous';
+    }
+  }
+
+  /**
+   * Headers comunes para el Worker (Bearer con ALCANCE, Flanco 1) + identidad de
+   * dispositivo (Flanco 2).
+   *
+   * Token según el rol de la sesión:
+   *   - ADMIN (Rectoría) → AUTH_TOKEN (cloudflareApiToken) → escribe catálogo + hechos.
+   *   - DOCENTE / acudiente → OPERATOR_TOKEN (cloudflareOperatorToken) → solo escribe
+   *     hechos (asistencia). Lo HEREDA sin digitarlo. Si el token de operador aún no
+   *     está configurado, cae al admin (retrocompat: nada rompe).
+   *
+   * `forceAdmin` fuerza el token de ADMIN para acciones exclusivas de Rectoría
+   * (export, purge, log) aunque la sesión activa sea de un docente.
+   */
+  private static workerHeaders(forceAdmin = false): Record<string, string> {
     const settings = AttendanceStorageService.getSettings();
-    const token = (settings.cloudflareApiToken || '').trim();
+    const session = AttendanceStorageService.getCurrentSession();
+    const isAdmin = forceAdmin || session?.role === 'ADMIN';
+    const token = isAdmin
+      ? (settings.cloudflareApiToken || '').trim()
+      : ((settings.cloudflareOperatorToken || '').trim() || (settings.cloudflareApiToken || '').trim());
+    const deviceId = this.getDeviceId();
     return {
       'Content-Type': 'application/json',
+      'X-Device-Id': deviceId,
+      'X-Device-Name': (settings.schoolName || 'Terminal INAS').slice(0, 80),
       ...(token ? { Authorization: `Bearer ${token}` } : {})
     };
   }
@@ -180,6 +218,7 @@ export class CloudflareSyncService {
       qrSecret: _qr,
       sessionSecret: _ss,
       cloudflareApiToken: _tok,
+      cloudflareOperatorToken: _optok,
       customAiApiKey: _key,
       ...safe
     } = settings;
@@ -188,8 +227,11 @@ export class CloudflareSyncService {
 
   /**
    * Ejecuta la sincronización de SUBIDA (Push) completa hacia el Cloudflare Worker (D1 / KV)
+   * @param force  Ronda 47 (Fase 2 — Flanco 3): escape explícito de Rectoría para ignorar
+   *               el CAS de catálogo obsoleto (enviar force:true tras revisar que realmente
+   *               se quiere pisar la nube). Por defecto false.
    */
-  static async performCloudflareSync(): Promise<CloudflareSyncResult> {
+  static async performCloudflareSync(force = false): Promise<CloudflareSyncResult> {
     const settings = AttendanceStorageService.getSettings();
     const baseUrl = this.getWorkerBaseUrl();
     const timestamp = new Date().toLocaleTimeString('es-CO', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
@@ -216,6 +258,11 @@ export class CloudflareSyncService {
         syncedAt: new Date().toISOString(),
         studentsCount: safeStudents.length,
         recordsCount: records.length,
+        // Ronda 47 (Fase 2): identidad del dispositivo + versión de catálogo (CAS) + force.
+        deviceId: this.getDeviceId(),
+        deviceName: (settings.schoolName || 'Terminal INAS').slice(0, 80),
+        catalogVersion: settings.cloudflareCatalogVersion,
+        force,
         data: {
           settings: this.safeSettingsCopy(settings),
           students: safeStudents,
@@ -304,11 +351,28 @@ export class CloudflareSyncService {
 
       if (!response.ok) {
         const errText = await response.text();
+        // Ronda 47 (Fase 2 — Flanco 3): 409 = catálogo obsoleto. Mensaje accionable.
+        if (response.status === 409) {
+          return {
+            success: false,
+            timestamp,
+            syncedRecordsCount: 0,
+            syncedStudentsCount: 0,
+            message: `Sincronización rechazada: tu terminal tiene un catálogo desactualizado (${errText}). Descarga primero con "Descargar (Pull)" y reintenta.`,
+            target: 'Cloudflare Worker',
+            details: { conflict: true, raw: errText }
+          };
+        }
         throw new Error(`Worker HTTP ${response.status}: ${errText}`);
       }
 
       const data = await response.json();
       this.updateLastSync(timestamp);
+      // Ronda 47 (Fase 2 — Flanco 3): el push de catálogo devuelve la nueva catalog_version;
+      // se guarda para el próximo CAS sin costo.
+      if (typeof data?.catalogVersion === 'number') {
+        AttendanceStorageService.saveSettings({ ...AttendanceStorageService.getSettings(), cloudflareCatalogVersion: data.catalogVersion });
+      }
 
       const warn = omitted.length > 0
         ? ` ⚠ ${omitted.length} foto(s) omitidas por ser irrecuperables (${omitted.slice(0, 3).join(', ')}${omitted.length > 3 ? '…' : ''}); vuelve a subirlas desde el carné.`
@@ -369,6 +433,12 @@ export class CloudflareSyncService {
 
       if (!result.success || !result.data) {
         throw new Error(result.error || 'No se recibieron datos del Worker');
+      }
+
+      // Ronda 47 (Fase 2 — Flanco 3): la versión de catálogo viaja en la respuesta del
+      // pull. Se guarda para que el próximo push envíe la correcta (CAS).
+      if (typeof result?.catalogVersion === 'number') {
+        AttendanceStorageService.saveSettings({ ...AttendanceStorageService.getSettings(), cloudflareCatalogVersion: result.catalogVersion });
       }
 
       const { students, records, teachers, assignments, slots, customTemplates, studentSchedules } = result.data;
@@ -506,7 +576,7 @@ export class CloudflareSyncService {
       const schoolCode = settings.schoolCode || 'INAS_2026';
       const res = await fetch(`${baseUrl}/api/sync/export?schoolCode=${encodeURIComponent(schoolCode)}`, {
         method: 'GET',
-        headers: this.workerHeaders()
+        headers: this.workerHeaders(true)
       });
       const json = await res.json().catch(() => null);
       if (!res.ok || !json?.success) {
@@ -534,7 +604,7 @@ export class CloudflareSyncService {
     try {
       const res = await fetch(`${baseUrl}/api/sync/purge`, {
         method: 'POST',
-        headers: this.workerHeaders(),
+        headers: this.workerHeaders(true),
         body: JSON.stringify({ confirm: 'PURGAR', performedBy: performedBy || 'SETTINGS_UI' })
       });
       const json = await res.json().catch(() => null);

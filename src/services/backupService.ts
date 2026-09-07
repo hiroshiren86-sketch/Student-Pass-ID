@@ -46,7 +46,7 @@ export interface BackupFile {
   counts: Record<string, number>;
 }
 
-const SECRET_FIELDS = ['qrSecret', 'cloudflareApiToken', 'sessionSecret'] as const;
+const SECRET_FIELDS = ['qrSecret', 'cloudflareApiToken', 'cloudflareOperatorToken', 'sessionSecret'] as const;
 
 /** Serializa el snapshot local actual al formato INAS_BACKUP. */
 export function buildBackup(scope: BackupScope, includeSecrets: boolean): BackupFile {

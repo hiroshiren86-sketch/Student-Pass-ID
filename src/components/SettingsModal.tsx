@@ -69,6 +69,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ onClose }) => {
   const [isPullingCloudflare, setIsPullingCloudflare] = useState(false);
   const [showApiKey, setShowApiKey] = useState(false);
   const [showCloudflareToken, setShowCloudflareToken] = useState(false);
+  const [showCloudflareOperatorToken, setShowCloudflareOperatorToken] = useState(false);
   const [showQrSecret, setShowQrSecret] = useState(false); // Ronda 19 (BUG-5): el dueño puede necesitar copiarlo a otro dispositivo
   const [availableModels, setAvailableModels] = useState<Array<{ id: string; name: string; isRecommended?: boolean; isVision?: boolean; description?: string }>>([]);
   const [isLoadingModels, setIsLoadingModels] = useState(false);
@@ -700,6 +701,31 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ onClose }) => {
                 </div>
                 <p className="text-[10px] text-amber-700 dark:text-amber-400 mt-1 leading-snug">
                   Se envía como Bearer al Worker. El AUTH_TOKEN está ACTIVO en producción desde la Ronda 27 (hardening): sin este token, push/pull/excusas responden 401 y la caché local nunca sale del dispositivo (los secretos de cada dispositivo jamás viajan a la nube — política Ronda 16/29). Usa “Probar Conexión” para validar el token; el navegador NUNCA accede directo a la API de Cloudflare: el Worker es el único con acceso a D1/KV.
+                </p>
+              </div>
+
+              <div>
+                <label className="block text-[10px] font-bold uppercase text-slate-500 dark:text-slate-400 mb-1">
+                  Token de Operador (docentes/encargada) — OPERATOR_TOKEN
+                </label>
+                <div className="relative">
+                  <input
+                    type={showCloudflareOperatorToken ? 'text' : 'password'}
+                    value={settings.cloudflareOperatorToken || ''}
+                    onChange={(e) => handleChange('cloudflareOperatorToken', e.target.value)}
+                    placeholder="Opcional. Solo escribe hechos (asistencia), nunca el catálogo"
+                    className="w-full bg-white dark:bg-black border border-slate-300 dark:border-slate-700 text-slate-900 dark:text-white text-xs pl-2.5 pr-8 py-2 rounded-xl outline-none font-mono"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowCloudflareOperatorToken(!showCloudflareOperatorToken)}
+                    className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400"
+                  >
+                    {showCloudflareOperatorToken ? <EyeOff className="w-3 h-3" /> : <Eye className="w-3 h-3" />}
+                  </button>
+                </div>
+                <p className="text-[10px] text-slate-500 dark:text-slate-400 mt-1 leading-snug">
+                  Ronda 47 (Fase 2): los terminales de docentes/encargada usan este token para subir asistencia (hechos). NO pueden modificar el catálogo (estudiantes/horarios), así un terminal con datos viejos ya no pisa los cambios de Rectoría al reconectarse. Los docentes lo HEREDAN automáticamente con su rol — no lo digitan ni lo ven. Vacío = los docentes usan el AUTH_TOKEN (comportamiento histórico).
                 </p>
               </div>
             </div>
