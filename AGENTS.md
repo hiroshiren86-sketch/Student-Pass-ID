@@ -128,6 +128,10 @@ Este documento es la **fuente única de verdad técnica (Single Source of Truth)
    - PROHIBIDO crear cuentas nuevas (de cualquier rol, y en particular de administrador/Rectoría) utilizando la Service Account de Firebase, custom tokens, o cualquier vía de impersonación de identidad.
    - La SA existe SOLO para operaciones de diagnóstico/auditoría de solo lectura (lookup de uids, verificación de proveedores, estados de configuración) y para restauración de claves a petición EXPLÍCITA del propietario sobre cuentas existentes.
    - Si faltan credenciales para una prueba: DETENER la ejecución y preguntar al propietario (él tiene las claves o provee el paquete, ej. `Paquete_Credenciales_INAS_2026-09-06.md` subido a upload/). Jamás auto-provisionar identidad.
+8. **Regla de Integridad de Guardas en Pruebas — PROHIBIDO modificar el código para forzar una prueba (orden directa del propietario, 06/09/2026):**
+   - Si una prueba no puede ejecutarse porque el día NO es lectivo (ej. domingo: la jornada L–V de la Ronda 22 deja dom/sab sin ventana lectiva), eso NO es un bug: es la guarda funcionando CORRECTAMENTE.
+   - PROHIBIDO bajo ninguna circunstancia modificar el código (días lectivos, guardas de jornada, ventanas de bloque, plantillas, `getSchoolDayWindow`, ni ninguna otra lógica) con la finalidad de "lograr" la prueba. Una prueba que requiere dañar el código es una prueba fallida. En palabras del propietario: "no lo hagas bajo ninguna circunstancia".
+   - Protocolo correcto: (1) probar hoy solo lo verificable con el reloj real — login, Pull/Push, aplicación de plantillas, y las guardas en NEGATIVO (el rechazo del escaneo es un resultado exitoso de la prueba); (2) dejar documentado el protocolo pendiente y ejecutarlo el siguiente día lectivo (lunes–viernes) con el reloj real, sin tocar una sola línea.
 
 ---
 
@@ -222,9 +226,23 @@ Esta sección documenta el mapa exhaustivo de comunicaciones, protocolos, plataf
 
 ---
 
----
-
 ## 📋 3. Bitácora de Implementaciones y Correcciones Realizadas
+
+### 🗓️ Ronda 45 (07/09/2026, domingo) — PLANTILLA T APLICADA DESDE LA UI COMO USUARIO REAL (17/17) + GUARDA L–V VERIFICADA EN NEGATIVO + REGLA #8 DEL PROPIETARIO + PROTOCOLO DE PRUEBA PARA EL LUNES
+
+- **⛔ REGLA NUEVA #8 (orden directa del propietario, registrada en §1):** PROHIBIDO modificar el código (días lectivos, guardas de jornada, ventanas de bloque, plantillas, `getSchoolDayWindow`, ni ninguna otra lógica) para "lograr" una prueba. Hoy es DOMINGO (día no lectivo en Bogotá): si el escaneo no funciona, eso es la guarda funcionando CORRECTAMENTE, y la prueba se ejecuta el siguiente día lectivo con el reloj real. Palabras del propietario: "no lo hagas bajo ninguna circunstancia… apúntalo en agents.md para que no modifique el código con la finalidad de llevar a cabo la prueba pero dañar el código".
+- **Prueba E2E del domingo (reloj real, producción `student-pass-id.pages.dev`, bundle R44 ya desplegado y verificado por marcadores: `teacherVerified`, sin bloque v1 en Horarios, strings R44 en el bundle servido):** **17/17 PASS** (`scripts/e2e_r45_domingo_plantillaT.mjs` del sandbox, capturas `scripts/r45/`): (1) login Rectoría por Firebase real ✓; (2) AUTH_TOKEN pegado en Ajustes → Sync y Seguridad (flujo del propietario) y persistido en settings del dispositivo ✓; (3) **Pull** desde la nube → 80 estudiantes, 20 docentes ✓ (H-42-2 confirmado en vivo); (4) **Plantilla T "Jornada de Pruebas" aplicada desde la UI** (Horarios → menú bento → Plantillas → "Aplicar hoy") → `activeDayTemplate=tmpl-pruebas-extendida`, **30 bloques CLASS regenerados** (31 slots con recreo), jornada 00:05 → 23:05 ✓; (5) a las 20:00 Bogotá el bloque "26ª Hora de Clase (19:20–20:05)" cubre el reloj ✓; (6) **GUARDA L–V en negativo: escaneo manual del código 196555769 en domingo → RECHAZADO con "Jornada Cerrada" y CERO registros creados** — el rechazo es el resultado exitoso de la prueba (no se tocó una línea de código); (7) **Push** → "Sincronización Exitosa!" ✓; (8) cero errores de consola en toda la sesión ✓.
+- **Verificación server-side del snapshot (Worker API, GET /api/sync/pull Bearer, schoolCode `INAS-ANTONIA-SANTOS-2026`):** `settings.activeDayTemplate = tmpl-pruebas-extendida` en la NUBE, 80 estudiantes, 20 docentes, 180 cátedras, 31 slots, **0 registros** (nada se contaminó el domingo; los ~5 registros demo de R43 ya no están en el snapshot — limpiables/frescos para el Día Cero).
+- **Estado que deja la ronda:** la **Plantilla T queda ACTIVA en la nube y en el dispositivo de prueba** para ejecutar mañana lunes (día lectivo) la prueba de escaneo REAL a cualquier hora (00:05–23:05), por mandato del propietario ("cambia a la plantilla T… para las pruebas") y su propia advertencia de restaurar la Plantilla A al terminar.
+- **📋 PROTOCOLO DE PRUEBA PARA EL LUNES (día lectivo — UI only, CERO cambios de código, REGLA #8 aplica):**
+  1. Login docente `mrestrepo@inas.edu.co` (clave vigente del paquete de credenciales R43: `DocenteR43#Aula2026`).
+  2. Confirmar Plantilla T activa (badge en Horarios/Plantillas; si algún dispositivo la perdió: Pull).
+  3. Aula → **"Activar mi asignatura"** (1-toque v2) → chip "Clase activa": *Lengua Castellana · María Camila Restrepo Henao · bloque del reloj · "el grado se toma de cada carné"*.
+  4. Escáner del Aula (entrada manual "Escanear con lector USB o teclear código…"): **alumno A `196555769` (JULIANA ANDRÉS JIMÉNEZ BOTERO, 6°4)** → esperado: registro con `subject=Lengua Castellana`, `teacherId` de la tarjeta, `contextSource=QR_CLASE`, `classQrVerified=true`, `studentGrade=6°4` (DEL CARNÉ), `slotId` del RELOJ (A.2).
+  5. Re-escanear A → `already_scanned` (unicidad estudiante+día+bloque).
+  6. Escanear **alumno B `151186090` (YULIANA LOZANO PEREA, 7°4)** → `studentGrade=7°4` con la MISMA tarjeta activa → prueba multi-grado v2 (sin gate de grado).
+  7. Verificar badges "QR de Clase (firmado)" en Planilla → logout → login Rectoría → **Push** → verificación server-side D1 (registros del día con `teacher_id`/`QR_CLASE`).
+  8. **Al terminar TODAS las pruebas: aplicar de nuevo la PLANTILLA A** (Horarios → Plantillas → "Aplicar hoy") + Push — la Plantilla T es SOLO de pruebas (prohibido en producción, aviso de la Ronda 21).
 
 ### 🗓️ Ronda 44 (07/09/2026) — REFINAMIENTOS v2 DEL QA EXTERNO (handoff `QR_v2_refinements_HANDOFF.md`) + V1 OCULTA POR COMPLETO DE LA UI (mandato del propietario)
 
