@@ -90,10 +90,15 @@ export interface Env {
 // Ronda 24 (fix crítico): PATCH faltaba → el preflight rechazaba TODA decisión de
 // excusas (aprobar/rechazar) desde el navegador con "Failed to fetch" — el rector no
 // podía decidir ninguna excusa radicada desde otro dispositivo.
+// Ronda 51 (fix crítico, autorizado por el propietario): el cliente envía X-Device-Id y
+// X-Device-Name (R48, SIEMPRE) y X-Firebase-Id-Token (R49, con sesión Firebase), pero
+// este Allow-Headers no los declaraba → el preflight OPTIONS los rechazaba y TODA
+// llamada del navegador al Worker caía en "Failed to fetch" (Pull/Push, ficha del
+// docente en teléfono nuevo). Se añaden los tres; nada más cambia.
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Methods': 'GET, POST, PUT, PATCH, DELETE, OPTIONS',
-  'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-School-Code, X-Requested-With',
+  'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-School-Code, X-Requested-With, X-Device-Id, X-Device-Name, X-Firebase-Id-Token',
   'Access-Control-Max-Age': '86400',
 };
 export { corsHeaders }; // Ronda 24: compartido con push.ts (sus rutas Cross-Origin)

@@ -11,3 +11,9 @@ coverage/
 # Credenciales (NO versionar)
 .firebase-sa.json
 .env
+
+# Ronda 51: backups D1 (contienen datos personales — Ley 1581) y lockfiles del worker
+# (el propietario los retiró en d4e79e8 para limpiar la estructura del repo)
+cloudflare-worker/backups/
+cloudflare-worker/bun.lock
+cloudflare-worker/package-lock.json
