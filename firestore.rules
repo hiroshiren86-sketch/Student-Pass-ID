@@ -62,9 +62,13 @@ service cloud.firestore {
     // no errora con claves ausentes ni con máscaras de escritura parciales.
     match /users/{userId} {
       allow read: if isAuthenticated() && request.auth.uid == userId;
+      // Ronda 50 (M3): el perfil puede nacer DOCENTE (M2) O ESTUDIANTE_ACUDIENTE (M3). La
+      // escritura la hace el usuario NUEVO con su propio token (instancia secundaria), por
+      // eso request.auth.uid == userId. El rol ADMIN nunca nace por regla (la cuenta ADMIN
+      // se provisiona por consola/SDK Admin, que pasa por encima de estas reglas).
       allow create: if isAuthenticated()
                     && request.auth.uid == userId
-                    && request.resource.data.role == 'DOCENTE';
+                    && (request.resource.data.role == 'DOCENTE' || request.resource.data.role == 'ESTUDIANTE_ACUDIENTE');
       allow update: if isAuthenticated()
                     && request.auth.uid == userId
                     && !request.resource.data.diff(resource.data).affectedKeys()

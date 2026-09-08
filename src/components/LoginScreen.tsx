@@ -13,7 +13,7 @@ import {
 } from 'lucide-react';
 import { UserRole, Teacher, Student } from '../types/attendance';
 import { AttendanceStorageService } from '../services/attendanceStorage';
-import { FirebaseService } from '../services/firebase';
+import { FirebaseService, FirebaseUserProfile } from '../services/firebase';
 import { CloudflareSyncService } from '../services/cloudflareSync';
 
 interface LoginScreenProps {
@@ -157,10 +157,38 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onLoginSuccess }) => {
       }
 
       // ===== Role 3: ESTUDIANTE / ACUDIENTE — M3: código + clave de acceso =====
+      // Ronda 50 (M3): se intenta PRIMERO el login por IDENTIDAD (Firebase Auth). Si el
+      // estudiante tiene cuenta real (provisionada por Rectoría con provisionStudentAccount),
+      // se resuelve el correo interno a partir del código y se autentica contra Firebase —
+      // así el Worker autoriza por rol ESTUDIANTE_ACUDIENTE y el estudiante entra desde
+      // CUALQUIER teléfono sin token de dispositivo. Si la cuenta NO existe (o hay un correo
+      // real en el identificador), se degrada al modelo local código+clave (retrocompat 100%).
       if (selectedRole === 'ESTUDIANTE_ACUDIENTE') {
-        let student = AttendanceStorageService.getStudentByCodeOrDoc(cleanIdent);
+        const isEmailLike = cleanIdent.includes('@');
+        let identityProfile: FirebaseUserProfile | null = null;
+        let uidFromIdentity: string | null = null;
+        try {
+          const fbEmail = isEmailLike ? cleanIdent.toLowerCase() : FirebaseService.studentInternalEmail(cleanIdent);
+          const { user, profile } = await FirebaseService.loginWithEmail(fbEmail, cleanPass);
+          if (profile && profile.role === 'ESTUDIANTE_ACUDIENTE' && profile.linkedStudentCode) {
+            identityProfile = profile;
+            uidFromIdentity = user.uid;
+          } else {
+            // La cuenta de Firebase existe pero no es de un estudiante vinculado: no usar.
+            await FirebaseService.logout();
+          }
+        } catch {
+          // Sin cuenta Firebase para ese código → se sigue con el modelo local.
+          identityProfile = null;
+        }
 
-        // Búsqueda inteligente por nombre de estudiante si no coincide código exacto
+        // Si hay identidad, resolver el estudiante por su linkedStudentCode (puede que el
+        // dispositivo nuevo aún no tenga la ficha local: se intenta un Pull por identidad).
+        let student = identityProfile
+          ? AttendanceStorageService.getStudentByCodeOrDoc(identityProfile.linkedStudentCode)
+          : AttendanceStorageService.getStudentByCodeOrDoc(cleanIdent);
+
+        // Búsqueda inteligente por nombre (solo en el camino local, sin identidad resuelta)
         if (!student) {
           const allStudents = AttendanceStorageService.getStudents();
           student = allStudents.find(s =>
@@ -169,21 +197,41 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onLoginSuccess }) => {
           );
         }
 
+        // Ronda 50 (M3): teléfono nuevo del representante/estudiante — intentar Pull por
+        // identidad para hidratar su ficha y sus datos antes de rendirse.
+        if (!student && identityProfile?.linkedStudentCode) {
+          try {
+            const pull = await CloudflareSyncService.pullFromCloudflare();
+            if (pull.success) {
+              student = AttendanceStorageService.getStudentByCodeOrDoc(identityProfile.linkedStudentCode);
+            }
+          } catch { /* sin red/URL: se degrada al mensaje honesto */ }
+        }
+
         if (!student) {
-          setErrorMessage(`No se encontró ningún estudiante matriculado con identificador o nombre "${cleanIdent}".`);
+          setErrorMessage(identityProfile
+            ? `Su cuenta es válida, pero no se encontró la ficha del estudiante ${cleanIdent}. Revise su conexión a internet y reintente.`
+            : `No se encontró ningún estudiante matriculado con identificador o nombre "${cleanIdent}".`);
           setIsLoading(false);
           return;
         }
 
-        // Ronda 30 (H-30-2): solo la clave de acceso real (reverso del carné o la que
-        // definió el acudiente). El error jamás revela la contraseña válida.
-        if (!student.tempPassword || cleanPass !== student.tempPassword) {
-          setErrorMessage(`Código de acceso incorrecto para ${student.firstName} ${student.lastName}. Verifique el código del reverso del carné o solicite uno nuevo en Rectoría.`);
-          setIsLoading(false);
-          return;
+        // Ronda 30 (H-30-2): en el camino LOCAL (sin identidad) se exige la clave exacta.
+        // En el camino por IDENTIDAD la clave YA fue validada por Firebase Auth.
+        if (!identityProfile) {
+          if (!student.tempPassword || cleanPass !== student.tempPassword) {
+            setErrorMessage(`Código de acceso incorrecto para ${student.firstName} ${student.lastName}. Verifique el código del reverso del carné o solicite uno nuevo en Rectoría.`);
+            setIsLoading(false);
+            return;
+          }
         }
 
-        onLoginSuccess('ESTUDIANTE_ACUDIENTE', { student, username: `${student.firstName} ${student.lastName}` });
+        onLoginSuccess('ESTUDIANTE_ACUDIENTE', {
+          student,
+          username: `${student.firstName} ${student.lastName}`,
+          uid: uidFromIdentity || undefined,
+          email: identityProfile?.email || undefined
+        });
         setIsLoading(false);
         return;
       }

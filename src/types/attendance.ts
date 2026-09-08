@@ -153,6 +153,14 @@ export interface Student {
   isRepresentative?: boolean; // Subrol: Representante Titular
   isSubstituteRepresentative?: boolean; // Subrol: Representante Suplente
   representativeGrade?: string; // Grado que representa (ej: "6°1")
+  // Ronda 50 (M3, identidad-nube): cuenta real de Firebase Auth vinculada a esta ficha
+  // de estudiante. El login por identidad (correo+contraseña) verifica contra Firebase
+  // Auth y el Worker lee el rol desde firestore users/{uid}. Estos campos son el espejo
+  // local para que Rectoría sepa qué correo accederá y qué acciones ofrece. Nunca
+  // suben a la nube con credenciales (política stripSecretFields).
+  authEmail?: string;      // correo con el que el estudiante/acudiente ingresa (Firebase Auth)
+  authUid?: string;        // uid de Firebase Auth (users/{uid}.linkedStudentCode apunta aquí)
+  hasFirebaseAccount?: boolean; // la ficha YA tiene cuenta de acceso creada
   // Ronda 22 (P4, Ley 1581 arts. 7 y 9): consentimiento específico del representante legal
   // para el tratamiento del soporte fotográfico de justificaciones (dato especial de salud).
   excuseDataConsent?: boolean;  // false/undefined = sin autorización (soporte solo físico)

@@ -342,6 +342,89 @@ export class FirebaseService {
     }
   }
 
+  /**
+   * Ronda 50 (M3): correo interno determinista de la identidad de un estudiante en
+   * Firebase Auth. Es el MISMO con el que provisionStudentAccount crea la cuenta, así
+   * el LoginScreen puede resolverla a partir del código sin que el usuario lo vea.
+   */
+  static studentInternalEmail(studentCode: string): string {
+    return `estudiante-${(studentCode || '').replace(/[^a-zA-Z0-9]/g, '')}@inas.edu.co`;
+  }
+
+  /**
+   * Ronda 50 (M3): crea la cuenta REAL de Firebase Auth de un estudiante desde la
+   * sesión de Rectoría, SIN cerrar la sesión de Rectoría. Espejo exacto del patrón
+   * provisionTeacherAccount (misma técnica oficial de instancia secundaria).
+   *
+   * El estudiante/acudiente NO tiene un correo institucional propio (a diferencia del
+   * docente). Por eso el acceso BOOTSTRAP se identifica con el CÓDIGO de carné y la
+   * contraseña temporal (la que ya se entrega en el reverso del carné). Para que
+   * Firebase Auth exija un correo, se acuña uno interno derivado del código:
+   *   estudiante-<code>@inas.edu.co   (institucional, determinista, único).
+   * El usuario NUNCA lo ve: el LoginScreen de ESTUDIANTE_ACUDIENTE resuelve con el
+   * código → obtiene el correo interno → signInWithEmailAndPassword → si la sesión de
+   * Firebase es la de cuenta real, se toma el rol ESTUDIANTE_ACUDIENTE.
+   *
+   * El perfil users/{uid} nace role:'ESTUDIANTE_ACUDIENTE' + linkedStudentCode. Las
+   * reglas de Firestore exigen role=='DOCENTE' en CREATE (ver firestore.rules Rondas
+   * 33/40) — por eso la escritura del perfil se hace con la misma técnica del docente
+   * (instancia secundaria que usa el token del usuario NUEVO, dueño del documento).
+   * Ronda 50: se extiende la regla para aceptar también ESTUDIANTE_ACUDIENTE.
+   */
+  static async provisionStudentAccount(studentCode: string, tempPassword: string, studentId: string, studentName: string): Promise<{ uid: string; email: string }> {
+    //
+    // Genera un correo interno determinista a partir del código. Estable y único por
+    // estudiante. No es un correo real: es la IDENTIDAD del estudiante en Firebase Auth.
+    const internalEmail = `estudiante-${studentCode.replace(/[^a-zA-Z0-9]/g, '')}@inas.edu.co`;
+    const secondaryApp = initializeApp({
+      apiKey: firebaseConfigData.apiKey,
+      authDomain: firebaseConfigData.authDomain,
+      projectId: firebaseConfigData.projectId,
+      storageBucket: firebaseConfigData.storageBucket,
+      messagingSenderId: firebaseConfigData.messagingSenderId,
+      appId: firebaseConfigData.appId
+    }, `inas-provisioner-student-${Date.now()}`);
+    try {
+      const secondaryAuth = getAuth(secondaryApp);
+      const dbId = firebaseConfigData.firestoreDatabaseId && firebaseConfigData.firestoreDatabaseId !== '(default)'
+        ? firebaseConfigData.firestoreDatabaseId
+        : undefined;
+      const secondaryDb = dbId ? getFirestore(secondaryApp, dbId) : getFirestore(secondaryApp);
+      let cred;
+      try {
+        cred = await createUserWithEmailAndPassword(secondaryAuth, internalEmail, tempPassword);
+      } catch (e: any) {
+        // Recuperación honesta de huérfanos: si la cuenta ya existe y la clave temporal
+        // sigue siendo válida, reanudar la provisión (intento previo a medio camino).
+        const code = (e && typeof e === 'object' && 'code' in e) ? String((e as any).code) : '';
+        if (code !== 'auth/email-already-in-use') throw e;
+        cred = await signInWithEmailAndPassword(secondaryAuth, internalEmail, tempPassword);
+      }
+      const profile: FirebaseUserProfile = {
+        uid: cred.user.uid,
+        email: internalEmail,
+        displayName: studentName || `Estudiante ${studentCode}`,
+        photoURL: null,
+        role: 'ESTUDIANTE_ACUDIENTE',
+        linkedStudentCode: studentCode
+      };
+      // Misma técnica que el docente: el perfil lo escribe el usuario NUEVO (dueño del
+      // doc) con su propio idToken — así las reglas lo aceptan (request.auth.uid == userId).
+      await setDoc(doc(secondaryDb, 'users', cred.user.uid), {
+        ...profile,
+        updatedAt: serverTimestamp()
+      }, { merge: true });
+      // Espejo local de la ficha del estudiante para que Rectoría sepa el correo/uid.
+      await signOut(secondaryAuth);
+      return { uid: cred.user.uid, email: internalEmail };
+    } finally {
+      try {
+        const idx = getApps().findIndex(a => a.name === secondaryApp.name);
+        if (idx >= 0) await deleteApp(getApps()[idx]);
+      } catch { /* la limpieza del provisioner jamás bloquea el flujo principal */ }
+    }
+  }
+
   /** Espejo nube de la ficha docente (escrito por la sesión ADMIN de Rectoría). */
   static async mirrorTeacherCloud(teacherId: string, mirror: TeacherCloudMirror): Promise<void> {
     try {

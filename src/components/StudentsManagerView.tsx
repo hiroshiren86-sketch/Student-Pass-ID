@@ -23,6 +23,7 @@ import {
 } from 'lucide-react';
 import { Student, SchoolSettings, DocumentType, UserRole } from '../types/attendance';
 import { AttendanceStorageService } from '../services/attendanceStorage';
+import { FirebaseService } from '../services/firebase';
 import { generateStudentCardPdf, downloadPdfBlob } from '../utils/pdfGenerator';
 import { matchStudentFuzzy, normalizeDocumentOrCode } from '../utils/searchHelper';
 import { generateBarcodeDataUrl } from '../utils/barcode';
@@ -237,6 +238,32 @@ export const StudentsManagerView: React.FC<StudentsManagerViewProps> = ({ onGene
     } catch (err) {
       console.error(err);
       alert('Error al generar el carné.');
+    }
+  };
+
+  // Ronda 50 (M3): provee la cuenta REAL de Firebase Auth del estudiante (acceso por
+  // identidad desde cualquier teléfono). Usa la clave temporal del carné como contraseña
+  // inicial y el rol ESTUDIANTE_ACUDIENTE. Si ya hay cuenta, se informa que existe.
+  const handleCreateStudentAccount = async (student: Student) => {
+    const accessKey = student.tempPassword || `SJ-${(student.documentId || student.code).replace(/\D/g, '').slice(-4) || '2026'}`;
+    try {
+      if (student.hasFirebaseAccount) {
+        setToastMessage(`Este estudiante ya tiene cuenta de acceso (${student.authEmail || 'identidad'}). Use "Restablecer" desde Gestión Docentes si olvidó la clave.`);
+        setTimeout(() => setToastMessage(null), 4000);
+        return;
+      }
+      const result = await FirebaseService.provisionStudentAccount(student.code, accessKey, student.code, `${student.firstName} ${student.lastName}`);
+      AttendanceStorageService.updateStudent(student.code, {
+        hasFirebaseAccount: true,
+        authEmail: result.email,
+        authUid: result.uid
+      });
+      refreshList();
+      setToastMessage(`Cuenta de acceso creada para ${student.firstName} ${student.lastName}. El estudiante ya puede entrar desde su teléfono con su código y clave del carné.`);
+      setTimeout(() => setToastMessage(null), 5000);
+    } catch (err: any) {
+      setToastMessage(`No se pudo crear la cuenta de acceso (${FirebaseService.mapAuthError(err)}). Reintente con "Crear Cuenta de Acceso".`);
+      setTimeout(() => setToastMessage(null), 5000);
     }
   };
 
@@ -1058,6 +1085,33 @@ export const StudentsManagerView: React.FC<StudentsManagerViewProps> = ({ onGene
                 </button>
               </div>
             )}
+
+            {/* Ronda 50 (M3): acceso a la nube por identidad — crear cuenta real de Firebase
+                para que el estudiante/acudiente entre desde CUALQUIER teléfono (escaneos,
+                excusas y su grado en la nube). El correo interno se deriva del código: el
+                usuario NUNCA lo ve, entra con su código + clave del carné. */}
+            <div className="p-3 rounded-2xl bg-sky-50 dark:bg-sky-950/30 border border-sky-200 dark:border-sky-800/40 flex items-center justify-between gap-3">
+              <div className="flex items-center gap-2 min-w-0">
+                <KeyRound className="w-4 h-4 text-sky-600 shrink-0" />
+                <div className="min-w-0">
+                  <span className="block text-[9px] font-bold uppercase text-sky-500">Acceso a la nube (identidad)</span>
+                  <span className="font-mono text-[11px] font-black text-slate-900 dark:text-white truncate block">
+                    {inspectStudent.hasFirebaseAccount ? (inspectStudent.authEmail || 'Cuenta creada') : 'Sin cuenta de acceso aún'}
+                  </span>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => handleCreateStudentAccount(inspectStudent)}
+                disabled={inspectStudent.hasFirebaseAccount}
+                className="px-3 py-1.5 rounded-xl bg-sky-600 hover:bg-sky-500 text-white text-[11px] font-bold shadow-sm shadow-sky-600/25 disabled:opacity-40 disabled:cursor-not-allowed flex items-center gap-1.5 shrink-0"
+                title={inspectStudent.hasFirebaseAccount ? 'Ya tiene cuenta de acceso' : 'Crear cuenta de acceso para que entre desde su teléfono'}
+                aria-label="Crear cuenta de acceso"
+              >
+                <KeyRound className="w-3.5 h-3.5" />
+                <span>{inspectStudent.hasFirebaseAccount ? 'Con cuenta' : 'Crear Cuenta de Acceso'}</span>
+              </button>
+            </div>
 
             <div className="flex items-center justify-end gap-2 pt-2">
               <button
