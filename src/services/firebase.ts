@@ -325,7 +325,10 @@ export class FirebaseService {
         photoURL: null,
         role: 'DOCENTE',
         linkedTeacherId: teacherId,
-        mustChangePassword: true
+        // Ronda 52: el cambio de contraseña es OPCIONAL — la clave temporal sirve para
+        // entrar directamente; el docente la cambia por su cuenta desde el menú. Ya no
+        // se fuerza mustChangePassword en el primer ingreso.
+        mustChangePassword: false
       };
       await setDoc(doc(secondaryDb, 'users', cred.user.uid), {
         ...profile,

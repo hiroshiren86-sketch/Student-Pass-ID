@@ -172,12 +172,8 @@ export default function App() {
       if (!teacher) { invalidate(); return; }
       userPayload = { teacher, username: teacher.fullName };
       setActiveTab('teacher');
-      // Ronda 33 (M2): una sesión restaurada que arrastraba cambio obligatorio pendiente
-      // vuelve a forzar el modal (el docente cerró antes de terminar el primer ingreso).
-      if (session.mustChangePassword === true) {
-        setForcedPasswordChange(true);
-        setShowChangePasswordModal(true);
-      }
+      // Ronda 52: el cambio de contraseña es OPCIONAL — una sesión restaurada ya no
+      // arrastra el forzado del modal; el docente entra con la clave temporal vigente.
     } else if (session.role === 'ESTUDIANTE_ACUDIENTE') {
       const student = AttendanceStorageService.getStudents().find(s => s.code === session.studentCode);
       if (!student) { invalidate(); return; }
@@ -204,15 +200,13 @@ export default function App() {
       setLoggedUser({ username: role });
     }
 
-    // Ronda 33 (M2): primer ingreso docente con contraseña temporal — el cambio de
-    // contraseña es OBLIGATORIO antes de usar el portal (mustChangePassword proviene
-    // de users/{uid}, escrito al momento de la provisión de la cuenta).
-    setForcedPasswordChange(role === 'DOCENTE' && userPayload?.mustChangePassword === true);
-    if (role === 'DOCENTE' && userPayload?.mustChangePassword === true) {
-      setShowChangePasswordModal(true);
-    } else {
-      setShowChangePasswordModal(false);
-    }
+    // Ronda 52: el cambio de contraseña es OPCIONAL. La clave temporal del carné
+    // (o la que el propio docente defina) sirve para entrar directamente; NO se
+    // obliga a cambiarla en el primer ingreso. El botón "Cambiar Mi Contraseña"
+    // del menú sigue disponible para quien quiera hacerlo por su cuenta.
+    // (Antes, mustChangePassword=true forzaba el modal y el cambio.)
+    setForcedPasswordChange(false);
+    setShowChangePasswordModal(false);
 
     // Default landing tab per role
     if (role === 'DOCENTE') {
