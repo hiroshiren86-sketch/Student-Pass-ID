@@ -10,6 +10,13 @@ compatibility_flags = ["nodejs_compat"]
 [vars]
 SCHOOL_CODE = "INAS-ANTONIA-SANTOS-2026"
 SCHOOL_NAME = "Institución Educativa Antonia Santos"
+# Ronda 49 (identidad-nube, Opción B): el Worker verifica el ID token de Firebase y lee
+# el ROL del perfil users/{uid} vía Firestore. Estas SON VARS públicas (el proy/BD se ven
+# en firebase-applet-config.json, que es config pública del navegador). Los SECRETS de la
+# cuenta de servicio (FIREBASE_SA_CLIENT_EMAIL / FIREBASE_SA_PRIVATE_KEY) van con
+# `wrangler secret put`, NUNCA aquí.
+FIREBASE_PROJECT_ID = "gen-lang-client-0224520207"
+FIREBASE_DB_ID = "ai-studio-sistemaderegistr-4ed2ba90-8017-4c3e-ad77-5e55392e495f"
 # NOTA: la IA ya NO se integra en el Worker (se ejecuta local en el navegador, BYOK).
 # El secret residual GROQ_API_KEY fue ELIMINADO del dashboard el 01/09/2026 (Ronda 3
 # de AGENTS.md). El Worker no declara ningún secret de IA y no debe volver a hacerlo.

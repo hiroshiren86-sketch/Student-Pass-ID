@@ -7,3 +7,7 @@ coverage/
 .env*
 !.env.example
 .wrangler/
+
+# Credenciales (NO versionar)
+.firebase-sa.json
+.env

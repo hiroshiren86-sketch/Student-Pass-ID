@@ -1,5 +1,6 @@
 import { Student, Teacher, AttendanceRecord, ClassScheduleAssignment, SchoolSettings } from '../types/attendance';
 import { AttendanceStorageService } from './attendanceStorage';
+import { FirebaseService } from './firebase';
 import { compressDataUrl, PHOTO_DATAURL_SOFT_LIMIT } from '../utils/imageCompressor';
 
 export interface CloudflareSyncResult {
@@ -102,7 +103,7 @@ export class CloudflareSyncService {
    * `forceAdmin` fuerza el token de ADMIN para acciones exclusivas de Rectoría
    * (export, purge, log) aunque la sesión activa sea de un docente.
    */
-  private static workerHeaders(forceAdmin = false): Record<string, string> {
+  private static async workerHeaders(forceAdmin = false): Promise<Record<string, string>> {
     const settings = AttendanceStorageService.getSettings();
     const session = AttendanceStorageService.getCurrentSession();
     const isAdmin = forceAdmin || session?.role === 'ADMIN';
@@ -110,12 +111,24 @@ export class CloudflareSyncService {
       ? (settings.cloudflareApiToken || '').trim()
       : ((settings.cloudflareOperatorToken || '').trim() || (settings.cloudflareApiToken || '').trim());
     const deviceId = this.getDeviceId();
-    return {
+    const headers: Record<string, string> = {
       'Content-Type': 'application/json',
       'X-Device-Id': deviceId,
       'X-Device-Name': (settings.schoolName || 'Terminal INAS').slice(0, 80),
       ...(token ? { Authorization: `Bearer ${token}` } : {})
     };
+    // Ronda 49 (identidad-nube): si hay una cuenta REAL de Firebase (Rectoría o DOCENTE),
+    // su ID token viaja para que el Worker autorice por IDENTIDAD Y ROL (no solo por token
+    // de dispositivo). Esto es lo que permite a un docente usar su propio teléfono sin
+    // token de dispositivo: el Worker lee su rol desde Firestore. Aditivo/retrocompat:
+    // si la sesión es anónima o no hay cuenta, no se envía y todo funciona como hoy.
+    try {
+      const fbIdToken = await FirebaseService.getCurrentIdToken();
+      if (fbIdToken) headers['X-Firebase-Id-Token'] = fbIdToken;
+    } catch {
+      // la identidad jamás rompe el sync (sigue el token de dispositivo).
+    }
+    return headers;
   }
 
   /**
@@ -301,7 +314,7 @@ export class CloudflareSyncService {
           const probeUrl = baseUrl.endsWith('/api/sync/pull')
             ? `${baseUrl}?schoolCode=${encodeURIComponent(settings.schoolCode || 'INAS_2026')}`
             : `${baseUrl}/api/sync/pull?schoolCode=${encodeURIComponent(settings.schoolCode || 'INAS_2026')}`;
-          const probe = await fetch(probeUrl, { headers: this.workerHeaders() });
+          const probe = await fetch(probeUrl, { headers: await this.workerHeaders() });
           if (probe.ok) {
             const probeData: any = await probe.json();
             const remoteData = probeData?.data || {};
@@ -345,7 +358,7 @@ export class CloudflareSyncService {
 
       const response = await fetch(pushUrl, {
         method: 'POST',
-        headers: this.workerHeaders(),
+        headers: await this.workerHeaders(),
         body: JSON.stringify(payload)
       });
 
@@ -421,7 +434,7 @@ export class CloudflareSyncService {
 
       const res = await fetch(pullUrl, {
         method: 'GET',
-        headers: this.workerHeaders()
+        headers: await this.workerHeaders()
       });
 
       if (!res.ok) {
@@ -576,7 +589,7 @@ export class CloudflareSyncService {
       const schoolCode = settings.schoolCode || 'INAS_2026';
       const res = await fetch(`${baseUrl}/api/sync/export?schoolCode=${encodeURIComponent(schoolCode)}`, {
         method: 'GET',
-        headers: this.workerHeaders(true)
+        headers: await this.workerHeaders(true)
       });
       const json = await res.json().catch(() => null);
       if (!res.ok || !json?.success) {
@@ -604,7 +617,7 @@ export class CloudflareSyncService {
     try {
       const res = await fetch(`${baseUrl}/api/sync/purge`, {
         method: 'POST',
-        headers: this.workerHeaders(true),
+        headers: await this.workerHeaders(true),
         body: JSON.stringify({ confirm: 'PURGAR', performedBy: performedBy || 'SETTINGS_UI' })
       });
       const json = await res.json().catch(() => null);

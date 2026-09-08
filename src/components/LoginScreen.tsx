@@ -14,6 +14,7 @@ import {
 import { UserRole, Teacher, Student } from '../types/attendance';
 import { AttendanceStorageService } from '../services/attendanceStorage';
 import { FirebaseService } from '../services/firebase';
+import { CloudflareSyncService } from '../services/cloudflareSync';
 
 interface LoginScreenProps {
   onLoginSuccess: (role: UserRole, userPayload?: {
@@ -111,10 +112,25 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onLoginSuccess }) => {
           setIsLoading(false);
           return;
         }
-        const teacher = AttendanceStorageService.getTeachers().find(t => t.id === profile.linkedTeacherId);
+        let teacher = AttendanceStorageService.getTeachers().find(t => t.id === profile.linkedTeacherId);
+        // Ronda 49 (identidad-nube): si el dispositivo no tiene aún la ficha del docente
+        // (teléfono personal nuevo, sin token de dispositivo), se intenta un DESCARGAR (Pull)
+        // por IDENTIDAD — el Worker verifica la cuenta del docente y devuelve SOLO su ficha y
+        // sus grados. Así el docente entra en su propio teléfono sin depender de Rectoría.
+        // Si el pull falla (sin red/URL) se conserva el mensaje honesto de siempre.
+        if (!teacher) {
+          try {
+            const pull = await CloudflareSyncService.pullFromCloudflare();
+            if (pull.success) {
+              teacher = AttendanceStorageService.getTeachers().find(t => t.id === profile.linkedTeacherId);
+            }
+          } catch {
+            /* sin red o sin URL: se degrada al mensaje honesto */
+          }
+        }
         if (!teacher) {
           await FirebaseService.logout();
-          setErrorMessage('Su cuenta es válida, pero este dispositivo aún no tiene su ficha docente. Pida a Rectoría sincronizar este dispositivo.');
+          setErrorMessage('Su cuenta es válida, pero este dispositivo aún no tiene su ficha docente. Revise su conexión a internet y reintente, o pida a Rectoría sincronizar este dispositivo.');
           setIsLoading(false);
           return;
         }

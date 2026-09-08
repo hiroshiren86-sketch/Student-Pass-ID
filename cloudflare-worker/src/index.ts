@@ -8,6 +8,7 @@
 
 import { handleExcusesRoutes } from './excuses';
 import { handlePushRoutes } from './push';
+import { SignJWT, jwtVerify, importPKCS8, importX509 } from 'jose';
 
 // Tipos autocontenidos para Cloudflare Worker Runtime
 export interface D1PreparedStatement {
@@ -72,6 +73,17 @@ export interface Env {
   VAPID_PUBLIC_KEY?: string;   // clave pública P-256 (base64url, 87 chars)
   VAPID_PRIVATE_KEY?: string;  // escalar privado P-256 (base64url, 43 chars)
   VAPID_SUBJECT?: string;      // contacto VAPID (mailto: o https:)
+
+  // Ronda 49 (Identidad-nube, Opción B): cuando el cliente envía un ID token de
+  // Firebase (X-Firebase-Id-Token), el Worker lo VERIFICA (firma RS256 con llaves
+  // públicas de Google) y LEE el ROL del perfil users/{uid} en Firestore vía la
+  // cuenta de servicio. Así la autorización es por IDENTIDAD (el rol del usuario),
+  // no por token de dispositivo. FIREBASE_PROJECT_ID y FIREBASE_DB_ID son VARS
+  // (públicas, en wrangler.toml); la cuenta de servicio va como SECRET.
+  FIREBASE_PROJECT_ID?: string;       // p. ej. gen-lang-client-0224520207
+  FIREBASE_DB_ID?: string;            // p. ej. ai-studio-sistemaderegistr-... (la BD nombrada)
+  FIREBASE_SA_CLIENT_EMAIL?: string;  // SECRET — client_email de la SA
+  FIREBASE_SA_PRIVATE_KEY?: string;   // SECRET — private_key PEM de la SA
 }
 
 // Encabezados de CORS para permitir conexiones seguras desde cualquier frontend o app móvil
@@ -378,6 +390,219 @@ function clientIp(request: Request): string {
   );
 }
 
+// ==============================================================================
+// Ronda 49 (Identidad-nube, Opción B) — ACCESO A LA NUBE POR IDENTIDAD Y ROL.
+//
+// El cliente autenticado (Rectoría / DOCENTE con cuenta Firebase) envía su ID token
+// de Firebase en el header `X-Firebase-Id-Token`. El Worker:
+//   1. VERIFICA el ID token: firma RS256 contra las llaves públicas de Google
+//      (se descargan de securetoken@system.gserviceaccount.com y se cachean).
+//   2. LEE el ROL del perfil users/{uid} en Firestore con la cuenta de servicio
+//      (la "fuente de verdad" del rol — inmutable por reglas; ver firestore.rules).
+//   3. AUTORIZA por rol (ADMIN / DOCENTE / ESTUDIANTE_ACUDIENTE) en cada endpoint.
+//
+// Esto NO reemplaza el token de dispositivo (AUTH_TOKEN / OPERATOR_TOKEN): es una
+// capa ADITIVA. La identidad, cuando está presente y es válida, GANA; si no hay ID
+// token, el Worker usa el scope del token de dispositivo (retrocompat 100%).
+//
+// NOTA de privacidad (Ley 1581): el rol del perfil es un dato mínimo, leído con
+// cuenta de servicio SOLO en el edge, nunca expuesto al cliente. Nunca se filtra
+// asistencia ajena: cada rol ve SOLO lo que le corresponde (ver filterSnapshotByRole).
+// ==============================================================================
+
+// Firebase issuer / audience del proyecto (instalaciones distintas = proyecto distinto).
+function firebaseIssuer(env: Env): string {
+  const proj = env.FIREBASE_PROJECT_ID || 'gen-lang-client-0224520207';
+  return `https://securetoken.google.com/${proj}`;
+}
+function firebaseAudience(env: Env): string {
+  return env.FIREBASE_PROJECT_ID || 'gen-lang-client-0224520207';
+}
+
+// Cache de certificados públicos de Google (rotan ~cada 24h; se cachean 6h).
+let fbCertsCache: { certs: Record<string, string>; fetchedAt: number } | null = null;
+async function getFbCerts(env: Env): Promise<Record<string, string>> {
+  if (fbCertsCache && Date.now() - fbCertsCache.fetchedAt < 6 * 60 * 60 * 1000) {
+    return fbCertsCache.certs;
+  }
+  const res = await fetch('https://www.googleapis.com/robot/v1/metadata/x509/securetoken@system.gserviceaccount.com');
+  if (!res.ok) throw new Error('No se pudo obtener los certificados de Firebase');
+  const certs = await res.json() as Record<string, string>;
+  fbCertsCache = { certs, fetchedAt: Date.now() };
+  return certs;
+}
+
+// Cache de CryptoKeys por kid (evita re-importar X.509 en cada verificación).
+let fbKeyCache: Record<string, any> = {};
+// Cache del perfil users/{uid} por ~60s (evita golpear Firestore en cada auto-sync).
+const fbProfileCache = new Map<string, { profile: FbProfile; fetchedAt: number }>();
+
+// Cache del access_token de la cuenta de servicio (vence ~1h; se cachea 50min).
+let saCache: { token: string; expiresAt: number } | null = null;
+async function getSaAccessToken(env: Env): Promise<string> {
+  if (saCache && Date.now() < saCache.expiresAt) return saCache.token;
+  const email = env.FIREBASE_SA_CLIENT_EMAIL;
+  const pk = env.FIREBASE_SA_PRIVATE_KEY;
+  if (!email || !pk) throw new Error('Firebase SA no configurada (FIREBASE_SA_CLIENT_EMAIL / FIREBASE_SA_PRIVATE_KEY).');
+  const now = Math.floor(Date.now() / 1000);
+  const key = await importPKCS8(pk.replace(/\\n/g, '\n'), 'RS256');
+  // El flujo "service account" de Google exige el claim `scope` (espacios) en el JWT:
+  // cloud-platform para Firestore y firebase para leer users/{uid}.
+  const assertion = await new SignJWT({ scope: 'https://www.googleapis.com/auth/cloud-platform https://www.googleapis.com/auth/firebase' })
+    .setProtectedHeader({ alg: 'RS256', typ: 'JWT' })
+    .setSubject(email)
+    .setIssuer(email)
+    .setAudience('https://oauth2.googleapis.com/token')
+    .setIssuedAt(now)
+    .setExpirationTime(now + 3600)
+    .sign(key);
+  const res = await fetch('https://oauth2.googleapis.com/token', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({
+      grant_type: 'urn:ietf:params:oauth:grant-type:jwt-bearer',
+      assertion
+    }).toString()
+  });
+  const json = await res.json() as any;
+  if (!json.access_token) throw new Error('No se pudo obtener access_token de la SA: ' + (json.error_description || json.error || res.status));
+  saCache = { token: json.access_token, expiresAt: Date.now() + 50 * 60 * 1000 };
+  return json.access_token;
+}
+
+interface FbProfile { role?: string; linkedTeacherId?: string; linkedStudentCode?: string }
+interface FbIdentity { uid: string; profile: FbProfile }
+
+// Lee el perfil users/{uid} de Firestore vía REST con la SA (la fuente del rol).
+async function readFbUserProfile(env: Env, uid: string): Promise<FbProfile> {
+  const proj = env.FIREBASE_PROJECT_ID || 'gen-lang-client-0224520207';
+  const db = encodeURIComponent(env.FIREBASE_DB_ID || '(default)');
+  const token = await getSaAccessToken(env);
+  const res = await fetch(
+    `https://firestore.googleapis.com/v1/projects/${proj}/databases/${db}/documents/users/${encodeURIComponent(uid)}`,
+    { headers: { Authorization: `Bearer ${token}` } }
+  );
+  if (res.status === 404) return {}; // usuario sin perfil
+  if (!res.ok) throw new Error('Firestore read falló: ' + res.status);
+  const doc = await res.json() as any;
+  const f = doc.fields || {};
+  const sv = (v: any) => v?.stringValue;
+  return {
+    role: f.role ? sv(f.role) : undefined,
+    linkedTeacherId: f.linkedTeacherId ? sv(f.linkedTeacherId) : undefined,
+    linkedStudentCode: f.linkedStudentCode ? sv(f.linkedStudentCode) : undefined
+  };
+}
+
+// Verifica el ID token y devuelve la identidad (uid + rol del perfil). null si no hay.
+export async function verifyFirebaseIdentity(request: Request, env: Env): Promise<FbIdentity | null> {
+  const token = request.headers.get('X-Firebase-Id-Token');
+  if (!token) return null;
+  try {
+    const certs = await getFbCerts(env);
+    const header = JSON.parse(Buffer.from(token.split('.')[0], 'base64url').toString('utf8'));
+    const pem = certs[header.kid];
+    if (!pem) throw new Error('No hay certificado para el kid ' + header.kid);
+    let key = fbKeyCache[header.kid];
+    if (!key) {
+      key = await importX509(pem, 'RS256');
+      fbKeyCache[header.kid] = key;
+    }
+    const { payload } = await jwtVerify(token, key, {
+      issuer: firebaseIssuer(env),
+      audience: firebaseAudience(env)
+    });
+    const uid = String(payload.sub);
+    const cachedProfile = fbProfileCache.get(uid);
+    if (cachedProfile && Date.now() - cachedProfile.fetchedAt < 60 * 1000) {
+      return { uid, profile: cachedProfile.profile };
+    }
+    const profile = await readFbUserProfile(env, uid);
+    fbProfileCache.set(uid, { profile, fetchedAt: Date.now() });
+    return { uid, profile };
+  } catch (e: any) {
+    console.warn('[identity] ID token no verificado:', e?.message || e);
+    return null;
+  }
+}
+
+type IdentityRole = 'ADMIN' | 'DOCENTE' | 'ESTUDIANTE_ACUDIENTE';
+
+// Autorización resuelta: puede venir de la IDENTIDAD (Firebase, si hay token válido) o,
+// en su defecto, del scope del token de dispositivo (retrocompat). El rol resultante es
+// el que arbitra permisos de lectura/escritura por endpoint.
+export interface Authz {
+  source: 'identity' | 'token';
+  role: string;                       // 'ADMIN' | 'OPERATOR' | 'DOCENTE' | 'ESTUDIANTE_ACUDIENTE'
+  uid?: string;
+  linkedTeacherId?: string;
+  linkedStudentCode?: string;
+  // true si puede escribir el CATÁLOGO (estudiantes/docentes/horarios/slots).
+  canWriteCatalog: boolean;
+}
+async function resolveAuthz(request: Request, env: Env): Promise<Authz | null> {
+  const identity = await verifyFirebaseIdentity(request, env);
+  if (identity && identity.profile.role) {
+    const r = identity.profile.role as IdentityRole;
+    return {
+      source: 'identity',
+      role: r,
+      uid: identity.uid,
+      linkedTeacherId: identity.profile.linkedTeacherId,
+      linkedStudentCode: identity.profile.linkedStudentCode,
+      canWriteCatalog: r === 'ADMIN'
+    };
+  }
+  // Sin identidad (o verificación fallida) → scope del token de dispositivo.
+  // resolveTokenScope devuelve 'ADMIN' solo en modo abierto (sin tokens configurados);
+  // devuelve null cuando hay tokens pero ninguno matchea (credencial inválida).
+  const tokenRole = resolveTokenScope(request, env);
+  if (tokenRole === null) return null; // no autenticado (ni identidad ni device token válido)
+  return {
+    source: 'token',
+    role: tokenRole,
+    canWriteCatalog: tokenRole === 'ADMIN'
+  };
+}
+
+// Filtra el snapshot según el rol, para que cada identidad vea SOLO lo que le corresponde
+// (mínimo privilegio / Ley 1581). ADMIN (y token-admin) devuelve todo intacto.
+export function filterSnapshotByRole(data: any, authz: Authz): any {
+  if (!data || authz.role === 'ADMIN' || authz.role === 'OPERATOR') return data;
+
+  if (authz.role === 'DOCENTE') {
+    // El docente ve SOLO sus cursos asignados (assignedGrades de SU ficha, en el snapshot).
+    const teachers = Array.isArray(data.teachers) ? data.teachers : [];
+    const self = teachers.find((t: any) => String(t.id) === String(authz.linkedTeacherId));
+    const grades = new Set<string>(Array.isArray(self?.assignedGrades) ? self.assignedGrades : []);
+    return {
+      ...data,
+      students: Array.isArray(data.students) ? data.students.filter((s: any) => grades.has(s.grade)) : [],
+      assignments: Array.isArray(data.assignments) ? data.assignments.filter((a: any) => grades.has(a.grade)) : [],
+      records: Array.isArray(data.records) ? data.records.filter((r: any) => grades.has(r.studentGrade || r.grade)) : [],
+      teachers: self ? [self] : [],
+      scopedFor: { role: 'DOCENTE', grades: Array.from(grades), teacherId: authz.linkedTeacherId }
+    };
+  }
+
+  if (authz.role === 'ESTUDIANTE_ACUDIENTE') {
+    const students = Array.isArray(data.students) ? data.students : [];
+    const self = students.find((s: any) => String(s.code) === String(authz.linkedStudentCode));
+    const grade = self?.grade;
+    const codes = new Set<string>(String(authz.linkedStudentCode) ? [String(authz.linkedStudentCode)] : []);
+    return {
+      ...data,
+      students: Array.isArray(data.students) ? data.students.filter((s: any) => (grade && s.grade === grade)) : [],
+      assignments: Array.isArray(data.assignments) ? data.assignments.filter((a: any) => grade && a.grade === grade) : [],
+      records: Array.isArray(data.records) ? data.records.filter((r: any) => codes.has(r.studentCode)) : [],
+      teachers: [],
+      scopedFor: { role: 'ESTUDIANTE_ACUDIENTE', grade, studentCode: authz.linkedStudentCode }
+    };
+  }
+
+  return data;
+}
+
 export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     // 1. Manejo de preflight OPTIONS para navegadores web
@@ -427,9 +652,14 @@ export default {
         }, 410);
       }
 
-      // Validar autenticación para el resto de rutas de datos
-      if (!verifyAuth(request, env)) {
-        return errorResponse('No autorizado. Token de seguridad inválido o ausente.', 401);
+      // Validar autenticación para el resto de rutas de datos. Ronda 49 (identidad-nube):
+      // una credencial VÁLIDA puede ser un ID token de Firebase (identidad) o el token de
+      // dispositivo (AUTH_TOKEN / OPERATOR_TOKEN). resolveAuthz unifica ambos y devuelve
+      // null solo si NO hay ninguna credencial válida. Si no está configurada la SA, la
+      // identidad se degrada silenciosamente al token de dispositivo (retrocompat 100%).
+      const authz = await resolveAuthz(request, env);
+      if (!authz) {
+        return errorResponse('No autorizado. Credencial inválida o ausente.', 401);
       }
 
       // =========================================================================
@@ -453,10 +683,10 @@ export default {
         //   catalog_version. Un terminal con el catálogo viejo ya no puede aplastar los
         //   cambios de Rectoría.
         // =========================================================================
-        const tokenRole = resolveTokenScope(request, env) || 'ADMIN';
+        const tokenRole = authz.role; // 'ADMIN'|'OPERATOR' (token) o 'ADMIN'|'DOCENTE'|'ESTUDIANTE_ACUDIENTE' (identidad)
         const device = getDeviceContext(request, body, env);
-        const isOperator = tokenRole === 'OPERATOR';
-        const isAdmin = !isOperator; // ADMIN o modo abierto (retrocompat)
+        const isAdmin = authz.canWriteCatalog; // solo ADMIN (token o identidad) escribe catálogo
+        const isOperator = !isAdmin; // OPERATOR (token) o DOCENTE/ESTUDIANTE (identidad) → solo hechos
         const bodyCatalogVersion = (typeof body.catalogVersion === 'number') ? body.catalogVersion : null;
 
         // Flanco 3 — CAS de catálogo para pushes ADMIN: si el terminal declara una
@@ -706,19 +936,30 @@ export default {
       if (path === '/api/sync/pull' && request.method === 'GET') {
         const schoolCode = url.searchParams.get('schoolCode') || env.SCHOOL_CODE || 'INAS-ANTONIA-SANTOS-2026';
 
+        // Ronda 49 (identidad-nube): el contenido se ESPECIALIZA según el rol de la identidad.
+        // Un docente/representante ve SOLO su matrícula y su planilla (mínimo privilegio /
+        // Ley 1581); Rectoría (ADMIN) ve todo. Un terminal con token de dispositivo (sin
+        // identidad) sigue viendo todo como hoy (retrocompat).
+        const scoped = filterSnapshotByRole;
+        const respondWith = (data: any, source: string, syncedAt: string, catalogVersion: number) => {
+          const finalData = scoped(data, authz);
+          return jsonResponse({
+            success: true,
+            source,
+            syncedAt,
+            catalogVersion,
+            data: finalData,
+            scope: authz.source === 'identity' ? authz.role : 'FULL'
+          });
+        };
+
         // Primero intentar lectura ultrarrápida desde KV
         if (env.ATTENDANCE_KV) {
           const cached = await env.ATTENDANCE_KV.get(`latest_snapshot_${schoolCode}`, 'json') as any;
           if (cached && cached.data) {
             await injectExcuseLinks(env, cached.data);
             const catalogVersion = await getCatalogVersion(env, schoolCode);
-            return jsonResponse({
-              success: true,
-              source: 'Cloudflare KV (Ultra-Fast Edge Cache)',
-              syncedAt: cached.syncedAt,
-              catalogVersion,
-              data: cached.data
-            });
+            return respondWith(cached.data, 'Cloudflare KV (Ultra-Fast Edge Cache)', cached.syncedAt, catalogVersion);
           }
         }
 
@@ -732,13 +973,7 @@ export default {
             const data = JSON.parse(row.data_json);
             await injectExcuseLinks(env, data);
             const catalogVersion = await getCatalogVersion(env, schoolCode);
-            return jsonResponse({
-              success: true,
-              source: 'Cloudflare D1 Database',
-              syncedAt: row.updated_at,
-              catalogVersion,
-              data
-            });
+            return respondWith(data, 'Cloudflare D1 Database', row.updated_at, catalogVersion);
           }
         }
 
@@ -751,8 +986,7 @@ export default {
       // trazabilidad de otros terminales). Se trunca a los últimos 100 registros.
       // =========================================================================
       if (path === '/api/sync/log' && request.method === 'GET') {
-        const tokenRole = resolveTokenScope(request, env);
-        if (tokenRole !== 'ADMIN') {
+        if (authz.role !== 'ADMIN') {
           return errorResponse('Solo Rectoría (ADMIN) puede consultar el registro de sincronización.', 403);
         }
         if (!env.DB) {

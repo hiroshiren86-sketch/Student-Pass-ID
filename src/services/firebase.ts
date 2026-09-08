@@ -10,6 +10,7 @@ import {
   EmailAuthProvider,
   sendPasswordResetEmail,
   createUserWithEmailAndPassword,
+  getIdToken,
   User as FirebaseUser
 } from 'firebase/auth';
 import { initializeAppCheck, ReCaptchaV3Provider, getToken as getAppCheckToken } from 'firebase/app-check';
@@ -492,6 +493,25 @@ export class FirebaseService {
     }
     console.warn('Firestore: perfil no legible tras reintentos:', lastErr);
     return null;
+  }
+
+  /**
+   * Ronda 49 (identidad-nube, Opción B): devuelve el ID token de Firebase del usuario
+   * autenticado con CUENTA REAL (Rectoría o DOCENTE). El Worker lo verifica (firma
+   * RS256) y lee el ROL del perfil users/{uid}, autorizando por identidad y no por
+   * token de dispositivo. Devuelve null si la sesión no es real (anónima/sin sesión)
+   * — en ese caso el cliente envía solo el token de dispositivo (retrocompat).
+   */
+  static async getCurrentIdToken(): Promise<string | null> {
+    try {
+      const auth = getFirebaseAuth();
+      const user = auth?.currentUser;
+      if (!user || user.isAnonymous || user.providerData.length === 0) return null;
+      return await getIdToken(user);
+    } catch (e) {
+      console.warn('[Firebase] No se pudo obtener ID token de identidad:', e);
+      return null;
+    }
   }
 
   /**

@@ -9,7 +9,9 @@
     "db:init": "wrangler d1 execute inas_attendance_db --file=./schema.sql",
     "db:init:local": "wrangler d1 execute inas_attendance_db --local --file=./schema.sql"
   },
-  "dependencies": {},
+  "dependencies": {
+    "jose": "^5.10.0"
+  },
   "devDependencies": {
     "@cloudflare/workers-types": "^4.20240923.0",
     "typescript": "^5.5.4",
