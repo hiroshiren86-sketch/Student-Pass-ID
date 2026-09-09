@@ -1,0 +1,14 @@
+import { chromium } from './node_modules/playwright/index.mjs';
+const browser = await chromium.launch({ headless: true });
+const ctx = await browser.newContext({ locale: 'es-CO', timezoneId: 'America/Bogota' });
+const page = await ctx.newPage();
+page.setDefaultTimeout(45000);
+await page.goto('https://student-pass-id.pages.dev', { waitUntil: 'domcontentloaded', timeout: 90000 });
+await page.waitForTimeout(3000);
+const title = await page.title();
+const bodyText = (await page.locator('body').innerText().catch(()=> '')).slice(0, 400);
+console.log('TITLE:', title);
+console.log('BODY:', JSON.stringify(bodyText).slice(0, 400));
+await page.screenshot({ path: '/tmp/smoke.png' });
+console.log('SCREENSHOT ok');
+await browser.close();
