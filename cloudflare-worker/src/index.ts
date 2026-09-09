@@ -733,7 +733,32 @@ export default {
         // 1. Guardar Snapshot en D1 — SOLO en push de catálogo (ADMIN). Un operador
         //    NO reemplaza el snapshot (su catálogo podría estar obsoleto); solo fusiona
         //    sus hechos en el snapshot vigente (ver camino de operador más abajo).
+        //    Ronda 53 (FIX PÉRDIDA DE DATOS): el push ADMIN reemplazaba el snapshot con
+        //    `data` tal cual, y el cliente manda `records` capado a los últimos 500
+        //    (slice(0,500)). Resultado: a partir de 500 registros, el snapshot (que sirve
+        //    /api/sync/pull) perdía los más antiguos → planillas/clientes con datos en falta
+        //    a escala (un día completo de escaneos ≈ 500+, una semana ≫ 500). Como la
+        //    matrícula SÍ es de Rectoría (catálogo) pero los HECHOS (asistencia/excusas) los
+        //    capturan docentes/estudiantes, el catálogo entrante se conserva y SOLO se
+        //    FUSIONAN los records por id+updatedAt (misma primitiva `mergeRecordsByUpdatedAt`
+        //    del camino operador), preservando el histórico acumulado. Es ADITIVO: jamás
+        //    borra un registro que ya estaba en el snapshot.
+        let adminSnapshotData: any = data;
+        let adminRecordsCount = records.length;
         if (isAdmin && env.DB) {
+          try {
+            const existingSnapshot = await env.DB.prepare(
+              `SELECT data_json FROM sync_snapshots WHERE id = ?`
+            ).bind(`snapshot_${schoolCode}`).first<{ data_json: string }>();
+            if (existingSnapshot?.data_json) {
+              const prev = JSON.parse(existingSnapshot.data_json);
+              const mergedRecords = mergeRecordsByUpdatedAt(prev.records || [], records);
+              adminSnapshotData = { ...data, records: mergedRecords };
+              adminRecordsCount = mergedRecords.length;
+            }
+          } catch {
+            /* snapshot corrupto o lectura fallida: usar el payload entrante tal cual (comportamiento previo) */
+          }
           await env.DB.prepare(
             `INSERT OR REPLACE INTO sync_snapshots (id, school_code, school_name, data_json, students_count, records_count, updated_at)
              VALUES (?, ?, ?, ?, ?, ?, datetime('now'))`
@@ -741,9 +766,9 @@ export default {
             `snapshot_${schoolCode}`,
             schoolCode,
             body.schoolName || env.SCHOOL_NAME || '',
-            JSON.stringify(data),
+            JSON.stringify(adminSnapshotData),
             students.length,
-            records.length
+            adminRecordsCount
           ).run();
 
           // 2. Guardar Estudiantes en tabla relacional D1 en batches
@@ -889,8 +914,8 @@ export default {
           await env.ATTENDANCE_KV.put(`latest_snapshot_${schoolCode}`, JSON.stringify({
             syncedAt: new Date().toISOString(),
             studentsCount: students.length,
-            recordsCount: records.length,
-            data
+            recordsCount: adminRecordsCount,
+            data: adminSnapshotData
           }));
           // Guardar índice de estudiantes para validación rápida de QR en portería
           const studentIndex: Record<string, any> = {};
