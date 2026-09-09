@@ -182,6 +182,9 @@ export interface AttendanceRecord {
   teacherId?: string;     // ID del docente
   teacherName: string;    // Nombre del docente a cargo
   timestamp: string;      // ISO String
+  // Ronda 54 (hueco #4): versión de SERVIDOR del registro (asignada por el Worker en el push).
+  // Arbitra el LWW de forma determinista (inmune a relojes de dispositivo). Opcional/retrocompat.
+  serverUpdatedAt?: string;
   date: string;           // YYYY-MM-DD en America/Bogota
   time: string;           // HH:mm:ss
   type: AttendanceType;   // 'CLASE'
@@ -347,6 +350,10 @@ export interface SchoolSettings {
   // Ronda 47 (Fase 2 — Flanco 3): versión de catálogo conocida por este terminal. Se
   // actualiza en cada Pull y se envía en cada push de catálogo para el CAS (409 si obsoleta).
   cloudflareCatalogVersion?: number;
+  // Ronda 54 — PULL INCREMENTAL: cursor (timestamp de servidor de la última sync) usado
+  // para que el pull de hechos (`scope=facts`) baje SOLO los registros nuevos. Nunca
+  // retrocede (re-bajar registros no pierde datos pero es innecesario). Opcional/retrocompat.
+  cloudflareLastSyncedAt?: string;
 }
 
 export interface SubjectAttendanceSummary {
@@ -462,6 +469,15 @@ export interface OfflineQueueItem {
   subject: string;
   method: AttendanceMethod;
   retryCount: number;
+  // Ronda 54 (hueco #1): idempotency key estable por operación + el payload completo del
+  // registro para re-play en orden sin re-consultar el estado (el snapshot puede ya no tenerlo).
+  opId?: string;
+  payload?: AttendanceRecord;
+  // Ronda 54 (hueco #1): estado del replay. 'PENDING' → 'SENT'/'FAILED'. SENT se conserva un
+  // tiempo como dedup (no se reenvía); FAILED se reintenta en el próximo replay.
+  status?: 'PENDING' | 'SENT' | 'FAILED';
+  // Ronda 54 (hueco #6): marca de convergencia para observabilidad.
+  appliedAt?: string;
 }
 
 export interface FrequentAbsentee {

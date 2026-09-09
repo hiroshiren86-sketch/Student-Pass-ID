@@ -280,9 +280,19 @@ async function logDeviceSync(env: Env, entry: {
   } catch { /* el log jamás rompe el push */ }
 }
 
-// Merge de HECHOS por id + updatedAt (Flanco 4): el updatedAt del DATO decide; si el
-// registro previo no trae updatedAt, el entrante gana. Se usa para fusionar los registros
-// del operador dentro del snapshot vigente sin machacar el catálogo.
+// Version de un registro para merge LWW (Flanco 4 + Ronda 54 hueco #4):
+//  1) serverUpdatedAt — asignada por el SERVIDOR en el push (determinista, inmune a
+//     relojes de dispositivo desincronizados / clock-skew). Es la fuente de verdad.
+//  2) updatedAt / timestamp — versiones locales heredadas (fallback).
+// Nunca vacío → '' (un registro sin versión nunca gana a uno con versión).
+export function recordVersion(r: any): string {
+  return (r && (r.serverUpdatedAt || r.updatedAt || r.timestamp)) || '';
+}
+
+// Merge de HECHOS por id + versión (Flanco 4 + hueco #4): la versión del DATO decide;
+// si el registro previo no trae versión, el entrante gana. Se usa para fusionar los
+// registros del operador dentro del snapshot vigente sin machacar el catálogo, y para
+// preservar el histórico acumulado en el push ADMIN (Ronda 53).
 export function mergeRecordsByUpdatedAt(existing: any[], incoming: any[]): any[] {
   const map = new Map<string, any>();
   for (const r of existing || []) if (r && r.id) map.set(String(r.id), r);
@@ -290,13 +300,13 @@ export function mergeRecordsByUpdatedAt(existing: any[], incoming: any[]): any[]
     if (!r || !r.id) continue;
     const prev = map.get(String(r.id));
     if (!prev) { map.set(String(r.id), r); continue; }
-    const prevA = prev.updatedAt || prev.timestamp || '';
-    const inA = r.updatedAt || r.timestamp || '';
-    // Gana el más nuevo por updatedAt (o timestamp como fallback). Reglas:
-    //  - entrante SIN fecha: solo gana si el previo tampoco la tiene (no pisar dato
+    const prevA = recordVersion(prev);
+    const inA = recordVersion(r);
+    // Gana el más nuevo por versión (serverUpdatedAt → updatedAt → timestamp). Reglas:
+    //  - entrante SIN versión: solo gana si el previo tampoco la tiene (no pisar dato
     //    fechado con uno sin fecha).
-    //  - previo SIN fecha: el entrante gana (el previo es no-datable, se confía en el push).
-    //  - ambos con fecha: gana el mayor; empate → entrante.
+    //  - previo SIN versión: el entrante gana (el previo es no-datable, se confía en el push).
+    //  - ambos con versión: gana el mayor; empate → entrante.
     if (!inA) {
       if (!prevA) map.set(String(r.id), r);
     } else if (!prevA || inA >= prevA) {
@@ -304,6 +314,20 @@ export function mergeRecordsByUpdatedAt(existing: any[], incoming: any[]): any[]
     }
   }
   return Array.from(map.values());
+}
+
+// Ronda 54 (hueco #4) — SELLO DE VERSIÓN DE SERVIDOR. Tras fusionar, el Worker asigna a
+// CADA registro la versión monotónica del servidor (`serverUpdatedAt = now`), sobrescribiendo
+// cualquier timestamp local. Así el LWW de cada registro queda DETERMINISTA: es "el que el
+// servidor procesó más tarde", no "el que el reloj del dispositivo dijo más tarde". Solo
+// marca los registros que el push realmente tocó (los heredados conservan su versión previa).
+// Devuelve los registros ya sellados.
+export function stampServerVersion(records: any[]): any[] {
+  const now = new Date().toISOString();
+  return (records || []).map((r: any) => {
+    if (!r || !r.id) return r;
+    return { ...r, serverUpdatedAt: now };
+  });
 }
 
 // ==============================================================================
@@ -608,6 +632,73 @@ export function filterSnapshotByRole(data: any, authz: Authz): any {
   return data;
 }
 
+// ==============================================================================
+// Ronda 54 — PULL INCREMENTAL (`since`) + PULL DE HECHOS (`scope=facts`).
+// `filterRecordsSince`: conserva solo los registros con updatedAt/timestamp >= `since`.
+// Un registro sin fecha jamás se descarta (mejor tenerlo de más que perderlo). Sin
+// `since` devuelve todo (retrocompat 100%). Se aplica después del scoping por rol.
+// `scope=facts` pide SOLO los hechos (records): útil para que Rectoría baje los
+// escaneos que hicieron docentes/estudiantes SIN reemplazar su catálogo local.
+// ==============================================================================
+export function filterRecordsSince(records: any[], since?: string | null): any[] {
+  if (!since || !Array.isArray(records)) return records || [];
+  const t = Date.parse(since);
+  if (Number.isNaN(t)) return records || [];
+  return records.filter((r: any) => {
+    // Ronda 54 (hueco #4): comparar por la VERSIÓN DE SERVIDOR (serverUpdatedAt) primero,
+    // porque un dispositivo con el reloj atrasado podría subir un hecho con `timestamp`
+    // anterior al cursor; si filtráramos por timestamp local, ese hecho NUNCA se bajaría
+    // en el pull incremental (clock-skew). La versión del servidor es monotónica y lo resuelve.
+    const stamp = r && (r.serverUpdatedAt || r.updatedAt || r.timestamp || '');
+    if (!stamp) return true;             // sin fecha → conservar
+    const s = Date.parse(stamp);
+    if (Number.isNaN(s)) return true;    // fecha ilegible → conservar
+    return s >= t;
+  });
+}
+
+// ==============================================================================
+// Ronda 54 (hueco #5) — TOMBSTONES / SOFT-DELETE. Un estudiante o docente eliminado en un
+// dispositivo debe PRODUCIRSE a los demás y NO resucitar en el próximo pull. Al eliminar,
+// el cliente crea un tombstone `{ id, type: 'student'|'teacher', deletedAt }` que viaja en
+// el push. El Worker lo conserva en el snapshot y, al servir el pull, FILTRA los catálogos
+// para que ningún terminal vuelva a recibir la entidad borrada. Los registros de asistencia
+// de un estudiante eliminado se conservan (Ley 1581: el agregado NO se pierde), pero la
+// entidad ya no aparece en la matrícula (no resucita).
+// ==============================================================================
+export function applyTombstones(data: any): any {
+  if (!data) return data;
+  const tombstones: any[] = Array.isArray(data.tombstones) ? data.tombstones : [];
+  if (tombstones.length === 0) return data;
+  const studentIds = new Set<string>();
+  const teacherIds = new Set<string>();
+  for (const t of tombstones) {
+    if (!t || !t.id) continue;
+    if (t.type === 'teacher') teacherIds.add(String(t.id));
+    else studentIds.add(String(t.id));
+  }
+  const result: any = { ...data };
+  if (Array.isArray(data.students) && studentIds.size > 0) {
+    result.students = data.students.filter((s: any) => s && !studentIds.has(String(s.code)));
+  }
+  if (Array.isArray(data.teachers) && teacherIds.size > 0) {
+    result.teachers = data.teachers.filter((t: any) => t && !teacherIds.has(String(t.id)));
+  }
+  // Records: se conservan (agregado), pero se retira el identificador personal si la entidad
+  // fue eliminada, cumpliendo la minimización de la Ley 1581 (anonimización, no borrado).
+  if (Array.isArray(data.records) && studentIds.size > 0) {
+    result.records = data.records.map((r: any) => {
+      if (!r) return r;
+      if (r.studentCode && studentIds.has(String(r.studentCode))) {
+        const { studentName: _n, studentCode: _c, studentDocument: _d, ...rest } = r;
+        return { ...(rest as any), studentName: 'Estudiante retirado', studentCode: `RET-${String(r.studentCode).slice(0, 8)}`, studentDocument: '_anon' };
+      }
+      return r;
+    });
+  }
+  return result;
+}
+
 export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     // 1. Manejo de preflight OPTIONS para navegadores web
@@ -694,6 +785,33 @@ export default {
         const isOperator = !isAdmin; // OPERATOR (token) o DOCENTE/ESTUDIANTE (identidad) → solo hechos
         const bodyCatalogVersion = (typeof body.catalogVersion === 'number') ? body.catalogVersion : null;
 
+        // Ronda 54 (hueco #2) — IDEMPOTENCIA POR `opId` (at-least-once sin duplicados).
+        // El cliente envía un opId ESTABLE por push (hash del payload). Si el Worker ya
+        // procesó ese opId (reintento de un push que llegó pero cuya respuesta se perdió),
+        // devuelve el resultado con `deduplicated:true` SIN volver a aplicar el snapshot
+        // ni a incrementar catalog_version. Se guarda en KV con TTL (dedup ventana).
+        // Sin `opId` (clientes viejos) se omite por completo: comportamiento previo.
+        const opId = typeof body.opId === 'string' && body.opId.trim() ? body.opId.trim() : null;
+        if (opId && env.ATTENDANCE_KV) {
+          try {
+            const dedupKey = `sync_opid_${schoolCode}_${opId}`;
+            const prior = await env.ATTENDANCE_KV.get(dedupKey, 'json') as any;
+            if (prior && prior.ok) {
+              return jsonResponse({
+                success: true,
+                deduplicated: true,
+                message: 'Push ya procesado (opId duplicado): resultado devuelto sin re-aplicar.',
+                catalogVersion: prior.catalogVersion ?? null,
+                studentsSaved: prior.studentsSaved ?? 0,
+                recordsSaved: prior.recordsSaved ?? 0,
+                timestamp: prior.timestamp || new Date().toISOString()
+              });
+            }
+          } catch {
+            /* si el guard de dedup falla, el push sigue su curso (at-least-once) */
+          }
+        }
+
         // Flanco 3 — CAS de catálogo para pushes ADMIN: si el terminal declara una
         // catalog_version MENOR que la vigente, Rectoría no debe pisar la nube sin antes
         // re-ubicarse. Solo se aplica si el cliente la envía (retrocompat: clientes viejos
@@ -745,6 +863,7 @@ export default {
         //    borra un registro que ya estaba en el snapshot.
         let adminSnapshotData: any = data;
         let adminRecordsCount = records.length;
+        let prevTombstones: any[] = [];
         if (isAdmin && env.DB) {
           try {
             const existingSnapshot = await env.DB.prepare(
@@ -755,10 +874,24 @@ export default {
               const mergedRecords = mergeRecordsByUpdatedAt(prev.records || [], records);
               adminSnapshotData = { ...data, records: mergedRecords };
               adminRecordsCount = mergedRecords.length;
+              prevTombstones = Array.isArray(prev.tombstones) ? prev.tombstones : [];
             }
           } catch {
             /* snapshot corrupto o lectura fallida: usar el payload entrante tal cual (comportamiento previo) */
           }
+          // Ronda 54 (hueco #4): sellar la versión de SERVIDOR en cada registro del snapshot.
+          // Esto hace el LWW determinista: los registros que este push tocó quedan con
+          // `serverUpdatedAt = now`; los heredados conservan su versión previa.
+          // Ronda 54 (hueco #5): conservar el histórico de tombstones (unión con los previos),
+          // para que una entidad borrada NUNCA resucite en el próximo pull.
+          const incomingTombstones: any[] = Array.isArray(adminSnapshotData.tombstones) ? adminSnapshotData.tombstones : [];
+          const mergedTombstones = mergeRecordsByUpdatedAt(prevTombstones, incomingTombstones);
+          adminSnapshotData = {
+            ...adminSnapshotData,
+            records: stampServerVersion(adminSnapshotData.records || []),
+            tombstones: mergedTombstones
+          };
+          adminRecordsCount = adminSnapshotData.records.length;
           await env.DB.prepare(
             `INSERT OR REPLACE INTO sync_snapshots (id, school_code, school_name, data_json, students_count, records_count, updated_at)
              VALUES (?, ?, ?, ?, ?, ?, datetime('now'))`
@@ -811,6 +944,10 @@ export default {
           }
         }
 
+        // Ronda 54 (hueco #6): contador de registros fusionados sobre existentes (conflictos
+        // resueltos por versión). Se expone en la respuesta del push para medir convergencia.
+        let pushFusedCount = 0;
+
         // 2b. CAMINO DE OPERADOR (Flanco 1): si solo trae HECHOS (OPERATOR_TOKEN), fusiona
         //     sus registros en el snapshot vigente SIN tocar el catálogo. Así un terminal con
         //     el catálogo viejo no aplasta los cambios de Rectoría; solo aporta las asistencias
@@ -826,6 +963,9 @@ export default {
             let catalogCount = 0;
             if (existing?.data_json) {
               const prev = JSON.parse(existing.data_json);
+              const prevById = new Map<string, any>((prev.records || []).map((r: any) => [String(r.id), r]));
+              // Ronda 54 (hueco #6): registros que YA existían y se resuelven por LWW (conflicto).
+              pushFusedCount = records.filter((r: any) => r && r.id && prevById.has(String(r.id))).length;
               mergedRecords = mergeRecordsByUpdatedAt(prev.records || [], records);
               // conservar catálogo previo; solo actualizar records
               mergedData = { ...prev, records: mergedRecords };
@@ -835,6 +975,10 @@ export default {
               mergedRecords = [...records];
               mergedData = { ...data, records: mergedRecords };
             }
+            // Ronda 54 (hueco #4): sello de versión de SERVIDOR en los hechos del operador,
+            // para que el LWW sea determinista (los relojes del dispositivo ya no arbitran).
+            mergedRecords = stampServerVersion(mergedRecords);
+            mergedData = { ...mergedData, records: mergedRecords };
             await env.DB.prepare(
               `INSERT OR REPLACE INTO sync_snapshots (id, school_code, school_name, data_json, students_count, records_count, updated_at)
                VALUES (?, ?, ?, ?, ?, ?, datetime('now'))`
@@ -943,8 +1087,38 @@ export default {
           catalogVersion: newCatalogVersion,
           studentsCount: isAdmin ? students.length : 0,
           recordsCount: records.length,
-          details: { force: !!body.force, sentCatalogVersion: bodyCatalogVersion }
+          details: {
+            force: !!body.force,
+            sentCatalogVersion: bodyCatalogVersion,
+            opId: opId,
+            recordsMerged: pushFusedCount
+          }
         });
+
+        // Ronda 54 (hueco #2): registrar el opId como aplicado (TTL 7 días). Un reintento
+        // con el mismo opId se deduce y devuelve el mismo resultado sin re-aplicar.
+        if (opId && env.ATTENDANCE_KV) {
+          try {
+            await env.ATTENDANCE_KV.put(
+              `sync_opid_${schoolCode}_${opId}`,
+              JSON.stringify({
+                ok: true,
+                catalogVersion: newCatalogVersion,
+                studentsSaved: isAdmin ? students.length : 0,
+                recordsSaved: records.length,
+                timestamp: new Date().toISOString()
+              }),
+              { expirationTtl: 7 * 24 * 60 * 60 }
+            );
+          } catch {
+            /* el dedup es best-effort: no debe romper el push */
+          }
+        }
+
+        // Ronda 54 (hueco #6): observabilidad de conflictos/reintentos — el push devuelve
+        // cuántos registros nuevos se consolidaron (recordsSaved) y cuántos colisionaron con
+        // registros existentes y se resolvieron por versión (recordsMerged / pushFusedCount).
+        const recordsMerged = pushFusedCount;
 
         return jsonResponse({
           success: true,
@@ -954,9 +1128,12 @@ export default {
           timestamp: new Date().toISOString(),
           studentsSaved: isAdmin ? students.length : 0,
           recordsSaved: records.length,
+          recordsMerged,
+          deduplicated: false,
           catalogVersion: newCatalogVersion,
           role: tokenRole,
-          deviceId: device.deviceId
+          deviceId: device.deviceId,
+          opId: opId
         });
       }
 
@@ -971,13 +1148,26 @@ export default {
         // Ley 1581); Rectoría (ADMIN) ve todo. Un terminal con token de dispositivo (sin
         // identidad) sigue viendo todo como hoy (retrocompat).
         const scoped = filterSnapshotByRole;
+        const since = url.searchParams.get('since');
+        const scope = url.searchParams.get('scope');
         const respondWith = (data: any, source: string, syncedAt: string, catalogVersion: number) => {
-          const finalData = scoped(data, authz);
+          // Ronda 54 (hueco #5): aplicar tombstones ANTES del scoping por rol, para que
+          // ninguna identidad reciba entidades eliminadas (no resucitan).
+          let finalData = scoped(applyTombstones(data), authz);
+          if (since) {
+            finalData = { ...finalData, records: filterRecordsSince(finalData.records, since) };
+          }
+          // Ronda 54 (scope=facts): SOLO los hechos; Rectoría baja los escaneos de
+          // docentes/estudiantes sin reemplazar su catálogo local.
+          if (scope === 'facts') {
+            finalData = { records: Array.isArray(finalData.records) ? finalData.records : [] };
+          }
           return jsonResponse({
             success: true,
             source,
             syncedAt,
             catalogVersion,
+            incremental: !!since,
             data: finalData,
             scope: authz.source === 'identity' ? authz.role : 'FULL'
           });
@@ -1052,6 +1242,74 @@ export default {
             details: e.details_json ? JSON.parse(e.details_json) : null,
             createdAt: e.created_at
           }))
+        });
+      }
+
+      // =========================================================================
+      // RUTA: SYNC METRICS (Ronda 54 — hueco #6, OBSERVABILIDAD de conflictos/reintentos).
+      // SOLO ADMIN. Devuelve contadores agregados del device_sync_log (append-only) para
+      // detectar regresiones y afinar el merge: total de pushes por tipo, lo que cada rol
+      // sube, el catálogo vigente y un heurístico de "reintentos" (pushes con el mismo opId
+      // desde un mismo dispositivo — operaciones que se reenviaron al menos una vez).
+      // =========================================================================
+      if (path === '/api/sync/metrics' && request.method === 'GET') {
+        if (authz.role !== 'ADMIN') {
+          return errorResponse('Solo Rectoría (ADMIN) puede consultar las métricas de sincronización.', 403);
+        }
+        if (!env.DB) {
+          return errorResponse('D1 no configurada.', 503);
+        }
+        const schoolCode = url.searchParams.get('schoolCode') || env.SCHOOL_CODE || 'INAS-ANTONIA-SANTOS-2026';
+        await ensureSyncGuardTables(env);
+        const rows = await env.DB.prepare(
+          `SELECT role, action, device_id, details_json, created_at
+           FROM device_sync_log
+           WHERE school_code = ?
+           ORDER BY created_at ASC`
+        ).bind(schoolCode).all<{
+          role: string; action: string; device_id: string; details_json: string | null; created_at: string;
+        }>();
+        const all = rows.results || [];
+
+        const byAction: Record<string, number> = {};
+        const byRole: Record<string, number> = {};
+        let totalRecordsFused = 0;
+        for (const e of all) {
+          byAction[e.action] = (byAction[e.action] || 0) + 1;
+          byRole[e.role] = (byRole[e.role] || 0) + 1;
+          try {
+            const d = e.details_json ? JSON.parse(e.details_json) : {};
+            totalRecordsFused += (typeof d.recordsMerged === 'number' ? d.recordsMerged : 0) || 0;
+          } catch { /* details_json legado no parseable */ }
+        }
+
+        // Heurístico de reintentos: operaciones con el mismo opId repetidas (mismo action +
+        // device + opId > 1) indican al menos un reenvío at-least-once.
+        const opCount = new Map<string, number>();
+        for (const e of all) {
+          let opId = '';
+          try { opId = (JSON.parse(e.details_json || '{}') || {}).opId || ''; } catch {}
+          if (opId) {
+            const k = `${e.device_id}:${e.action}:${opId}`;
+            opCount.set(k, (opCount.get(k) || 0) + 1);
+          }
+        }
+        const retriedOps = Array.from(opCount.values()).filter(n => n > 1).length;
+
+        const catalogVersion = await getCatalogVersion(env, schoolCode);
+        return jsonResponse({
+          success: true,
+          schoolCode,
+          catalogVersion,
+          metrics: {
+            totalOperations: all.length,
+            pushesByAction: byAction,
+            pushesByRole: byRole,
+            totalRecordsFused,
+            retriedOperations: retriedOps,
+            lastOperationAt: all.length ? all[all.length - 1].created_at : null
+          },
+          note: 'Métricas agregadas del device_sync_log (append-only). retriedOperations ≈ reintentos at-least-once deduplicados por opId.'
         });
       }
 
@@ -1242,6 +1500,20 @@ export default {
           return errorResponse('studentCode, date y time son requeridos.');
         }
 
+        // Ronda 54 (hueco #2): idempotencia del outbox — el cliente envía un `opId` estable
+        // por escaneo. Si el Worker ya lo procesó (re-intento porque la respuesta se perdió),
+        // devuelve `deduplicated:true` sin volver a escribir. Sin `opId` (cliente no actualizado)
+        // se comporta como antes (INSERT OR REPLACE por id, ya idempotente).
+        if (r.opId && env.ATTENDANCE_KV) {
+          try {
+            const dedupKey = `att_opid_${r.opId}`;
+            const prior = await env.ATTENDANCE_KV.get(dedupKey, 'json') as any;
+            if (prior && prior.ok) {
+              return jsonResponse({ success: true, id: prior.id || r.id || `${r.studentCode}_${r.date}_${r.time}`, deduplicated: true, message: 'Asistencia ya registrada (opId duplicado).' });
+            }
+          } catch { /* best-effort */ }
+        }
+
         const id = r.id || `${r.studentCode}_${r.date}_${r.time}`;
 
         if (env.DB) {
@@ -1275,6 +1547,13 @@ export default {
             r.notes || null,
             r.excuseId || null
           ).run();
+        }
+
+        // Ronda 54 (hueco #2): registrar el opId como aplicado para dedup de reintentos.
+        if (r.opId && env.ATTENDANCE_KV) {
+          try {
+            await env.ATTENDANCE_KV.put(`att_opid_${r.opId}`, JSON.stringify({ ok: true, id }), { expirationTtl: 7 * 24 * 60 * 60 });
+          } catch { /* best-effort */ }
         }
 
         return jsonResponse({ success: true, id, message: 'Asistencia registrada en Cloudflare D1' });

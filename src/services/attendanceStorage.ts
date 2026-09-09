@@ -57,6 +57,7 @@ const CUSTOM_TEMPLATES_KEY = 'inas_custom_templates_v1'; // Ronda 4 (F1): planti
 const DAY_CLOSED_KEY = 'inas_day_closed_v1';             // Ronda 4 (F3): flag de cierre de jornada por fecha
 const STUDENT_SCHEDULES_KEY = 'inas_student_schedules_v1'; // Ronda 4 (F4): horario opcional por estudiante
 const ACTIVE_CLASS_KEY = 'inas_active_class_v1'; // Ronda 19: QR de Clase — contexto de clase activa POR DISPOSITIVO
+const TOMBSTONES_KEY = 'inas_tombstones_v1'; // Ronda 54 (hueco #5): marca de borrado que se PROPAGA (soft-delete)
 
 /**
  * Ronda 19 — QR de Clase: helper de tiempo Bogotá. Convierte "HH:mm" de hoy a epoch ms
@@ -462,6 +463,9 @@ export class AttendanceStorageService {
     const filtered = students.filter(s => s.code !== code);
     if (filtered.length !== students.length) {
       this.saveStudents(filtered);
+      // Ronda 54 (hueco #5): crear TOMBSTONE para que el borrado se PROPAGUE a la nube y no
+      // "resucite" en otro dispositivo al hacer pull. No se borra el dato: se marca eliminado.
+      this.addTombstone(code, 'student');
 
       // Cascading cleanup of any active delegation for this student
       try {
@@ -475,6 +479,40 @@ export class AttendanceStorageService {
       return true;
     }
     return false;
+  }
+
+  // ==================== Ronda 54 (hueco #5): TOMBSTONES / SOFT-DELETE ====================
+  // Lista durable de marcas de borrado { id, type: 'student'|'teacher', deletedAt }. Viaja en
+  // el push (el Worker la conserva en el snapshot) y hace que una entidad eliminada en un
+  // terminal NUNCA RESUCITE en otro al hacer pull. La entidad puede reaparecer si alguien la
+  // re-crea (p. ej. re-importación de matrícula): se descarta el tombstone al re-crear.
+  static getTombstones(): Array<{ id: string; type: 'student' | 'teacher'; deletedAt: string }> {
+    try {
+      const stored = localStorage.getItem(TOMBSTONES_KEY);
+      const list = stored ? JSON.parse(stored) : [];
+      return Array.isArray(list) ? list : [];
+    } catch {
+      return [];
+    }
+  }
+
+  static saveTombstones(tombstones: Array<{ id: string; type: 'student' | 'teacher'; deletedAt: string }>): void {
+    localStorage.setItem(TOMBSTONES_KEY, JSON.stringify(tombstones));
+    this.notify();
+  }
+
+  /** Marca una entidad como borrada (idempotente: no duplica). */
+  static addTombstone(id: string, type: 'student' | 'teacher'): void {
+    const list = this.getTombstones();
+    if (list.some(t => t.id === id && t.type === type)) return;
+    list.push({ id, type, deletedAt: new Date().toISOString() });
+    this.saveTombstones(list);
+  }
+
+  /** Descarta los tombstones de entidades vuelto a existir (re-importación). */
+  static clearTombstones(ids: string[], type: 'student' | 'teacher'): void {
+    const idset = new Set(ids);
+    this.saveTombstones(this.getTombstones().filter(t => !(t.type === type && idset.has(t.id))));
   }
 
   // ==================== SUBROLES & CASCADA DE 3 NIVELES ====================
@@ -697,6 +735,8 @@ export class AttendanceStorageService {
     const filtered = teachers.filter(t => t.id !== id);
     if (filtered.length !== teachers.length) {
       this.saveTeachers(filtered);
+      // Ronda 54 (hueco #5): tombstone para propagar el borrado (no resucita en otro pull).
+      this.addTombstone(id, 'teacher');
       return true;
     }
     return false;
@@ -2157,6 +2197,9 @@ export class AttendanceStorageService {
         if (params.presenceCapture) existing.presenceCapture = params.presenceCapture; // Ronda 46
         existing.notes = `Marcado tardío tras auto-cierre (${currentTime})`;
         this.saveAttendance(allRecords);
+        // Ronda 54 (hueco #1): la corrección de un ausente a tardanza también es un HECHO
+        // que debe propagarse; se encola como mutación idempotente por id.
+        this.enqueueOfflineMutation(existing, `op-mutation-${existing.id}`);
 
         return {
           type: 'success_tardy',
@@ -2228,6 +2271,10 @@ export class AttendanceStorageService {
 
     allRecords.unshift(newRecord);
     this.saveAttendance(allRecords);
+    // Ronda 54 (hueco #1): OUTBOX DURABLE — este hecho capturado se encola para garantizar
+    // que llegue a la nube aunque el dispositivo esté offline en ese instante (el push
+    // snapshot lo subirá completo, pero el outbox cubre la ventana de reconexión inmediata).
+    this.enqueueOfflineMutation(newRecord, `op-mutation-${newRecord.id}`);
 
     return {
       type: calculatedStatus === 'PUNTUAL' ? 'success_punctual' : 'success_tardy',
@@ -2672,19 +2719,100 @@ export class AttendanceStorageService {
   }
 
   // ==================== REINICIAR A DEMO ====================
-  static getOfflineQueue(): any[] {
+  static getOfflineQueue(): OfflineQueueItem[] {
     try {
       const stored = localStorage.getItem(OFFLINE_QUEUE_KEY);
-      return stored ? JSON.parse(stored) : [];
+      const list = stored ? JSON.parse(stored) : [];
+      return Array.isArray(list) ? list.filter((i: any) => i && i.id) : [];
     } catch {
       return [];
     }
   }
 
+  // Ronda 54 (hueco #1): OUTBOX DURABLE + REPLAY ORDENADO + IDEMPOTENCIA.
+  //
+  // Cada mutación de HECHOS (un registro de asistencia creado/actualizado en un escaneo o un
+  // auto-cierre) se ENCOLA aquí con un `opId` estable y el payload completo. Si el dispositivo
+  // está offline, la operación queda en la cola durable (localStorage); al volver la red el
+  // replayer la re-envía EN ORDEN. Cada opId se deduce en el destino (at-least-once sin
+  // duplicar). A diferencia del no-op anterior (que solo hacía `setItem(..., '[]')`), esto
+  // garantiza que ningún hecho capturado sin red se pierda ni se duplique al reconectar.
+  //
+  // EL REPLAY vive en CloudflareSyncService (que sí tiene acceso al Worker): este servicio
+  // registra el handler con `registerOnlineReplayHandler`. Si nadie lo registró (p. ej. la
+  // app aún no inicializó el sync), la cola queda intacta y se reintenta luego — jamás se borra.
+  private static onlineReplayHandler: (() => Promise<void>) | null = null;
+  static registerOnlineReplayHandler(handler: () => Promise<void>): void {
+    this.onlineReplayHandler = handler;
+  }
+
+  /** Encola una mutación de hechos (idempotente por id: no duplica la misma operación). */
+  static enqueueOfflineMutation(payload: AttendanceRecord, opId: string): void {
+    try {
+      const queue = this.getOfflineQueue();
+      const existingIdx = queue.findIndex(i => i.id === payload.id);
+      const item: OfflineQueueItem = {
+        id: payload.id,
+        studentCode: payload.studentCode,
+        timestamp: payload.timestamp,
+        slotId: payload.slotId,
+        subject: payload.subject,
+        method: payload.method,
+        retryCount: 0,
+        opId,
+        payload,
+        status: 'PENDING'
+      };
+      if (existingIdx >= 0) queue[existingIdx] = item; // reemplaza (la versión más nueva)
+      else queue.unshift(item);                        // orden de captura
+      // Conservar solo los últimos 2000 (la cola no debe crecer sin límite).
+      localStorage.setItem(OFFLINE_QUEUE_KEY, JSON.stringify(queue.slice(0, 2000)));
+      this.notify();
+    } catch { /* la cola jamás debe romper la captura del escaneo */ }
+  }
+
+  /** Marca una operación de la cola como enviada (dedup) para no reenviarla. */
+  static markOfflineQueueSent(id: string, appliedAt?: string): void {
+    try {
+      const queue = this.getOfflineQueue();
+      const idx = queue.findIndex(i => i.id === id);
+      if (idx >= 0) {
+        queue[idx] = { ...queue[idx], status: 'SENT', appliedAt: appliedAt || new Date().toISOString() };
+        localStorage.setItem(OFFLINE_QUEUE_KEY, JSON.stringify(queue));
+        this.notify();
+      }
+    } catch { /* best-effort */ }
+  }
+
+  /** Marca una operación como fallida (retryCount++) para reintentarla después. */
+  static markOfflineQueueFailed(id: string): void {
+    try {
+      const queue = this.getOfflineQueue();
+      const idx = queue.findIndex(i => i.id === id);
+      if (idx >= 0) {
+        queue[idx] = { ...queue[idx], status: 'FAILED', retryCount: (queue[idx].retryCount || 0) + 1 };
+        localStorage.setItem(OFFLINE_QUEUE_KEY, JSON.stringify(queue));
+        this.notify();
+      }
+    } catch { /* best-effort */ }
+  }
+
+  /**
+   * Ronda 54 (hueco #1): replayer del outbox. Reenvía las operaciones PENDING/FAILED en orden
+   * a través del handler registrado (CloudflareSyncService). Con las mismas garantías de
+   * idempotencia que el resto del sync. Ya no es un no-op.
+   */
   static async syncOfflineQueue(): Promise<void> {
-    // Offline records are already fully persisted in localStorage
-    localStorage.setItem(OFFLINE_QUEUE_KEY, JSON.stringify([]));
-    this.notify();
+    // Experiencia: al volver la red, un escaneo de la cola desvía al replayer real del worker
+    const queue = this.getOfflineQueue().filter(i => i.status !== 'SENT');
+    if (queue.length === 0) return;
+    if (this.onlineReplayHandler) {
+      try {
+        await this.onlineReplayHandler();
+      } catch {
+        /* el replayer falló: la cola queda intacta para el siguiente intento */
+      }
+    }
   }
 
   static async registerScan(params: {

@@ -54,6 +54,10 @@ export class CloudflareSyncService {
       clearInterval(this.autoSyncTimer);
     }
 
+    // Ronda 54 (hueco #1): registrar el replayer del outbox para que AttendanceStorageService
+    // delegue el replay de operaciones offline (sin import circular) a este servicio.
+    AttendanceStorageService.registerOnlineReplayHandler(() => this.replayOutbox());
+
     const settings = AttendanceStorageService.getSettings();
     if (settings.cloudflareAutoSync !== false && settings.cloudflareWorkerUrl) {
       const intervalMs = (settings.cloudflareSyncIntervalMinutes || 5) * 60 * 1000;
@@ -61,6 +65,15 @@ export class CloudflareSyncService {
         this.performCloudflareSync().catch((err) => {
           console.warn('[Cloudflare AutoSync] Sincronización periódica fallida:', err);
         });
+        // Ronda 54 — AUTO-SYNC DE HECHOS PARA RECTORÍA: además del push, Rectoría baja los
+        // escaneos que hicieron docentes/estudiantes desde la nube (pull `scope=facts`,
+        // no destructivo: solo fusiona registros, JAMÁS reemplaza el catálogo). Solo ADMIN.
+        const session = AttendanceStorageService.getCurrentSession();
+        if (session?.role === 'ADMIN') {
+          this.pullFactsFromCloudflare().catch(() => {
+            /* silencioso: la salud del sync no depende de este refresco de hechos */
+          });
+        }
       }, intervalMs);
     }
   }
@@ -88,6 +101,23 @@ export class CloudflareSyncService {
     } catch {
       return 'dev-anonymous';
     }
+  }
+
+  /**
+   * Ronda 54 (hueco #2) — opId determinista: hash FNV-1a de un string de identidad de
+   * operación. No criptográfico (no es un secreto): solo garantiza que el mismo push
+   * produce el mismo opId para deduplicar reintentos. Estable entre recargas y llamadas.
+   */
+  private static makeOpId(seed: string): string {
+    let h = 0x811c9dc5;
+    for (let i = 0; i < seed.length; i++) {
+      h ^= seed.charCodeAt(i);
+      h = Math.imul(h, 0x01000193);
+    }
+    const hex = (h >>> 0).toString(16).padStart(8, '0');
+    // Añadir un sufijo de longitud de seed para reducir colisiones triviales entre
+    // estados con los mismos conteos pero contenido distinto (el push es snapshot).
+    return `op-${hex}-${seed.length.toString(16)}`;
   }
 
   /**
@@ -265,12 +295,19 @@ export class CloudflareSyncService {
       const records = AttendanceStorageService.getAllAttendance();
       const { clean: safeStudents, omitted } = await this.sanitizeStudentsForSync(students);
 
+      // Ronda 54 (hueco #2): opId ESTABLE por push — hash determinista de la identidad de
+      // la operación (colegio + conteos + versión de catálogo + device + force). Un reitero
+      // del MISMO push produce el mismo opId → el Worker lo deduce y no duplica. Si el estado
+      // cambia (nuevo escaneo), el opId cambia y se aplica como operación nueva.
+      const opId = this.makeOpId(`${settings.schoolCode}|${safeStudents.length}|${records.length}|${settings.cloudflareCatalogVersion ?? 0}|${this.getDeviceId()}|${force}`);
+
       const payload = {
         schoolCode: settings.schoolCode || 'INAS_2026',
         schoolName: settings.schoolName || 'Institución Educativa Antonia Santos',
         syncedAt: new Date().toISOString(),
         studentsCount: safeStudents.length,
         recordsCount: records.length,
+        opId,
         // Ronda 47 (Fase 2): identidad del dispositivo + versión de catálogo (CAS) + force.
         deviceId: this.getDeviceId(),
         deviceName: (settings.schoolName || 'Terminal INAS').slice(0, 80),
@@ -287,7 +324,9 @@ export class CloudflareSyncService {
           // El worker guarda data verbatim y el pull destructura de forma tolerante →
           // clientes viejos ignoran estos campos sin romperse.
           customTemplates: AttendanceStorageService.getCustomTemplates(),
-          studentSchedules: AttendanceStorageService.getAllStudentSchedules()
+          studentSchedules: AttendanceStorageService.getAllStudentSchedules(),
+          // Ronda 54 (hueco #5): marcas de borrado (soft-delete) que se propagan a la nube.
+          tombstones: AttendanceStorageService.getTombstones()
         }
       };
 
@@ -464,8 +503,13 @@ export class CloudflareSyncService {
       let importedTemplates = 0;
 
       if (Array.isArray(students) && students.length > 0) {
-        AttendanceStorageService.saveStudents(students);
-        importedStudents = students.length;
+        // Ronda 54 (hueco #5): aplicar tombstones LOCALES al pull. Un borrado hecho en este
+        // terminal pero aún no subido (sin push) debía estar en la nube para que el Worker lo
+        // filtrara; aquí se filtra también, para que el estudiante NO RESUCITE en este pull.
+        const tombStudents = new Set(AttendanceStorageService.getTombstones().filter(t => t.type === 'student').map(t => t.id));
+        const localStudents = students.filter((s: any) => s && !tombStudents.has(String(s.code)));
+        AttendanceStorageService.saveStudents(localStudents);
+        importedStudents = localStudents.length;
       }
 
       if (Array.isArray(records) && records.length > 0) {
@@ -549,6 +593,10 @@ export class CloudflareSyncService {
       if (importedTemplates > 0) summaryParts.push(`${importedTemplates} plantilla${importedTemplates === 1 ? '' : 's'} de jornada`);
       summaryParts.push(`${importedRecords} ${importedRecords === 1 ? 'nueva asistencia' : 'nuevas asistencias'}`);
 
+      // Ronda 54 — actualizar el cursor de sync (nunca retrocede). Con el pull COMPLETO
+      // ya se trajo TODO, así que el próximo pull de hechos puede empezar desde acá.
+      this.advanceLastSyncedAt(result?.syncedAt);
+
       return {
         success: true,
         message: `✓ Datos descargados del Cloudflare Worker: ${summaryParts.join(', ')} — todo integrado en este dispositivo.`,
@@ -559,6 +607,136 @@ export class CloudflareSyncService {
         success: false,
         message: `Error al descargar datos del Cloudflare Worker: ${err.message || err}`
       };
+    }
+  }
+
+  /**
+   * Ronda 54 — AUTO-SYNC DE HECHOS PARA RECTORÍA (pull `scope=facts`).
+   * Baja SOLO los registros de asistencia/excusas que docentes y estudiantes subieron,
+   * fusionándolos por id+updatedAt. JAMÁS reemplaza el catálogo (estudiantes/docentes/
+   * horarios) — por eso es seguro para el auto-sync. Usa el cursor incremental
+   * (`cloudflareLastSyncedAt`) para traer solo lo nuevo.
+   */
+  static async pullFactsFromCloudflare(): Promise<{ success: boolean; message: string; data?: any; newRecords?: number }> {
+    const settings = AttendanceStorageService.getSettings();
+    const cleanBaseUrl = this.getWorkerBaseUrl();
+    const schoolCode = settings.schoolCode || 'INAS_2026';
+
+    if (!cleanBaseUrl) {
+      return { success: false, message: 'URL del Cloudflare Worker no configurada.' };
+    }
+
+    try {
+      const cursor = settings.cloudflareLastSyncedAt || '';
+      const sinceParam = cursor ? `&since=${encodeURIComponent(cursor)}` : '';
+      const pullUrl = cleanBaseUrl.endsWith('/api/sync/pull')
+        ? `${cleanBaseUrl}?schoolCode=${encodeURIComponent(schoolCode)}&scope=facts${sinceParam}`
+        : `${cleanBaseUrl}/api/sync/pull?schoolCode=${encodeURIComponent(schoolCode)}&scope=facts${sinceParam}`;
+
+      const res = await fetch(pullUrl, { method: 'GET', headers: await this.workerHeaders() });
+      if (!res.ok) {
+        const errText = await res.text();
+        throw new Error(`Worker HTTP ${res.status}: ${errText}`);
+      }
+      const result = await res.json();
+      if (!result.success || !result.data) {
+        throw new Error(result.error || 'No se recibieron hechos del Worker');
+      }
+
+      const pulledRecords = Array.isArray(result.data.records) ? result.data.records : [];
+      let importedRecords = 0;
+      if (pulledRecords.length > 0) {
+        const current = AttendanceStorageService.getAllAttendance();
+        const byId = new Map(current.map(r => [r.id, r]));
+        for (const pulled of pulledRecords) {
+          if (!pulled || !pulled.id) continue;
+          const local = byId.get(pulled.id);
+          if (!local) {
+            byId.set(pulled.id, pulled);
+            importedRecords++;
+            continue;
+          }
+          // Ronda 54 (hueco #4): la VERSIÓN del servidor (serverUpdatedAt) arbitra el LWW,
+          // no el reloj local. Fallback a updatedAt/timestamp para registros pre-R54.
+          const pulledStamp: string = pulled.serverUpdatedAt || pulled.updatedAt || pulled.timestamp || '';
+          const localStamp: string = local.serverUpdatedAt || local.timestamp || '';
+          const pulledNewer = !!pulledStamp && (!localStamp || pulledStamp > localStamp);
+          // Overlay de excusas (convergencia Ronda 21) + LWW por updatedAt.
+          if (pulled.excuseId && (pulled.excuseId !== local.excuseId || pulled.excuseStatus !== local.excuseStatus)) {
+            byId.set(pulled.id, {
+              ...local,
+              excuseId: pulled.excuseId,
+              excuseStatus: pulled.excuseStatus,
+              excuseUpdatedAt: pulled.excuseUpdatedAt || local.excuseUpdatedAt
+            });
+          } else if (!pulled.excuseId && local.excuseId && pulledNewer) {
+            const { excuseId: _e, excuseStatus: _s, ...rest } = local;
+            byId.set(pulled.id, { ...(rest as AttendanceRecord), excuseUpdatedAt: pulledStamp || local.excuseUpdatedAt });
+          } else if (pulledNewer) {
+            byId.set(pulled.id, pulled);
+          }
+        }
+        AttendanceStorageService.saveAttendance(Array.from(byId.values()));
+      }
+
+      this.advanceLastSyncedAt(result?.syncedAt);
+
+      return {
+        success: true,
+        message: `✓ ${importedRecords} asistencia${importedRecords === 1 ? '' : 's'} nueva${importedRecords === 1 ? '' : 's'} desde la nube.`,
+        data: result.data,
+        newRecords: importedRecords
+      };
+    } catch (err: any) {
+      return {
+        success: false,
+        message: `Error al sincronizar hechos: ${err.message || err}`
+      };
+    }
+  }
+
+  /**
+   * Ronda 54 (hueco #1) — REPLAY DEL OUTBOX DURABLE. Reenvía, EN ORDEN, las operaciones de
+   * hechos que se encolaron mientras el dispositivo estaba offline (o con red intermitente).
+   * Cada operación va con su `opId` (idempotency key): el Worker deduce reintentos, así que
+   * at-least-once ya no duplica. Tras confirmar, la operación se marca SENT (no se reenvía);
+   * si falla, queda FAILED con retryCount++ para el siguiente intento.
+   */
+  static async replayOutbox(): Promise<void> {
+    const baseUrl = this.getWorkerBaseUrl();
+    if (!baseUrl) return;
+    const pending = AttendanceStorageService.getOfflineQueue().filter(i => i.status !== 'SENT');
+    for (const item of pending) {
+      if (!item.payload) continue; // operaciones sin payload (legacy) se descartan
+      try {
+        const url = baseUrl.endsWith('/api/attendance')
+          ? baseUrl
+          : `${baseUrl}/api/attendance`;
+        const res = await fetch(url, {
+          method: 'POST',
+          headers: await this.workerHeaders(),
+          body: JSON.stringify({ ...item.payload, opId: item.opId })
+        });
+        if (res.ok) {
+          AttendanceStorageService.markOfflineQueueSent(item.id);
+        } else {
+          AttendanceStorageService.markOfflineQueueFailed(item.id);
+        }
+      } catch {
+        AttendanceStorageService.markOfflineQueueFailed(item.id);
+      }
+    }
+  }
+
+  /** Ronda 54 — el cursor de sync jamás retrocede (evita re-bajadas innecesarias). */
+  private static advanceLastSyncedAt(next?: string | null): void {
+    if (!next) return;
+    const cur = AttendanceStorageService.getSettings().cloudflareLastSyncedAt || '';
+    if (!cur || next > cur) {
+      AttendanceStorageService.saveSettings({
+        ...AttendanceStorageService.getSettings(),
+        cloudflareLastSyncedAt: next
+      });
     }
   }
 

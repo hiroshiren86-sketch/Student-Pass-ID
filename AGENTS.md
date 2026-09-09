@@ -228,6 +228,38 @@ Esta sección documenta el mapa exhaustivo de comunicaciones, protocolos, plataf
 
 ## 📋 3. Bitácora de Implementaciones y Correcciones Realizadas
 
+### ✅ Ronda 54 (09/09/2026) — ROADMAP DE SINCRONIZACIÓN DE PRINCIPIO A FIN (los 6 huecos de `docs/ROADMAP-ESCALAR-SINCRONIZACION-ENTREGA.md` + auto-sync de HECHOS para Rectoría)
+
+**Contexto (mandato del propietario).** Tras la Ronda 53, el propietario aclaró que el *roadmap de los 6 huecos* NO estaba implementado (aunque se había narrado) y ordenó hacerlo **"de principio a fin" sin detenerse a confirmar alcance** (ya dio la URL y las credenciales; no re-pedirlas). Al verificar el workspace se confirmó que solo el fix de merge ADMIN (R53) estaba persistido: `filterRecordsSince`, `cloudflareLastSyncedAt`, outbox real, idempotencia, tombstones, observabilidad y auto-sync de Rectoría NO existían. Esta ronda implementa **los 6 huecos** de forma aditiva y retrocompatible, sin cambiar infraestructura (free tier) y **sin regresiones** (Regla #1/#6).
+
+**Hueco 3 — PULL INCREMENTAL (`since`/cursor) + PULL DE HECHOS (`scope=facts`) [Worker + cliente]:**
+- **Worker:** `filterRecordsSince(records, since)` (conversa los registros con `serverUpdatedAt`/`updatedAt`/`timestamp` >= `since`; sin fecha no se descarta; sin `since` devuelve todo → retrocompat 100%). En `/api/sync/pull` se lee `since` del query y se recorta `records` tras el scoping por rol. Añadido `scope=facts` que baja SOLO `{ records }` (no destructivo: Rectoría fusiona hechos sin reemplazar catálogo). El cálculo compara por **`serverUpdatedAt`** (versión de servidor) para que el incremental no pierda hechos por clock-skew de un dispositivo con el reloj atrasado.
+- **Cliente:** `SchoolSettings.cloudflareLastSyncedAt?` (cursor, nunca retrocede vía `advanceLastSyncedAt`); `pullFromCloudflare` actualiza el cursor tras el pull completo; nuevo `pullFactsFromCloudflare` (pull `scope=facts` con `since=cursor`) que fusiona hechos por `id` + versión (serverUpdatedAt → updatedAt → timestamp) SIN reemplazar catálogo.
+- **Auto-sync de HECHOS para Rectoría:** `initAutoSync` ahora, además del push, ejecuta `pullFactsFromCloudflare` solo cuando la sesión es ADMIN (baja los escaneos de docentes/estudiantes en cada ciclo, sin duplicar el push).
+
+**Hueco 4 — VERSIÓN DE SERVIDOR POR REGISTRO (merge determinista, sin `Date.now()` local):**
+- **Worker:** `recordVersion(r)` (serverUpdatedAt → updatedAt → timestamp) y `stampServerVersion(records)` que sella cada registro que el push tocó con `serverUpdatedAt = now` (los heredados conservan su versión). Aplicado en el push ADMIN y en el camino de operador. `mergeRecordsByUpdatedAt` ahora arbitra por versión. `filterRecordsSince` compara por `serverUpdatedAt`.
+- **Cliente:** `AttendanceRecord.serverUpdatedAt?`; los merges de `pullFactsFromCloudflare` y el overlay usan `serverUpdatedAt` primero. El LWW queda **determinista** (gana "el que el servidor procesó más tarde", no "el que el reloj del dispositivo dijo").
+
+**Hueco 2 — IDEMPOTENCIA EN PUSH (`opId`):**
+- **Cliente:** `makeOpId(seed)` (hash FNV-1a determinista) genera un `opId` estable por push (school + conteos + catalogVersion + deviceId + force); viaja en `body.opId`. Un reintento del MISMO push produce el mismo opId → el Worker lo deduce.
+- **Worker:** en `/api/sync/push`, si `opId` existe y ya fue procesado (KV `sync_opid_{school}_{opId}`, TTL 7 días), devuelve `deduplicated:true` con el resultado previo SIN re-aplicar ni incrementar `catalog_version`. Sin `opId` (clientes viejos) se omite por completo. Se registra al éxito.
+
+**Hueco 1 — OUTBOX DURABLE + REPLAY ORDENADO + IDEMPOTENCIA (reemplaza el no-op `syncOfflineQueue`):**
+- **Cliente:** `OfflineQueueItem` ganó `opId?/payload?/status?/appliedAt?`; `AttendanceStorageService.enqueueOfflineMutation(record, opId)` encola cada HECHO capturado (nuevo registro en `registerClassScan` y corrección ausente→tardanza) con `opId` estable; `markOfflineQueueSent`/`markOfflineQueueFailed`; `syncOfflineQueue` ya NO es un no-op: reenvía PENDING/FAILED en orden a través de un handler registrado (`registerOnlineReplayHandler`) que `CloudflareSyncService.replayOutbox` implementa (evita el import circular). La cola se conserva y nunca se borra en vacío.
+- **Worker:** `/api/attendance` acepta `opId` y deduce por KV (`att_opid_{opId}`, TTL 7 días) → at-least-once sin duplicar.
+
+**Hueco 5 — TOMBSTONES / SOFT-DELETE (el borrado se PROPAGA, no resucita):**
+- **Cliente:** `AttendanceStorageService.getTombstones/saveTombstones/addTombstone/clearTombstones` + `TOMBSTONES_KEY`. `deleteStudent`/`deleteTeacher` crean un tombstone `{ id, type, deletedAt }`; el push los sube en `data.tombstones`; `pullFromCloudflare` aplica los tombstones **locales** al filtrar (un borrado aún no subido no resucita en el pull).
+- **Worker:** `applyTombstones(data)` filtra estudiantes/docentes con tombstone y anonimiza sus `records` (Ley 1581: conserva el agregado, retira el identificador personal). Aplicado al servir `/api/sync/pull`; el push ADMIN conserva el histórico de tombstones (unión con los previos).
+
+**Hueco 6 — OBSERVABILIDAD de conflictos/reintentos:**
+- **Worker:** endpoint nuevo **`GET /api/sync/metrics`** (solo ADMIN): total de operaciones, pushes por acción/rol, `totalRecordsFused` (fusiones), `retriedOperations` (reintentos at-least-once por opId), `lastOperationAt`, `catalogVersion`. La respuesta del push devuelve `recordsMerged` (fusiones) y el log `device_sync_log` lo persiste.
+
+**Verificación (cero regresiones):** `npx tsc --noEmit` (cliente) **0 errores**; `vite build` **limpio**; Worker `tsc` solo el error pre-existente `Buffer` (línea 508, no de este cambio) y `wrangler deploy --dry-run` → **bundle OK** (157 KiB, bindings D1/KV/vars intactos, solo se añade la ruta `/api/sync/metrics`). Guardas históricas intactas: CAS de catálogo (R47), anti-aplastado (H-38-1), overlay de excusas (R21), `filterSnapshotByRole` por identidad (R49), CORS (R51). **Pendiente de esta sesión:** desplegar el Worker en producción y verificar en navegador real.
+
+**Archivos:** `cloudflare-worker/src/index.ts` (pull incremental + tombstones + idempotencia + versión de servidor + métricas + `/api/attendance` dedup) · `src/services/cloudflareSync.ts` (opId + cursor + `pullFactsFromCloudflare` + `replayOutbox` + merge por serverUpdatedAt) · `src/services/attendanceStorage.ts` (outbox durable + tombstones + `registerOnlineReplayHandler`) · `src/types/attendance.ts` (`cloudflareLastSyncedAt`, `serverUpdatedAt`, `OfflineQueueItem` ampliado) · `AGENTS.md` (esta entrada).
+
 ### ✅ Ronda 53 (08/09/2026) — FIX DE PÉRDIDA DE DATOS EN EL PUSH ADMIN DEL WORKER (el snapshot truncaba los registros a los últimos 500 y perdía el histórico)
 
 **Contexto (auditoría de sincronización a escala).** El propietario pidió subir de nivel la sincronización para que soportase muchos estudiantes sin cambiar de servicio ni de infraestructura (todo sigue en free tier: Cloudflare Worker + D1/KV, Firebase free). Al revisar el handler de `/api/sync/push` se encontró un **bug real de pérdida silenciosa de datos**, que era exactamente el cuello de botella que limitaba la escala (coincide con el límite del snapshot en KV, 25 MB, cuando crecen los registros de asistencia).
