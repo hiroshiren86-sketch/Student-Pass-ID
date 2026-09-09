@@ -85,6 +85,24 @@ Tras terminar las pruebas se aplicó de nuevo la **Plantilla A: Día Normal** (H
 - **Hueco 4 (merge por `serverUpdatedAt`)**: no se dispararon conflictos de escritura en las pruebas (por eso `recordsMerged=0`); el mecanismo de versión de servidor está en el handler del push (`stampServerVersion`/`recordVersion`/`mergeRecordsByUpdatedAt`) y en el pull.
 - El **outbox** se probó sembrando el item (simular una captura offline por escáner requiere un dispositivo físico/terminal de docente); el flujo real `enqueueOfflineMutation` (de `registerClassScan`) y el `replayOutbox` verificados por código y por replay real contra el Worker.
 
+---
+
+## Adenda — Plantillas NORMALES con reloj real (mié 09/09/2026, 12:24–12:28 Bogotá)
+
+El propietario pidió probar las plantillas A y B **con el reloj real** (sin Plantilla T, sin congelar tiempo), dentro de la jornada (12:24 antes del cierre de 12:30).
+
+- **PLANTILLA A «Día Normal» (06:30–12:30)** — a las **12:25**:
+  - Banner: `Jornada abierta (06:30 – 12:30)`.
+  - **Escaneo ACEPTADO** → registró a `JULIANA ANDRÉS JIMÉNEZ BOTERO` (6°4, doc 196555769) con estado **TARDANZA** (feedback `success_tardy`). ✅
+- **PLANTILLA B «Recorte −10»** — a las **12:27**:
+  - Banner: `Jornada abierta (06:30 – 12:30)`.
+  - **Escaneo RECHAZADO** → `"Ahora no hay clase en curso (12:27) y no quedan más bloques de clase por hoy. No se registra asistencia por escáner."` ✅
+  - La guarda de los **6 bloques × 45 min** de B termina ~11:30, por lo que a las 12:27 no hay bloque activo → rechazo. **Hallazgo:** el banner muestra la ventana 06:30–12:30 (heredada de `dailyEndTime`), aunque el escaneo ya esté bloqueado por falta de bloques — comportamiento vigente, sin regresión, no se tocó código.
+- **Restauración:** se aplicó de nuevo la **Plantilla A** al término. Nube final: `tmpl-normal`, `slots=7`, `students=80 · teachers=20 · assignments=180 · records=2` (sin regresión).
+- Capturas: `r54_AB_A_scan.png`, `r54_AB_B_scan.png`.
+
+---
+
 ## Evidencia visual
 Capturas en `./` (este directorio), tomadas del app **real desplegado**:
 - `r54_T01_plantillaT_aplicada.png` — Plantilla T activa (Horarios → Plantillas).
