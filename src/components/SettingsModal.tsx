@@ -16,7 +16,6 @@ import {
   Trash2,
   RefreshCw,
   Calendar,
-  Layers,
   Zap,
   Lock,
   Eye,
@@ -162,10 +161,10 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ onClose }) => {
     setSettings(prev => ({ ...prev, [field]: value }));
   };
 
-  const handleDayTemplateChange = (templateId: string) => {
-    setSettings(prev => ({ ...prev, activeDayTemplate: templateId }));
-    AttendanceStorageService.applyDayTemplate(templateId);
-  };
+  // Ronda 55: handleDayTemplateChange y el selector «Plantilla de Jornada Activa» se RETIRARON
+  // de este modal — era un SEGUNDO acceso duplicado a las plantillas (la fuente única está en
+  // Horarios Escolares → Plantillas con su botón «Aplicar hoy», que además regenera los slots
+  // del día). Aquí queda solo la configuración de jornada: inicio, fin y tolerancia.
 
   const handleCloudSync = async () => {
     setIsSyncingCloud(true);
@@ -297,9 +296,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ onClose }) => {
 
 
 
-  // Ronda 4 (F1): lista fusionada (oficiales + CUSTOM de Rectoría); activo resuelto por ID con compat de TYPE legado
-  const activeTemplateDef = AttendanceStorageService.getActiveDayTemplate();
-  const allTemplates = AttendanceStorageService.getDayTemplates();
+  // Ronda 55: ya NO se lee getActiveDayTemplate()/getDayTemplates() aquí — el selector
+  // duplicado de Plantillas salió de este modal (acceso único: Horarios → Plantillas).
 
   return (
     <>
@@ -375,32 +373,16 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ onClose }) => {
             </div>
           </div>
 
-          {/* Day Template Selector (Día Normal, Recorte, Izada, Asesoría, Especial) */}
-          <div className="p-4 rounded-2xl bg-indigo-50/70 dark:bg-indigo-950/40 border border-indigo-100 dark:border-indigo-900/60 space-y-2.5">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-2 text-xs font-black text-indigo-950 dark:text-indigo-200">
-                <Layers className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />
-                <span>Plantilla de Jornada Activa (DayTemplate)</span>
-              </div>
-              <span className="text-[10px] font-bold px-2 py-0.5 rounded-md bg-indigo-200 dark:bg-indigo-900 text-indigo-800 dark:text-indigo-200">
-                {activeTemplateDef.blockDurationMinutes} min / bloque
-              </span>
-            </div>
-
-            <select
-              value={activeTemplateDef.id}
-              onChange={(e) => handleDayTemplateChange(e.target.value)}
-              className="w-full bg-white dark:bg-zinc-950 border border-indigo-200 dark:border-indigo-800 text-slate-900 dark:text-white text-xs font-bold px-3 py-2 rounded-xl outline-none"
-            >
-              {allTemplates.map(tpl => (
-                <option key={tpl.id} value={tpl.id}>
-                  {tpl.name} ({tpl.blockDurationMinutes}m - {tpl.totalBlocks} bloques){tpl.type === 'CUSTOM' ? ' · Personalizada' : ''}
-                </option>
-              ))}
-            </select>
-
-            <p className="text-[11px] text-indigo-700 dark:text-indigo-300 leading-relaxed">
-              {activeTemplateDef.description}
+          {/* Ronda 55: el selector de Plantilla de Jornada se RETIRÓ de Configuración —
+              era un segundo acceso duplicado (mandato del propietario). El acceso ÚNICO a
+              plantillas es Horarios Escolares → Plantillas → «Aplicar hoy». Aquí queda la
+              nota que orienta y solo el inicio/fin/tolerancia de la jornada. */}
+          <div className="p-3.5 rounded-2xl bg-slate-50 dark:bg-zinc-900/60 border border-slate-200 dark:border-zinc-800/60 flex items-start gap-2.5">
+            <Calendar className="w-4 h-4 text-indigo-500 shrink-0 mt-0.5" />
+            <p className="text-[11px] text-slate-600 dark:text-slate-300 leading-relaxed">
+              <span className="font-black text-slate-800 dark:text-white">Plantillas de jornada:</span>{' '}
+              se administran en <span className="font-bold text-indigo-600 dark:text-indigo-400">Horarios Escolares → Plantillas</span> (botón «Aplicar hoy»).
+              Aquí se configura únicamente el inicio, el fin y la tolerancia de la jornada.
             </p>
           </div>
 

@@ -75,6 +75,20 @@ export const TeacherClassroomView: React.FC<TeacherClassroomViewProps> = ({
   );
   const [selectedSlotId, setSelectedSlotId] = useState<string>(scheduleSlots[0]?.id || 'slot-1');
   const [selectedSubject, setSelectedSubject] = useState<string>(teacher?.subjects?.[0] || INSTITUTIONAL_SUBJECTS[0]);
+  // Ronda 55: la Asignatura del aula ya NO es texto libre (adiós typos tipo "Matematicas" que
+  // dejaban registros/cátedras huérfanos fuera de la ficha). Opciones = ficha del docente
+  // (∪ asignaturas de sus cátedras ya creadas — herencia legítima). Ficha y cátedras vacías ⇒
+  // lista institucional completa (nunca un select sin opciones; libertad Ronda 37 preservada).
+  const ownCatedraSubjects = allAssignments
+    .filter(a => a.teacherId === teacher?.id && a.subject)
+    .map(a => a.subject);
+  const subjectChoices = (() => {
+    const set = new Set<string>([...(teacher?.subjects || []), ...ownCatedraSubjects]);
+    const list = Array.from(set).filter(Boolean).sort((a, b) => a.localeCompare(b, 'es'));
+    return list.length > 0 ? list : [...INSTITUTIONAL_SUBJECTS].sort((a, b) => a.localeCompare(b, 'es'));
+  })();
+  // Valor efectivo (a prueba de estado heredado fuera de las opciones — jamás select "mudo").
+  const activeSubject = subjectChoices.includes(selectedSubject) ? selectedSubject : subjectChoices[0];
   const [soundEnabled, setSoundEnabled] = useState<boolean>(true);
   const [showChangePasswordModal, setShowChangePasswordModal] = useState<boolean>(false);
   
@@ -318,14 +332,14 @@ export const TeacherClassroomView: React.FC<TeacherClassroomViewProps> = ({
     if (typeof Notification !== 'undefined' && Notification.permission === 'granted') {
       try {
         new Notification(`El bloque termina en ${minutesToBlockEnd} min`, {
-          body: `${selectedGrade} · ${selectedSubject || 'Sin materia programada'}: faltan ${stats.unscanned} de ${stats.total} estudiantes por escanear.`,
+          body: `${selectedGrade} · ${activeSubject || 'Sin materia programada'}: faltan ${stats.unscanned} de ${stats.total} estudiantes por escanear.`,
           tag: key
         });
       } catch (e) {
         console.warn('Browser notification notice:', e);
       }
     }
-  }, [inNoticeWindow, noticeDismissed, isNonComputableSlot, notifiedSlotKey, today, activeSlot, minutesToBlockEnd, selectedGrade, selectedSubject, stats, soundEnabled]);
+  }, [inNoticeWindow, noticeDismissed, isNonComputableSlot, notifiedSlotKey, today, activeSlot, minutesToBlockEnd, selectedGrade, activeSubject, stats, soundEnabled]);
 
   // Al cambiar de bloque se re-habilita el aviso para el siguiente slot
   useEffect(() => {
@@ -360,7 +374,7 @@ export const TeacherClassroomView: React.FC<TeacherClassroomViewProps> = ({
         method,
         slotId: v2Ctx ? (v2ClockSlot?.isWithin ? v2ClockSlot.slot.id : activeSlot.id) : activeSlot.id,
         grade: selectedGrade,
-        subject: v2Ctx?.subject || selectedSubject,
+        subject: v2Ctx?.subject || activeSubject,
         teacherName: v2Ctx?.teacherName || teacher?.fullName || teacherName,
         teacherId: v2Ctx?.teacherId || teacher?.id,
         scannedBy: 'DOCENTE',
@@ -412,7 +426,7 @@ export const TeacherClassroomView: React.FC<TeacherClassroomViewProps> = ({
         slotName: activeSlot.name,
         slotStartTime: activeSlot.startTime,
         slotEndTime: activeSlot.endTime,
-        subject: selectedSubject,
+        subject: activeSubject,
         teacherName: teacher?.fullName || teacherName,
         timestamp: new Date().toISOString(),
         date: today,
@@ -444,7 +458,7 @@ export const TeacherClassroomView: React.FC<TeacherClassroomViewProps> = ({
     const res = AttendanceStorageService.closeBlockAttendance({
       grade: selectedGrade,
       slotId: activeSlot.id,
-      subject: selectedSubject,
+      subject: activeSubject,
       teacherName: teacher?.fullName || teacherName,
       dateStr: today,
       forceClose: force
@@ -735,16 +749,21 @@ export const TeacherClassroomView: React.FC<TeacherClassroomViewProps> = ({
               </select>
             </div>
 
-            {/* Subject Selector — Ronda 34: datalist con la lista institucional (libertad de texto + sugerencias oficiales) */}
+            {/* Ronda 55: Asignatura del aula como <select> — las opciones nacen de la FICHA del
+                docente (∪ sus cátedras existentes): imposible registrar con una materia huérfana
+                o con typos ("Matematicas" sin tilde ya no puede divergir de la ficha). */}
             <div>
               <label className="block text-[10px] font-bold uppercase text-slate-400 mb-1">Asignatura</label>
-              <input
-                type="text"
-                list="inas-subjects-datalist"
-                value={selectedSubject}
+              <select
+                value={activeSubject}
                 onChange={(e) => setSelectedSubject(e.target.value)}
-                className="py-2 px-3 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-zinc-800 rounded-xl text-xs font-bold text-slate-900 dark:text-white outline-none w-36"
-              />
+                className="py-2 px-3 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-zinc-800 rounded-xl text-xs font-bold text-slate-900 dark:text-white outline-none max-w-[200px]"
+                aria-label="Asignatura de la clase"
+              >
+                {subjectChoices.map(s => (
+                  <option key={s} value={s}>{s}</option>
+                ))}
+              </select>
             </div>
 
             {/* Free Hour / Non computable Button */}
@@ -901,7 +920,7 @@ export const TeacherClassroomView: React.FC<TeacherClassroomViewProps> = ({
               ¡Atención! El bloque termina en {minutesToBlockEnd} min ({activeSlot.endTime}).
             </p>
             <p className="text-rose-700 dark:text-rose-300 mt-0.5">
-              Faltan <strong>{stats.unscanned}</strong> de {stats.total} estudiantes por escanear en {selectedGrade} · {selectedSubject || 'Sin materia programada'}.
+              Faltan <strong>{stats.unscanned}</strong> de {stats.total} estudiantes por escanear en {selectedGrade} · {activeSubject || 'Sin materia programada'}.
             </p>
           </div>
           <div className="flex items-center gap-2 shrink-0">
@@ -1590,15 +1609,21 @@ export const TeacherClassroomView: React.FC<TeacherClassroomViewProps> = ({
                 />
               </div>
               <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2">
-                <input
-                  type="text"
-                  list="inas-subjects-datalist"
+                {/* Ronda 55: la materia de la cátedra se elige de un <select> con SU ficha
+                    (∪ sus cátedras) — ya no texto libre; la cátedra nace siempre ligada a la
+                    asignatura que el docente realmente dicta. La validación de materia vacía
+                    vive en upsertTeacherOwnAssignment (error explícito). */}
+                <select
                   value={myAsgForm.subject}
                   onChange={(e) => setMyAsgForm({ ...myAsgForm, subject: e.target.value })}
-                  placeholder="Materia (ej: Matemáticas)"
                   className="flex-1 p-2 bg-white dark:bg-black border border-slate-200 dark:border-zinc-800 rounded-xl text-xs font-bold"
                   aria-label="Materia"
-                />
+                >
+                  <option value="">— Elija la asignatura —</option>
+                  {subjectChoices.map(s => (
+                    <option key={s} value={s}>{s}</option>
+                  ))}
+                </select>
                 <button
                   type="button"
                   onClick={() => {
@@ -1714,12 +1739,9 @@ export const TeacherClassroomView: React.FC<TeacherClassroomViewProps> = ({
         onConfirm={() => { const a = confirmState?.action; setConfirmState(null); a?.(); }}
         onCancel={() => setConfirmState(null)}
       />
-      {/* Ronda 34: datalist compartido de asignaturas (id único por página; lo consumen
-          el selector del aula y el formulario Mis Cátedras). El navegador autocompleta
-          con la lista institucional y el texto libre sigue permitido. */}
-      <datalist id="inas-subjects-datalist">
-        {INSTITUTIONAL_SUBJECTS.map(s => <option key={s} value={s} />)}
-      </datalist>
+      {/* Ronda 55: el datalist compartido de asignaturas (inas-subjects-datalist) se retiró —
+          sus dos consumidores (selector del aula y Mis Cátedras) ahora usan <select> con la
+          ficha del docente: el texto libre ya no existe en el Portal Docente. */}
     </div>
   );
 };

@@ -28,6 +28,20 @@ import { AttendanceStorageService } from '../services/attendanceStorage';
 import { FirebaseService } from '../services/firebase';
 import { INSTITUTIONAL_SUBJECTS } from '../constants/subjects'; // Ronda 34: lista institucional única de asignaturas
 
+// Ronda 55: la tarjeta «Dirección de Grupo» es DERIVADA del selector ⭐ (fuente única de
+// verdad). Constante para no depender de strings mágicos dispersos. El invariante que se
+// garantiza al guardar: directorGrade asignado ⇔ 'Dirección de Grupo' ∈ teacher.subjects.
+// Es lo que depende la tarjeta QR de clase (CLASE:v2 por asignatura), la validación de
+// escaneo C.2/D2 (asignatura ∈ teacher.subjects) y el bloque "Dirección de Grupo" de la
+// Plantilla B (sí computable por el Director de Grupo).
+const DIRECCION_DE_GRUPO = 'Dirección de Grupo';
+
+/** Ronda 55: normalización ÚNICA del invariante materia ⇔ dirección. */
+function normalizeSubjectsWithDirection(subjects: string[], directorGrade: string): string[] {
+  const withoutDG = subjects.filter(s => s !== DIRECCION_DE_GRUPO);
+  return directorGrade && directorGrade.trim() !== '' ? [...withoutDG, DIRECCION_DE_GRUPO] : withoutDG;
+}
+
 export const TeachersManagerView: React.FC = () => {
   const [teachers, setTeachers] = useState<Teacher[]>(AttendanceStorageService.getTeachers());
   const uniqueGrades = AttendanceStorageService.getUniqueGrades();
@@ -47,12 +61,15 @@ export const TeachersManagerView: React.FC = () => {
     fullName: '',
     email: '',
     phone: '',
-    subjectsText: '',
+    subjects: [] as string[], // Ronda 55: tarjetas (chips) — fin del texto libre por comas
     assignedGrades: [] as string[],
     directorGrade: '',
     username: '',
     tempPassword: ''
   });
+  // Ronda 55: input para agregar una asignatura fuera de la lista institucional + error inline
+  const [customSubjectInput, setCustomSubjectInput] = useState('');
+  const [subjectsError, setSubjectsError] = useState('');
 
   // Password Reset Alert Modal
   const [resetModalTeacher, setResetModalTeacher] = useState<Teacher | null>(null);
@@ -73,12 +90,14 @@ export const TeachersManagerView: React.FC = () => {
 
   const handleOpenAdd = () => {
     setEditingTeacher(null);
+    setSubjectsError('');
+    setCustomSubjectInput('');
     setFormData({
       documentId: '',
       fullName: '',
       email: '',
       phone: '',
-      subjectsText: 'Matemáticas, Física',
+      subjects: ['Matemáticas', 'Física'],
       assignedGrades: ['10°1', '10°2'],
       directorGrade: '',
       username: '',
@@ -89,13 +108,15 @@ export const TeachersManagerView: React.FC = () => {
 
   const handleOpenEdit = (t: Teacher) => {
     setEditingTeacher(t);
+    setSubjectsError('');
+    setCustomSubjectInput('');
     setFormData({
       documentId: t.documentId,
       fullName: t.fullName,
       email: t.email,
       phone: t.phone || '',
-      subjectsText: t.subjects.join(', '),
-      assignedGrades: t.assignedGrades,
+      subjects: [...(t.subjects || [])],
+      assignedGrades: [...(t.assignedGrades || [])],
       directorGrade: t.directorGrade || '',
       username: t.username,
       tempPassword: t.tempPassword || ''
@@ -107,10 +128,16 @@ export const TeachersManagerView: React.FC = () => {
     e.preventDefault();
     if (!formData.fullName.trim() || !formData.documentId.trim()) return;
 
-    const subjects = formData.subjectsText
-      .split(',')
-      .map(s => s.trim())
-      .filter(Boolean);
+    // Ronda 55: normalización ÚNICA del invariante «Dirección de Grupo» ⇔ directorGrade.
+    // El selector ⭐ ya sincroniza en vivo, pero este es el punto de garantía final
+    // (blindaje contra cualquier deriva de estado o fichas heredadas inconsistentes —
+    // p. ej. "directores fantasma" con grado pero sin la tarjeta).
+    const subjects = normalizeSubjectsWithDirection(formData.subjects, formData.directorGrade);
+    if (subjects.length === 0) {
+      setSubjectsError('Seleccione al menos una asignatura (o asigne la Dirección de Grupo).');
+      return;
+    }
+    setSubjectsError('');
 
     const generatedUsername = formData.username.trim() || 
       formData.fullName.toLowerCase().split(' ')[0] + '.' + formData.documentId.slice(-4);
@@ -286,11 +313,61 @@ export const TeachersManagerView: React.FC = () => {
       const exists = prev.assignedGrades.includes(grade);
       return {
         ...prev,
-        assignedGrades: exists 
-          ? prev.assignedGrades.filter(g => g !== grade) 
+        assignedGrades: exists
+          ? prev.assignedGrades.filter(g => g !== grade)
           : [...prev.assignedGrades, grade]
       };
     });
+  };
+
+  // ============ Ronda 55: selector de asignaturas estilo TARJETAS (chips) ============
+  // Estado EFECTIVO renderizado y guardado: `formData.subjects` + la tarjeta derivada
+  // del selector ⭐. Fuente única de verdad: `directorGrade` (ver normalizeSubjectsWithDirection).
+  const effectiveSubjects = normalizeSubjectsWithDirection(formData.subjects, formData.directorGrade);
+  const customSubjects = effectiveSubjects.filter(s => !INSTITUTIONAL_SUBJECTS.includes(s));
+
+  /** Alterna una tarjeta institucional. «Dirección de Grupo» NO es alternable aquí:
+   * se activa/retira sola desde el selector ⭐ Dirección de Grupo (abajo del formulario). */
+  const toggleSubject = (subject: string) => {
+    if (subject === DIRECCION_DE_GRUPO) return;
+    setSubjectsError('');
+    setFormData(prev => ({
+      ...prev,
+      subjects: prev.subjects.includes(subject)
+        ? prev.subjects.filter(s => s !== subject)
+        : [...prev.subjects, subject]
+    }));
+  };
+
+  /** Ronda 55 (petición del propietario): sincronización VIVA — al elegir el curso en el
+   * selector ⭐ se activa al instante la tarjeta «Dirección de Grupo»; al pasar a N/A se
+   * retira. Ya NO hay que escribir la asignatura a mano además de elegir el grado. */
+  const handleDirectorGradeChange = (grade: string) => {
+    setFormData(prev => ({
+      ...prev,
+      directorGrade: grade,
+      subjects: normalizeSubjectsWithDirection(prev.subjects, grade)
+    }));
+  };
+
+  /** Agrega una asignatura propia fuera de la lista institucional (se conserva la libertad
+   * de la Ronda 37, pero con tarjeta deducible y removible — sin texto suelto por comas). */
+  const addCustomSubject = () => {
+    const name = customSubjectInput.trim();
+    if (!name) return;
+    const institutional = INSTITUTIONAL_SUBJECTS.find(s => s.toLowerCase() === name.toLowerCase());
+    if (institutional) {
+      if (!formData.subjects.includes(institutional)) toggleSubject(institutional);
+      setCustomSubjectInput('');
+      return;
+    }
+    if (formData.subjects.some(s => s.toLowerCase() === name.toLowerCase())) {
+      setCustomSubjectInput('');
+      return;
+    }
+    setSubjectsError('');
+    setFormData(prev => ({ ...prev, subjects: [...prev.subjects, name] }));
+    setCustomSubjectInput('');
   };
 
   const filteredTeachers = teachers.filter(t => 
@@ -440,7 +517,8 @@ export const TeachersManagerView: React.FC = () => {
                 </div>
 
                 <div className="flex flex-wrap gap-1">
-                  {teacher.subjects.map(s => (
+                  {/* Ronda 55: «Dirección de Grupo» no se repite aquí — ya tiene su badge ⭐ dedicado arriba */}
+                  {teacher.subjects.filter(s => s !== DIRECCION_DE_GRUPO).map(s => (
                     <span key={s} className="text-[10px] font-bold px-2 py-0.5 rounded-lg bg-indigo-50 dark:bg-indigo-950/60 text-indigo-700 dark:text-indigo-300 border border-indigo-100 dark:border-indigo-900">
                       {s}
                     </span>
@@ -625,24 +703,93 @@ export const TeachersManagerView: React.FC = () => {
                 </div>
               </div>
 
-              {/* Subjects — Ronda 34: datalist con la lista institucional (sugerencias;
-                  el texto separado por comas sigue siendo libre) */}
+              {/* Ronda 55: Asignaturas estilo TARJETAS (chips) — fin del texto libre por comas.
+                  Sugerencias: lista institucional oficial (Ronda 37). La tarjeta «Dirección de
+                  Grupo» es derivada del selector ⭐ de abajo (no es clickeable aquí). Se conserva
+                  la libertad de la Ronda 37 vía «Otra asignatura…» (tarjeta custom removible). */}
               <div>
-                <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 uppercase tracking-wider mb-1">
-                  Asignaturas que Dicta (Separadas por coma)
-                </label>
-                <input
-                  type="text"
-                  list="inas-subjects-datalist-teacher"
-                  placeholder="Matemáticas, Religión, Artística, Cátedra de la Paz…"
-                  value={formData.subjectsText}
-                  onChange={(e) => setFormData({ ...formData, subjectsText: e.target.value })}
-                  className="w-full px-3 py-2 bg-white dark:bg-black border border-slate-300 dark:border-zinc-800 rounded-xl text-xs text-slate-900 dark:text-white focus:ring-2 focus:ring-indigo-500 outline-none"
-                  required
-                />
-                <datalist id="inas-subjects-datalist-teacher">
-                  {INSTITUTIONAL_SUBJECTS.map(s => <option key={s} value={s} />)}
-                </datalist>
+                <div className="flex items-center justify-between mb-1">
+                  <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 uppercase tracking-wider">
+                    Asignaturas que Dicta
+                  </label>
+                  <span className="text-[10px] font-bold text-indigo-600 dark:text-indigo-400">
+                    {effectiveSubjects.length} seleccionada{effectiveSubjects.length === 1 ? '' : 's'}
+                  </span>
+                </div>
+                <div className="flex flex-wrap gap-1.5 p-2.5 max-h-44 overflow-y-auto bg-slate-50 dark:bg-black rounded-2xl border border-slate-200 dark:border-zinc-800/50">
+                  {INSTITUTIONAL_SUBJECTS.map(s => {
+                    const isSelected = effectiveSubjects.includes(s);
+                    if (s === DIRECCION_DE_GRUPO) {
+                      return (
+                        <span
+                          key={s}
+                          title="Esta tarjeta se activa sola al elegir el curso en ⭐ Dirección de Grupo (más abajo)."
+                          className={`px-2.5 py-1 rounded-xl text-xs font-black transition-all inline-flex items-center gap-1 cursor-help ${
+                            isSelected
+                              ? 'bg-amber-400 text-amber-950 shadow-xs'
+                              : 'bg-white dark:bg-slate-800 text-slate-400 border border-dashed border-amber-300 dark:border-amber-800'
+                          }`}
+                        >
+                          <span>⭐</span>
+                          <span>{s}</span>
+                          {isSelected && <Check className="w-3 h-3" />}
+                        </span>
+                      );
+                    }
+                    return (
+                      <button
+                        type="button"
+                        key={s}
+                        onClick={() => toggleSubject(s)}
+                        aria-pressed={isSelected}
+                        className={`px-2.5 py-1 rounded-xl text-xs font-bold transition-all ${
+                          isSelected
+                            ? 'bg-indigo-600 text-white shadow-xs'
+                            : 'bg-white dark:bg-slate-800 text-slate-600 dark:text-slate-300 border border-slate-200 dark:border-zinc-800 hover:border-indigo-400'
+                        }`}
+                      >
+                        {s}{isSelected ? ' ✓' : ''}
+                      </button>
+                    );
+                  })}
+                  {customSubjects.map(s => (
+                    <span key={s} className="px-2.5 py-1 rounded-xl text-xs font-bold bg-purple-600 text-white shadow-xs inline-flex items-center gap-1">
+                      {s}
+                      <button
+                        type="button"
+                        onClick={() => toggleSubject(s)}
+                        aria-label={`Quitar ${s}`}
+                        className="hover:opacity-70"
+                      >
+                        <X className="w-3 h-3" />
+                      </button>
+                    </span>
+                  ))}
+                </div>
+                {subjectsError && (
+                  <p className="text-[10px] font-bold text-rose-600 dark:text-rose-400 mt-1">{subjectsError}</p>
+                )}
+                <div className="flex items-center gap-1.5 mt-1.5">
+                  <input
+                    type="text"
+                    value={customSubjectInput}
+                    onChange={(e) => setCustomSubjectInput(e.target.value)}
+                    onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); addCustomSubject(); } }}
+                    placeholder="Otra asignatura (fuera de la lista institucional)…"
+                    className="flex-1 px-3 py-1.5 bg-white dark:bg-black border border-slate-300 dark:border-zinc-800 rounded-xl text-xs text-slate-900 dark:text-white outline-none focus:ring-2 focus:ring-purple-500"
+                  />
+                  <button
+                    type="button"
+                    onClick={addCustomSubject}
+                    className="px-3 py-1.5 rounded-xl bg-purple-600 hover:bg-purple-500 text-white text-xs font-bold transition-all flex items-center gap-1 shrink-0"
+                  >
+                    <Check className="w-3.5 h-3.5" />
+                    <span>Agregar</span>
+                  </button>
+                </div>
+                <p className="text-[10px] text-slate-500 dark:text-slate-400 mt-1 leading-tight">
+                  Toque una tarjeta para asignar o retirar la asignatura.
+                </p>
               </div>
 
               {/* Assigned Grades Selection */}
@@ -683,7 +830,7 @@ export const TeachersManagerView: React.FC = () => {
                 </div>
                 <select
                   value={formData.directorGrade}
-                  onChange={(e) => setFormData({ ...formData, directorGrade: e.target.value })}
+                  onChange={(e) => handleDirectorGradeChange(e.target.value)}
                   className="w-full px-3 py-2 bg-white dark:bg-black border border-amber-300 dark:border-amber-800 rounded-xl text-xs font-bold text-slate-900 dark:text-white outline-none focus:ring-2 focus:ring-amber-500"
                 >
                   <option value="">N/A - Sin dirección de grupo asignada</option>
@@ -694,7 +841,7 @@ export const TeachersManagerView: React.FC = () => {
                   ))}
                 </select>
                 <p className="text-[10px] text-slate-500 dark:text-slate-400 leading-tight">
-                  Al asignar un curso, el docente tendrá acceso a la supervisión general de jornada y mensajes motivacionales de su grupo a cargo.
+                  Al asignar un curso se activa <b>automáticamente</b> la tarjeta «⭐ Dirección de Grupo» en sus asignaturas (arriba) — sin escribirla a mano; al pasar a N/A se retira sola. El docente tendrá acceso a la supervisión general de jornada y mensajes motivacionales de su grupo a cargo, y su tarjeta QR de Dirección de Grupo queda lista para imprimir en Horarios → QR de Clase.
                 </p>
               </div>
 

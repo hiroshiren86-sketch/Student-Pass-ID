@@ -661,10 +661,17 @@ export class AttendanceStorageService {
       if (t.id === teacherId) {
         t.isGroupDirector = true;
         t.directorGrade = grade;
+        // Ronda 55: invariante «Dirección de Grupo» ⇔ directorGrade — quien recibe la
+        // dirección obtiene TAMBIÉN la asignatura (de ella dependen la tarjeta QR de clase
+        // CLASE:v2 y la validación de escaneo C.2/D2: asignatura ∈ teacher.subjects).
+        t.subjects = (t.subjects || []).filter(s => s !== 'Dirección de Grupo');
+        t.subjects = [...t.subjects, 'Dirección de Grupo'];
         updated = true;
       } else if (t.directorGrade === grade && t.id !== teacherId) {
         t.isGroupDirector = false;
         t.directorGrade = undefined;
+        // Ronda 55: quien pierde la dirección pierde la tarjeta derivada (misma fuente de verdad).
+        t.subjects = (t.subjects || []).filter(s => s !== 'Dirección de Grupo');
         updated = true;
       }
     });
