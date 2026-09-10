@@ -355,11 +355,11 @@ export class AttendanceStorageService {
       // demo — se protegió un respaldo `_corrupt_backup_*` y se recupera vacío; el usuario
       // restaura con "Descargar de Cloudflare" (PULL). Regla 6: cero fallback silencioso.
       if (!SEED_DEMO_ON_FIRST_LAUNCH) {
-        this.saveStudents([]);
+        this.saveStudents([], 'system');
         return [];
       }
       // Auto-recover with demo data if JSON is corrupted
-      this.saveStudents(INITIAL_STUDENTS);
+      this.saveStudents(INITIAL_STUDENTS, 'system'); // auto-reparación NO sella
       return INITIAL_STUDENTS;
     }
 
@@ -369,16 +369,16 @@ export class AttendanceStorageService {
       // (patrón Ronda 14: evita re-disparos del seed) y la app queda lista para importar
       // la matrícula real o crear estudiantes desde cero.
       if (!SEED_DEMO_ON_FIRST_LAUNCH) {
-        this.saveStudents([]);
+        this.saveStudents([], 'system');
         return [];
       }
-      this.saveStudents(INITIAL_STUDENTS);
+      this.saveStudents(INITIAL_STUDENTS, 'system'); // auto-reparación NO sella
       return INITIAL_STUDENTS;
     }
     return [];
   }
 
-  static saveStudents(students: Student[], origin: 'local' | 'cloud' = 'local'): void {
+  static saveStudents(students: Student[], origin: 'local' | 'cloud' | 'system' = 'local'): void {
     // Ronda 57: solo lo de ORIGEN LOCAL sella "edición sin subir"; el pull escribe con
     // origin:'cloud' (es dato derivado de la nube y no debe bloquear pulls futuros).
     if (origin === 'local') this.markLocalSyncDirty();
@@ -772,14 +772,14 @@ export class AttendanceStorageService {
     }
     // Ronda 27 (entrega limpia): key null o corrupta → `[]` persistido (sin demo).
     if (!SEED_DEMO_ON_FIRST_LAUNCH) {
-      this.saveTeachers([]);
+      this.saveTeachers([], 'system'); // Ronda 57 (fix hueco #7): auto-reparación NO sella
       return [];
     }
-    this.saveTeachers(INITIAL_TEACHERS);
+    this.saveTeachers(INITIAL_TEACHERS, 'system');
     return INITIAL_TEACHERS;
   }
 
-  static saveTeachers(teachers: Teacher[], origin: 'local' | 'cloud' = 'local'): void {
+  static saveTeachers(teachers: Teacher[], origin: 'local' | 'cloud' | 'system' = 'local'): void {
     if (origin === 'local') this.markLocalSyncDirty(); // Ronda 57
     localStorage.setItem(TEACHERS_KEY, JSON.stringify(teachers));
     this.notify();
@@ -850,7 +850,7 @@ export class AttendanceStorageService {
     }
   }
 
-  static saveCustomTemplates(templates: DayTemplateConfig[], origin: 'local' | 'cloud' = 'local'): void {
+  static saveCustomTemplates(templates: DayTemplateConfig[], origin: 'local' | 'cloud' | 'system' = 'local'): void {
     if (origin === 'local') this.markLocalSyncDirty(); // Ronda 57
     localStorage.setItem(CUSTOM_TEMPLATES_KEY, JSON.stringify(templates || []));
     this.notify();
@@ -1146,7 +1146,7 @@ export class AttendanceStorageService {
   }
 
   // Ronda 4 (F5): reemplazo total desde el snapshot de sync (patrón igual que slots/assignments)
-  static saveAllStudentSchedules(map: Record<string, StudentPersonalSchedule>, origin: 'local' | 'cloud' = 'local'): void {
+  static saveAllStudentSchedules(map: Record<string, StudentPersonalSchedule>, origin: 'local' | 'cloud' | 'system' = 'local'): void {
     if (origin === 'local') this.markLocalSyncDirty(); // Ronda 57
     // Ronda 22: barrera de escritura — un snapshot entrante no puede reintroducir el sábado.
     const clean: Record<string, StudentPersonalSchedule> = {};
@@ -1301,11 +1301,11 @@ export class AttendanceStorageService {
         return JSON.parse(stored);
       }
     } catch {}
-    this.saveScheduleSlots(DEFAULT_SCHEDULE_SLOTS);
+    this.saveScheduleSlots(DEFAULT_SCHEDULE_SLOTS, 'system'); // Ronda 57 (fix hueco #7): lazy-init NO sella
     return DEFAULT_SCHEDULE_SLOTS;
   }
 
-  static saveScheduleSlots(slots: ScheduleSlot[], origin: 'local' | 'cloud' = 'local'): void {
+  static saveScheduleSlots(slots: ScheduleSlot[], origin: 'local' | 'cloud' | 'system' = 'local'): void {
     if (origin === 'local') this.markLocalSyncDirty(); // Ronda 57
     localStorage.setItem(SCHEDULE_SLOTS_KEY, JSON.stringify(slots));
     this.notify();
@@ -1336,14 +1336,14 @@ export class AttendanceStorageService {
     }
     // Ronda 27 (entrega limpia): key null o corrupta → `[]` persistido (sin cátedras demo).
     if (!SEED_DEMO_ON_FIRST_LAUNCH) {
-      this.saveScheduleAssignments([]);
+      this.saveScheduleAssignments([], 'system');
       return [];
     }
-    this.saveScheduleAssignments(INITIAL_SCHEDULE_ASSIGNMENTS);
+    this.saveScheduleAssignments(INITIAL_SCHEDULE_ASSIGNMENTS, 'system');
     return INITIAL_SCHEDULE_ASSIGNMENTS;
   }
 
-  static saveScheduleAssignments(assignments: ClassScheduleAssignment[], origin: 'local' | 'cloud' = 'local'): void {
+  static saveScheduleAssignments(assignments: ClassScheduleAssignment[], origin: 'local' | 'cloud' | 'system' = 'local'): void {
     if (origin === 'local') this.markLocalSyncDirty(); // Ronda 57
     localStorage.setItem(SCHEDULE_ASSIGNMENTS_KEY, JSON.stringify(assignments));
     this.notify();
