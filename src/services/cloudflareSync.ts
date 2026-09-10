@@ -452,7 +452,7 @@ export class CloudflareSyncService {
       // Ronda 47 (Fase 2 — Flanco 3): el push de catálogo devuelve la nueva catalog_version;
       // se guarda para el próximo CAS sin costo.
       if (typeof data?.catalogVersion === 'number') {
-        AttendanceStorageService.saveSettings({ ...AttendanceStorageService.getSettings(), cloudflareCatalogVersion: data.catalogVersion });
+        AttendanceStorageService.saveSettings({ ...AttendanceStorageService.getSettings(), cloudflareCatalogVersion: data.catalogVersion }, false); // R57: guardado de protocolo NO sella
       }
       // Ronda 57 (INV-1/INV-2): el push EXITOSO publicó todo el estado local — el sello de
       // "ediciones sin subir" se libera para que los pulls futuros vuelvan a converger.
@@ -599,7 +599,7 @@ export class CloudflareSyncService {
       // Ronda 47 (Fase 2 — Flanco 3): la versión de catálogo viaja en la respuesta del
       // pull. Se guarda para que el próximo push envíe la correcta (CAS).
       if (typeof result?.catalogVersion === 'number') {
-        AttendanceStorageService.saveSettings({ ...AttendanceStorageService.getSettings(), cloudflareCatalogVersion: result.catalogVersion });
+        AttendanceStorageService.saveSettings({ ...AttendanceStorageService.getSettings(), cloudflareCatalogVersion: result.catalogVersion }, false); // R57 (fix hueco #5): guardado de protocolo NO sella
       }
 
       const { students, records, teachers, assignments, slots, customTemplates, studentSchedules } = result.data;
@@ -920,7 +920,7 @@ export class CloudflareSyncService {
       AttendanceStorageService.saveSettings({
         ...AttendanceStorageService.getSettings(),
         cloudflareLastSyncedAt: next
-      });
+      }, false); // R57 (fix hueco #5): el cursor es estado de protocolo — jamás sella
     }
   }
 
@@ -929,7 +929,7 @@ export class CloudflareSyncService {
     AttendanceStorageService.saveSettings({
       ...current,
       lastCloudflareSync: `${new Date().toLocaleDateString('es-CO')} ${timeStr}`
-    });
+    }, false); // R57: guardado de protocolo NO sella
   }
 
   // ===========================================================================
