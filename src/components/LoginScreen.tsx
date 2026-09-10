@@ -89,6 +89,14 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onLoginSuccess }) => {
           setIsLoading(false);
           return;
         }
+        // Ronda 56: convergencia inmediata al entrar — Pull silencioso (fire-and-forget).
+        // Rectoría ve AL INSTANTE el estado real de la nube (roles nuevos, docentes,
+        // plantillas, jornada, qrSecret institucional) sin esperar el ciclo del
+        // auto-sync ni pulsar "Descargar (Pull)". No bloquea el login ni lo tumba si
+        // no hay red (el intervalo del auto-sync reintenta más tarde).
+        CloudflareSyncService.pullFromCloudflare().catch(() => {
+          /* sin red/URL: el auto-sync reintenta más tarde */
+        });
         onLoginSuccess('ADMIN', {
           username: profile.displayName || cleanIdent.toLowerCase(),
           uid: user.uid,
@@ -117,16 +125,19 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onLoginSuccess }) => {
         // (teléfono personal nuevo, sin token de dispositivo), se intenta un DESCARGAR (Pull)
         // por IDENTIDAD — el Worker verifica la cuenta del docente y devuelve SOLO su ficha y
         // sus grados. Así el docente entra en su propio teléfono sin depender de Rectoría.
-        // Si el pull falla (sin red/URL) se conserva el mensaje honesto de siempre.
-        if (!teacher) {
-          try {
-            const pull = await CloudflareSyncService.pullFromCloudflare();
-            if (pull.success) {
-              teacher = AttendanceStorageService.getTeachers().find(t => t.id === profile.linkedTeacherId);
-            }
-          } catch {
-            /* sin red o sin URL: se degrada al mensaje honesto */
+        // Ronda 56: el Pull ahora es SIEMPRE (no solo cuando falta la ficha). El snapshot
+        // scopeado se aplica con UPSERT (no destruye nada local) y trae los SETTINGS
+        // institucionales (jornada, plantilla activa, qrSecret…) — con el pull condicional
+        // antiguo, un teléfono con catálogo viejo quedaba congelado para siempre (bug
+        // "teléfono 2" del 10/09/2026: el rol de representante recién asignado nunca
+        // aparecía y las tarjetas de clase daban "firma no coincide").
+        try {
+          const pull = await CloudflareSyncService.pullFromCloudflare();
+          if (pull.success) {
+            teacher = AttendanceStorageService.getTeachers().find(t => t.id === profile.linkedTeacherId) || teacher;
           }
+        } catch {
+          /* sin red o sin URL: se degrada al mensaje honesto */
         }
         if (!teacher) {
           await FirebaseService.logout();
@@ -199,14 +210,17 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onLoginSuccess }) => {
 
         // Ronda 50 (M3): teléfono nuevo del representante/estudiante — intentar Pull por
         // identidad para hidratar su ficha y sus datos antes de rendirse.
-        if (!student && identityProfile?.linkedStudentCode) {
-          try {
-            const pull = await CloudflareSyncService.pullFromCloudflare();
-            if (pull.success) {
-              student = AttendanceStorageService.getStudentByCodeOrDoc(identityProfile.linkedStudentCode);
-            }
-          } catch { /* sin red/URL: se degrada al mensaje honesto */ }
-        }
+        // Ronda 56: el Pull es SIEMPRE (con o sin identidad, con ficha local o sin ella):
+        // trae settings institucionales (qrSecret → las tarjetas de clase verifican en este
+        // teléfono; jornada/plantilla) y su porción de matrícula por UPSERT (sin destruir
+        // nada local). En el camino local sin identidad el pull puede fallar 401 en un
+        // teléfono personal sin tokens → silencioso, el flujo sigue con la ficha local.
+        try {
+          const pull = await CloudflareSyncService.pullFromCloudflare();
+          if (pull.success && !student && identityProfile?.linkedStudentCode) {
+            student = AttendanceStorageService.getStudentByCodeOrDoc(identityProfile.linkedStudentCode);
+          }
+        } catch { /* sin red/URL: se degrada al mensaje honesto */ }
 
         if (!student) {
           setErrorMessage(identityProfile

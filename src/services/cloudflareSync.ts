@@ -62,18 +62,29 @@ export class CloudflareSyncService {
     if (settings.cloudflareAutoSync !== false && settings.cloudflareWorkerUrl) {
       const intervalMs = (settings.cloudflareSyncIntervalMinutes || 5) * 60 * 1000;
       this.autoSyncTimer = setInterval(() => {
-        this.performCloudflareSync().catch((err) => {
+        this.performCloudflareSync().then(async (pushResult) => {
+          // Ronda 56 — CONVERGENCIA COMPLETA PARA RECTORÍA: tras el push (que ya subió
+          // TODO el estado local — sin ventana de pérdida), se hace un Pull COMPLETO.
+          // Esto cierra el hueco del 10/09/2026: el catálogo (estudiantes/roles/
+          // docentes/plantillas/settings) SOLO bajaba con Pull manual, así que un
+          // segundo dispositivo quedaba congelado en datos viejos (p. ej. el rol de
+          // representante de un estudiante recién asignado jamás aparecía). Ahora cada
+          // ciclo push→pull converge: lo local acaba de subirse y lo que baja incluye
+          // los cambios de los demás terminales + settings institucionales (incluido
+          // el qrSecret). Si el push falló (409 CAS/red) el pull re-ubica el terminal
+          // con la nube ganadora (mismo propósito del CAS de R47).
+          const session = AttendanceStorageService.getCurrentSession();
+          if (session?.role === 'ADMIN') {
+            try {
+              await this.pullFromCloudflare();
+            } catch {
+              /* silencioso: la salud del sync no depende de este refresco */
+            }
+          }
+          void pushResult;
+        }).catch((err) => {
           console.warn('[Cloudflare AutoSync] Sincronización periódica fallida:', err);
         });
-        // Ronda 54 — AUTO-SYNC DE HECHOS PARA RECTORÍA: además del push, Rectoría baja los
-        // escaneos que hicieron docentes/estudiantes desde la nube (pull `scope=facts`,
-        // no destructivo: solo fusiona registros, JAMÁS reemplaza el catálogo). Solo ADMIN.
-        const session = AttendanceStorageService.getCurrentSession();
-        if (session?.role === 'ADMIN') {
-          this.pullFactsFromCloudflare().catch(() => {
-            /* silencioso: la salud del sync no depende de este refresco de hechos */
-          });
-        }
       }, intervalMs);
     }
   }
@@ -257,12 +268,27 @@ export class CloudflareSyncService {
 
   /** Copia de settings SIN secretos para el snapshot (deuda de seguridad de Ronda 4 cerrada) */
   private static safeSettingsCopy(settings: SchoolSettings): SchoolSettings {
+    // Ronda 56 — CAMBIO DE POLÍTICA (mandato del propietario: "todo lo que se pueda
+    // sincronizar y se deba sincronizar"): el `qrSecret` ahora SÍ viaja en el snapshot.
+    // Es un secreto INSTITUCIONAL COMPARTIDO por diseño: todas las terminales verifican
+    // las firmas HMAC de carnés y Tarjetas QR de Docente (CLASE:v2) con EL MISMO secret.
+    // Sin distribuirlo, cada dispositivo con un secret distinto rechaza TODO lo firmado
+    // por otros terminales ("la firma no coincide" — bug reproducido en producción
+    // 10/09/2026 con tarjetas de clase escaneadas desde otro teléfono). Solo el push de
+    // ADMIN (Rectoría) escribe el snapshot (el Worker descarta settings de pushes
+    // OPERATOR/identidad), el canal es HTTPS y exige sesión/token; y el pull lo aplica
+    // con exclusión de credenciales POR DISPOSITIVO (ver applyCloudSettingsToDevice).
+    // Sí se excluyen los secretos personales/de-red: claves IA, tokens del Worker,
+    // sessionSecret local.
     const {
-      qrSecret: _qr,
       sessionSecret: _ss,
       cloudflareApiToken: _tok,
       cloudflareOperatorToken: _optok,
       customAiApiKey: _key,
+      groqApiKey: _gq,
+      mistralApiKey: _mr,
+      openrouterApiKey: _or,
+      geminiApiKey: _gm,
       ...safe
     } = settings;
     return safe as SchoolSettings;
@@ -452,6 +478,70 @@ export class CloudflareSyncService {
   }
 
   /**
+   * Ronda 56 — política de aplicación de SETTINGS de la nube al dispositivo.
+   * El pull SÍ sincroniza todo lo institucional (nombre, jornada, plantilla activa,
+   * tolerancia, modos, qrSecret institucional…) y JAMÁS pisa lo propio del terminal
+   * (URL del Worker con la que este dispositivo conecta, sus tokens, su clave IA
+   * personal, sus cursores de sync y su sesión). Los valores vacíos en la nube no
+   * pisan valores locales (neutralidad del snapshot incompleto).
+   */
+  private static readonly DEVICE_LOCAL_SETTINGS = new Set<string>([
+    'cloudflareWorkerUrl',      // cómo CONECTA este terminal (previo al sync)
+    'cloudflareApiToken',       // AUTH_TOKEN local del terminal
+    'cloudflareOperatorToken',  // OPERATOR_TOKEN heredado localmente (R48)
+    'customAiApiKey',           // clave IA personal (BYOK)
+    'groqApiKey', 'mistralApiKey', 'openrouterApiKey', 'geminiApiKey',
+    'sessionSecret',            // secreto de sesión local
+    'cloudflareAutoSync', 'cloudflareSyncIntervalMinutes', // preferencia local de intervalo
+    'lastCloudflareSync', 'lastCloudSync',                 // sellos locales
+    'cloudflareLastSyncedAt',   // cursor incremental LOCAL (R54): nunca retrocede por snapshot
+    'cloudflareCatalogVersion', // la gestiona el protocolo CAS por separado
+    'updatedAt'                 // metadato del snapshot
+  ]);
+
+  private static applyCloudSettingsToDevice(cloudSettings: any): { changed: number } {
+    if (!cloudSettings || typeof cloudSettings !== 'object' || Array.isArray(cloudSettings)) return { changed: 0 };
+    const current = AttendanceStorageService.getSettings();
+    const merged: any = { ...current };
+    let changed = 0;
+    for (const [key, value] of Object.entries(cloudSettings)) {
+      if (this.DEVICE_LOCAL_SETTINGS.has(key)) continue;
+      if (value === undefined || value === null || value === '') continue; // vacío no pisa
+      if (key === 'qrSecret' && typeof value !== 'string') continue;
+      if (JSON.stringify((current as any)[key]) !== JSON.stringify(value)) {
+        merged[key] = value;
+        changed++;
+      }
+    }
+    if (changed > 0) {
+      // syncToCloud=false: el pull no debe re-respaldar a Firestore lo que acaba de bajar.
+      AttendanceStorageService.saveSettings(merged as SchoolSettings, false);
+    }
+    return { changed };
+  }
+
+  /**
+   * Ronda 56 — merge UPSERT para snapshots SCOPEADOS (filterSnapshotByRole: DOCENTE /
+   * ESTUDIANTE_ACUDIENTE). El snapshot de un rol no-ADMIN trae SOLO su porción
+   * (p. ej. estudiantes de SU grado, teachers:[su ficha]) — reemplazar el catálogo local
+   * completo con esa porción DESTRUIRÍA la matrícula del dispositivo (bug del "teléfono
+   * 2" reproducido en producción). Upsert: lo que llega pisa/añade su id; lo demás local
+   * se conserva. Los roles no editan el catálogo (solo Rectoría), así que el upsert
+   * converge siempre hacia la nube sin destruir nada.
+   */
+  private static upsertBy<T>(localArr: T[], incoming: T[], keyOf: (item: T) => string): { result: T[]; changed: number } {
+    const map = new Map<string, T>((localArr || []).map(item => [keyOf(item), item]));
+    let changed = 0;
+    for (const item of (incoming || [])) {
+      if (!item) continue;
+      const key = keyOf(item);
+      if (JSON.stringify(map.get(key)) !== JSON.stringify(item)) changed++;
+      map.set(key, item);
+    }
+    return { result: Array.from(map.values()), changed };
+  }
+
+  /**
    * Ejecuta la sincronización de BAJADA (Pull) desde el Cloudflare Worker hacia el almacenamiento local
    */
   static async pullFromCloudflare(): Promise<{ success: boolean; message: string; data?: any }> {
@@ -494,6 +584,12 @@ export class CloudflareSyncService {
       }
 
       const { students, records, teachers, assignments, slots, customTemplates, studentSchedules } = result.data;
+      // Ronda 56: settings del snapshot (viajan en TODOS los scopes: el filtro por rol
+      // hace spread de data). Se aplican con exclusión de campos por-dispositivo.
+      const cloudSettings = result.data.settings;
+      // Ronda 56: ¿snapshot SCOPEADO por rol? (filterSnapshotByRole añade scopedFor para
+      // DOCENTE y ESTUDIANTE_ACUDIENTE). ADMIN/OPERATOR reciben el snapshot completo.
+      const scopedRole = result.data.scopedFor?.role as ('DOCENTE' | 'ESTUDIANTE_ACUDIENTE' | undefined);
 
       let importedStudents = 0;
       let importedRecords = 0;
@@ -501,15 +597,29 @@ export class CloudflareSyncService {
       let importedAssignments = 0;
       let importedSlots = 0;
       let importedTemplates = 0;
+      let updatedStudents = 0;
+      let updatedTeachers = 0;
+      let updatedAssignments = 0;
+      let updatedSlots = 0;
 
       if (Array.isArray(students) && students.length > 0) {
         // Ronda 54 (hueco #5): aplicar tombstones LOCALES al pull. Un borrado hecho en este
         // terminal pero aún no subido (sin push) debía estar en la nube para que el Worker lo
         // filtrara; aquí se filtra también, para que el estudiante NO RESUCITE en este pull.
         const tombStudents = new Set(AttendanceStorageService.getTombstones().filter(t => t.type === 'student').map(t => t.id));
-        const localStudents = students.filter((s: any) => s && !tombStudents.has(String(s.code)));
-        AttendanceStorageService.saveStudents(localStudents);
-        importedStudents = localStudents.length;
+        const incomingStudents = students.filter((s: any) => s && !tombStudents.has(String(s.code)));
+        if (scopedRole) {
+          // Ronda 56: upsert — la porción del grado pisa/añade; el resto de la matrícula
+          // local se CONSERVA (el snapshot scopeado jamás destruye el catálogo del teléfono).
+          const local = AttendanceStorageService.getStudents();
+          const { result: merged, changed } = CloudflareSyncService.upsertBy(local, incomingStudents, (s: any) => String(s.code));
+          AttendanceStorageService.saveStudents(merged);
+          importedStudents = incomingStudents.length;
+          updatedStudents = changed;
+        } else {
+          AttendanceStorageService.saveStudents(incomingStudents);
+          importedStudents = incomingStudents.length;
+        }
       }
 
       if (Array.isArray(records) && records.length > 0) {
@@ -560,18 +670,43 @@ export class CloudflareSyncService {
       }
 
       if (Array.isArray(teachers) && teachers.length > 0) {
-        AttendanceStorageService.saveTeachers(teachers);
-        importedTeachers = teachers.length;
+        if (scopedRole === 'DOCENTE') {
+          // Ronda 56: upsert de SU ficha — jamás reemplazar el directorio con teachers:[1].
+          const local = AttendanceStorageService.getTeachers();
+          const { result: merged, changed } = CloudflareSyncService.upsertBy(local, teachers, (t: any) => String(t.id));
+          AttendanceStorageService.saveTeachers(merged);
+          importedTeachers = teachers.length;
+          updatedTeachers = changed;
+        } else {
+          AttendanceStorageService.saveTeachers(teachers);
+          importedTeachers = teachers.length;
+        }
       }
 
       if (Array.isArray(assignments) && assignments.length > 0) {
-        AttendanceStorageService.saveScheduleAssignments(assignments);
-        importedAssignments = assignments.length;
+        if (scopedRole) {
+          const local = AttendanceStorageService.getScheduleAssignments();
+          const { result: merged, changed } = CloudflareSyncService.upsertBy(local, assignments, (a: any) => String(a.id));
+          AttendanceStorageService.saveScheduleAssignments(merged);
+          importedAssignments = assignments.length;
+          updatedAssignments = changed;
+        } else {
+          AttendanceStorageService.saveScheduleAssignments(assignments);
+          importedAssignments = assignments.length;
+        }
       }
 
       if (Array.isArray(slots) && slots.length > 0) {
-        AttendanceStorageService.saveScheduleSlots(slots);
-        importedSlots = slots.length;
+        if (scopedRole) {
+          const local = AttendanceStorageService.getScheduleSlots();
+          const { result: merged, changed } = CloudflareSyncService.upsertBy(local, slots, (s: any) => String(s.id));
+          AttendanceStorageService.saveScheduleSlots(merged);
+          importedSlots = slots.length;
+          updatedSlots = changed;
+        } else {
+          AttendanceStorageService.saveScheduleSlots(slots);
+          importedSlots = slots.length;
+        }
       }
 
       // Ronda 4 (F5): plantillas CUSTOM y horarios personales viajan en el snapshot.
@@ -583,6 +718,12 @@ export class CloudflareSyncService {
         AttendanceStorageService.saveAllStudentSchedules(studentSchedules);
       }
 
+      // Ronda 56: aplicar SETTINGS de la nube (jornada, plantilla activa, tolerancia,
+      // qrSecret institucional…) con exclusión de campos por-dispositivo. Esto es el fix
+      // de los 3 bugs del 10/09/2026: fin de jornada / plantilla activa / firma de
+      // tarjetas ("la firma no coincide") que no cruzaban entre teléfonos.
+      const settingsChanged = CloudflareSyncService.applyCloudSettingsToDevice(cloudSettings);
+
       // Ronda 42 (H-42-2): el mensaje anterior solo mencionaba estudiantes y asistencias;
       // docentes y cátedras se importaban EN SILENCIO y el propietario concluyó "no bajan
       // horarios ni profesores". Ahora el resumen cuenta TODO lo restaurado.
@@ -592,6 +733,7 @@ export class CloudflareSyncService {
       if (importedSlots > 0) summaryParts.push(`${importedSlots} bloque${importedSlots === 1 ? '' : 's'} de jornada`);
       if (importedTemplates > 0) summaryParts.push(`${importedTemplates} plantilla${importedTemplates === 1 ? '' : 's'} de jornada`);
       summaryParts.push(`${importedRecords} ${importedRecords === 1 ? 'nueva asistencia' : 'nuevas asistencias'}`);
+      if (settingsChanged.changed > 0) summaryParts.push(`${settingsChanged.changed} ajuste(s) institucional(es) actualizado(s)`);
 
       // Ronda 54 — actualizar el cursor de sync (nunca retrocede). Con el pull COMPLETO
       // ya se trajo TODO, así que el próximo pull de hechos puede empezar desde acá.
