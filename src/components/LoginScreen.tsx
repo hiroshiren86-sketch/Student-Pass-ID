@@ -94,9 +94,17 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onLoginSuccess }) => {
         // plantillas, jornada, qrSecret institucional) sin esperar el ciclo del
         // auto-sync ni pulsar "Descargar (Pull)". No bloquea el login ni lo tumba si
         // no hay red (el intervalo del auto-sync reintenta más tarde).
-        CloudflareSyncService.pullFromCloudflare().catch(() => {
-          /* sin red/URL: el auto-sync reintenta más tarde */
-        });
+        // Ronda 57 (INV-2): si hay ediciones locales AÚN SIN SUBIR (sello dirty), el pull
+        // del login NO corre — su reemplazo verbatim perdería ese trabajo. La convergencia
+        // llega por el auto-sync (push→pull) minutos después. Los pulls SCOPEADOS de
+        // docente/estudiante NO se gatean: son UPSERT + tombstones (loss-proof).
+        if (!AttendanceStorageService.getLocalSyncDirty()) {
+          CloudflareSyncService.pullFromCloudflare().catch(() => {
+            /* sin red/URL: el auto-sync reintenta más tarde */
+          });
+        } else {
+          console.info('[Login] Pull diferido: hay ediciones locales sin subir (se publican primero con el auto-sync).');
+        }
         onLoginSuccess('ADMIN', {
           username: profile.displayName || cleanIdent.toLowerCase(),
           uid: user.uid,

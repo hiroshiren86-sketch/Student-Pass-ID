@@ -73,15 +73,18 @@ export class CloudflareSyncService {
           // los cambios de los demás terminales + settings institucionales (incluido
           // el qrSecret). Si el push falló (409 CAS/red) el pull re-ubica el terminal
           // con la nube ganadora (mismo propósito del CAS de R47).
+          // Ronda 57 (INV-3): el pull SOLO corre si el push terminó BIEN. Si el push
+          // falló (409 CAS / red / guarda anti-aplastado), bajar ahora podría REVERTIR
+          // ediciones locales aún no publicadas — se espera al próximo ciclo, que
+          // reintenta el push primero. Orden garantizado: primero subir, luego bajar.
           const session = AttendanceStorageService.getCurrentSession();
-          if (session?.role === 'ADMIN') {
+          if (pushResult?.success === true && session?.role === 'ADMIN') {
             try {
               await this.pullFromCloudflare();
             } catch {
               /* silencioso: la salud del sync no depende de este refresco */
             }
           }
-          void pushResult;
         }).catch((err) => {
           console.warn('[Cloudflare AutoSync] Sincronización periódica fallida:', err);
         });
@@ -451,6 +454,13 @@ export class CloudflareSyncService {
       if (typeof data?.catalogVersion === 'number') {
         AttendanceStorageService.saveSettings({ ...AttendanceStorageService.getSettings(), cloudflareCatalogVersion: data.catalogVersion });
       }
+      // Ronda 57 (INV-1/INV-2): el push EXITOSO publicó todo el estado local — el sello de
+      // "ediciones sin subir" se libera para que los pulls futuros vuelvan a converger.
+      // Se hace DESPUÉS de guardar catalogVersion (ese saveSettings es de protocolo, con
+      // sync=true, y volvería a sellar → por eso el orden es: saveSettings CAS → clear).
+      if (data?.success !== false) {
+        AttendanceStorageService.clearLocalSyncDirty();
+      }
 
       const warn = omitted.length > 0
         ? ` ⚠ ${omitted.length} foto(s) omitidas por ser irrecuperables (${omitted.slice(0, 3).join(', ')}${omitted.length > 3 ? '…' : ''}); vuelve a subirlas desde el carné.`
@@ -499,8 +509,17 @@ export class CloudflareSyncService {
     'updatedAt'                 // metadato del snapshot
   ]);
 
-  private static applyCloudSettingsToDevice(cloudSettings: any): { changed: number } {
+  private static applyCloudSettingsToDevice(cloudSettings: any): { changed: number; skipped?: boolean } {
     if (!cloudSettings || typeof cloudSettings !== 'object' || Array.isArray(cloudSettings)) return { changed: 0 };
+    // Ronda 57 (INV-1): si este terminal tiene ediciones locales AÚN SIN SUBIR (sello
+    // dirty activo), la nube NO puede pisarlas — ganará el push local (push-primero,
+    // last-writer-wins). El sello se libera con el push exitoso y el próximo pull ya
+    // converge. Es exactamente el invariante del propietario: "si lo local está un
+    // poquito más adelantado, no me lo puede pisar".
+    if (AttendanceStorageService.getLocalSyncDirty()) {
+      console.info('[Sync Pull] Ajustes locales sin subir preservados: la nube no los pisa (convergerán tras el push).');
+      return { changed: 0, skipped: true };
+    }
     const current = AttendanceStorageService.getSettings();
     const merged: any = { ...current };
     let changed = 0;
@@ -613,11 +632,11 @@ export class CloudflareSyncService {
           // local se CONSERVA (el snapshot scopeado jamás destruye el catálogo del teléfono).
           const local = AttendanceStorageService.getStudents();
           const { result: merged, changed } = CloudflareSyncService.upsertBy(local, incomingStudents, (s: any) => String(s.code));
-          AttendanceStorageService.saveStudents(merged);
+          AttendanceStorageService.saveStudents(merged, 'cloud');
           importedStudents = incomingStudents.length;
           updatedStudents = changed;
         } else {
-          AttendanceStorageService.saveStudents(incomingStudents);
+          AttendanceStorageService.saveStudents(incomingStudents, 'cloud');
           importedStudents = incomingStudents.length;
         }
       }
@@ -674,11 +693,11 @@ export class CloudflareSyncService {
           // Ronda 56: upsert de SU ficha — jamás reemplazar el directorio con teachers:[1].
           const local = AttendanceStorageService.getTeachers();
           const { result: merged, changed } = CloudflareSyncService.upsertBy(local, teachers, (t: any) => String(t.id));
-          AttendanceStorageService.saveTeachers(merged);
+          AttendanceStorageService.saveTeachers(merged, 'cloud');
           importedTeachers = teachers.length;
           updatedTeachers = changed;
         } else {
-          AttendanceStorageService.saveTeachers(teachers);
+          AttendanceStorageService.saveTeachers(teachers, 'cloud');
           importedTeachers = teachers.length;
         }
       }
@@ -687,11 +706,11 @@ export class CloudflareSyncService {
         if (scopedRole) {
           const local = AttendanceStorageService.getScheduleAssignments();
           const { result: merged, changed } = CloudflareSyncService.upsertBy(local, assignments, (a: any) => String(a.id));
-          AttendanceStorageService.saveScheduleAssignments(merged);
+          AttendanceStorageService.saveScheduleAssignments(merged, 'cloud');
           importedAssignments = assignments.length;
           updatedAssignments = changed;
         } else {
-          AttendanceStorageService.saveScheduleAssignments(assignments);
+          AttendanceStorageService.saveScheduleAssignments(assignments, 'cloud');
           importedAssignments = assignments.length;
         }
       }
@@ -700,22 +719,43 @@ export class CloudflareSyncService {
         if (scopedRole) {
           const local = AttendanceStorageService.getScheduleSlots();
           const { result: merged, changed } = CloudflareSyncService.upsertBy(local, slots, (s: any) => String(s.id));
-          AttendanceStorageService.saveScheduleSlots(merged);
+          AttendanceStorageService.saveScheduleSlots(merged, 'cloud');
           importedSlots = slots.length;
           updatedSlots = changed;
         } else {
-          AttendanceStorageService.saveScheduleSlots(slots);
+          AttendanceStorageService.saveScheduleSlots(slots, 'cloud');
           importedSlots = slots.length;
         }
       }
 
       // Ronda 4 (F5): plantillas CUSTOM y horarios personales viajan en el snapshot.
       if (Array.isArray(customTemplates)) {
-        AttendanceStorageService.saveCustomTemplates(customTemplates);
+        AttendanceStorageService.saveCustomTemplates(customTemplates, 'cloud');
         importedTemplates = customTemplates.length;
       }
       if (studentSchedules && typeof studentSchedules === 'object' && !Array.isArray(studentSchedules)) {
-        AttendanceStorageService.saveAllStudentSchedules(studentSchedules);
+        AttendanceStorageService.saveAllStudentSchedules(studentSchedules, 'cloud');
+      }
+
+      // Ronda 57 (INV-4): convergencia de BORRADOS — los tombstones de la nube se aplican
+      // al catálogo local (el estudiante/docente eliminado por Rectoría desaparece también
+      // en los teléfonos scopeados, donde el UPSERT jamás borra por sí solo) y se UNEN a
+      // la lista local para que no resuciten con un push posterior. Va DESPUÉS de las
+      // colecciones como barrido final: el upsert actualizó/añadió lo vivo y aquí se
+      // retira lo tombstoneado (la escritura es directa: derivado de la nube, no sella dirty).
+      const cloudTombstones = Array.isArray(result.data.tombstones) ? result.data.tombstones : [];
+      let tombApplied = { studentsRemoved: 0, teachersRemoved: 0, merged: 0 };
+      // Ronda 57 (INV-1 aplicado a borrados): con ediciones locales sin subir, el barrido
+      // se DIFIERE — un tombstone viejo de la nube no puede eliminar una entidad local
+      // más nueva (p. ej. una re-matrícula hecha aquí y aún no publicada). Converge tras
+      // el push exitoso, que libera el sello.
+      if (AttendanceStorageService.getLocalSyncDirty()) {
+        console.info('[Sync Pull] Tombstones de la nube diferidos: hay ediciones locales sin subir.');
+      } else {
+        tombApplied = AttendanceStorageService.applyCloudTombstones(cloudTombstones);
+      }
+      if (tombApplied.merged > 0) {
+        console.info(`[Sync Pull] Tombstones de la nube integrados: ${tombApplied.merged} (estudiantes removidos: ${tombApplied.studentsRemoved}, docentes: ${tombApplied.teachersRemoved}).`);
       }
 
       // Ronda 56: aplicar SETTINGS de la nube (jornada, plantilla activa, tolerancia,
@@ -734,6 +774,8 @@ export class CloudflareSyncService {
       if (importedTemplates > 0) summaryParts.push(`${importedTemplates} plantilla${importedTemplates === 1 ? '' : 's'} de jornada`);
       summaryParts.push(`${importedRecords} ${importedRecords === 1 ? 'nueva asistencia' : 'nuevas asistencias'}`);
       if (settingsChanged.changed > 0) summaryParts.push(`${settingsChanged.changed} ajuste(s) institucional(es) actualizado(s)`);
+      if (settingsChanged.skipped) summaryParts.push('ajustes locales sin subir preservados');
+      if (tombApplied.merged > 0) summaryParts.push(`${tombApplied.merged} marca(s) de borrado integrada(s)`);
 
       // Ronda 54 — actualizar el cursor de sync (nunca retrocede). Con el pull COMPLETO
       // ya se trajo TODO, así que el próximo pull de hechos puede empezar desde acá.

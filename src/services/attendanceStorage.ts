@@ -58,6 +58,7 @@ const DAY_CLOSED_KEY = 'inas_day_closed_v1';             // Ronda 4 (F3): flag d
 const STUDENT_SCHEDULES_KEY = 'inas_student_schedules_v1'; // Ronda 4 (F4): horario opcional por estudiante
 const ACTIVE_CLASS_KEY = 'inas_active_class_v1'; // Ronda 19: QR de Clase — contexto de clase activa POR DISPOSITIVO
 const TOMBSTONES_KEY = 'inas_tombstones_v1'; // Ronda 54 (hueco #5): marca de borrado que se PROPAGA (soft-delete)
+const LOCAL_SYNC_DIRTY_KEY = 'inas_local_sync_dirty_v1'; // Ronda 57: sello de "hay ediciones locales SIN SUBIR a la nube"
 
 /**
  * Ronda 19 — QR de Clase: helper de tiempo Bogotá. Convierte "HH:mm" de hoy a epoch ms
@@ -255,7 +256,12 @@ export class AttendanceStorageService {
     localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
     this.notify();
 
+    // Ronda 57 (INV-1): un guardado de ORIGEN LOCAL (con respaldo a la nube pendiente)
+    // sella "edición sin subir" — los pulls no pueden pisar estos ajustes hasta que el
+    // push exitoso libere el sello. El pull aplica settings con syncToCloud=false
+    // exactamente para NO sellar lo que acaba de bajar.
     if (syncToCloud) {
+      this.markLocalSyncDirty();
       FirebaseService.saveSchoolSettings(settings).catch((e) => {
         console.warn('Firestore async settings backup deferred:', e);
       });
@@ -372,7 +378,10 @@ export class AttendanceStorageService {
     return [];
   }
 
-  static saveStudents(students: Student[]): void {
+  static saveStudents(students: Student[], origin: 'local' | 'cloud' = 'local'): void {
+    // Ronda 57: solo lo de ORIGEN LOCAL sella "edición sin subir"; el pull escribe con
+    // origin:'cloud' (es dato derivado de la nube y no debe bloquear pulls futuros).
+    if (origin === 'local') this.markLocalSyncDirty();
     // Ronda 38 (H-38-2): RESPALDO PREVIO anti-pérdida. Antes de sobrescribir la matrícula
     // se conserva una copia SIN fotos (las dataURL son lo que explota la cuota de
     // localStorage; nombres/códigos/grados son lo crítico para reconstruir) en
@@ -513,6 +522,72 @@ export class AttendanceStorageService {
   static clearTombstones(ids: string[], type: 'student' | 'teacher'): void {
     const idset = new Set(ids);
     this.saveTombstones(this.getTombstones().filter(t => !(t.type === type && idset.has(t.id))));
+  }
+
+  // ==================== RONDA 57 — SELLO DE EDICIÓN LOCAL SIN SUBIR ====================
+  // Invariante del propietario: "si lo local está un poquito más adelantado, la nube NO
+  // lo puede pisar". Todo guardado de ORIGEN LOCAL sella la fecha (dirty); el sello se
+  // libera cuando el push termina en éxito (lo local ya vive en la nube). Los pulls
+  // consultan este sello para no revertir trabajo local aún no subido.
+
+  static markLocalSyncDirty(): void {
+    try { localStorage.setItem(LOCAL_SYNC_DIRTY_KEY, new Date().toISOString()); } catch { /* cuota: el sello es best-effort */ }
+  }
+
+  /** Fecha de la última edición local sin subir, o null si todo lo local ya está en la nube. */
+  static getLocalSyncDirty(): string | null {
+    try { return localStorage.getItem(LOCAL_SYNC_DIRTY_KEY); } catch { return null; }
+  }
+
+  static clearLocalSyncDirty(): void {
+    try { localStorage.removeItem(LOCAL_SYNC_DIRTY_KEY); } catch { /* noop */ }
+  }
+
+  /**
+   * Ronda 57 (INV-4): aplica a la matrícula/directorio LOCAL los tombstones que vienen
+   * de la nube y los UNE a la lista local. Cierra el hueco del UPSERT (que añade y
+   * actualiza pero jamás borra): el estudiante/docente que Rectoría eliminó desaparece
+   * también en los teléfonos scopeados y NO resucita por un push posterior del propio
+   * terminal. Escritura DIRECTA (sin markLocalSyncDirty): es un cambio DERIVADO de la
+   * nube, no una edición local — no debe bloquear pulls futuros.
+   */
+  static applyCloudTombstones(tombs: Array<{ id: string; type: 'student' | 'teacher'; deletedAt?: string }>): { studentsRemoved: number; teachersRemoved: number; merged: number } {
+    if (!Array.isArray(tombs) || tombs.length === 0) return { studentsRemoved: 0, teachersRemoved: 0, merged: 0 };
+    const stIds = new Set<string>(tombs.filter(t => t && t.type === 'student').map(t => String(t.id)));
+    const tcIds = new Set<string>(tombs.filter(t => t && t.type === 'teacher').map(t => String(t.id)));
+    let studentsRemoved = 0;
+    let teachersRemoved = 0;
+    if (stIds.size > 0) {
+      const students = this.getStudents();
+      const filtered = students.filter(s => !stIds.has(String(s.code)));
+      studentsRemoved = students.length - filtered.length;
+      if (studentsRemoved > 0) {
+        localStorage.setItem(STUDENTS_KEY, JSON.stringify(filtered));
+        this.notify();
+      }
+    }
+    if (tcIds.size > 0) {
+      const teachers = this.getTeachers();
+      const filtered = teachers.filter(t => !tcIds.has(String(t.id)));
+      teachersRemoved = teachers.length - filtered.length;
+      if (teachersRemoved > 0) {
+        localStorage.setItem(TEACHERS_KEY, JSON.stringify(filtered));
+        this.notify();
+      }
+    }
+    const keyOf = (t: { id: string; type: string }) => `${t.type}:${t.id}`;
+    const map = new Map(this.getTombstones().map(t => [keyOf(t), t]));
+    let merged = 0;
+    for (const t of tombs) {
+      if (!t || !t.id) continue;
+      const k = keyOf({ id: String(t.id), type: t.type });
+      if (!map.has(k)) {
+        map.set(k, { id: String(t.id), type: t.type, deletedAt: t.deletedAt || new Date().toISOString() });
+        merged++;
+      }
+    }
+    if (merged > 0) this.saveTombstones(Array.from(map.values()));
+    return { studentsRemoved, teachersRemoved, merged };
   }
 
   // ==================== SUBROLES & CASCADA DE 3 NIVELES ====================
@@ -704,7 +779,8 @@ export class AttendanceStorageService {
     return INITIAL_TEACHERS;
   }
 
-  static saveTeachers(teachers: Teacher[]): void {
+  static saveTeachers(teachers: Teacher[], origin: 'local' | 'cloud' = 'local'): void {
+    if (origin === 'local') this.markLocalSyncDirty(); // Ronda 57
     localStorage.setItem(TEACHERS_KEY, JSON.stringify(teachers));
     this.notify();
   }
@@ -774,7 +850,8 @@ export class AttendanceStorageService {
     }
   }
 
-  static saveCustomTemplates(templates: DayTemplateConfig[]): void {
+  static saveCustomTemplates(templates: DayTemplateConfig[], origin: 'local' | 'cloud' = 'local'): void {
+    if (origin === 'local') this.markLocalSyncDirty(); // Ronda 57
     localStorage.setItem(CUSTOM_TEMPLATES_KEY, JSON.stringify(templates || []));
     this.notify();
   }
@@ -1069,7 +1146,8 @@ export class AttendanceStorageService {
   }
 
   // Ronda 4 (F5): reemplazo total desde el snapshot de sync (patrón igual que slots/assignments)
-  static saveAllStudentSchedules(map: Record<string, StudentPersonalSchedule>): void {
+  static saveAllStudentSchedules(map: Record<string, StudentPersonalSchedule>, origin: 'local' | 'cloud' = 'local'): void {
+    if (origin === 'local') this.markLocalSyncDirty(); // Ronda 57
     // Ronda 22: barrera de escritura — un snapshot entrante no puede reintroducir el sábado.
     const clean: Record<string, StudentPersonalSchedule> = {};
     for (const [code, sched] of Object.entries(map && typeof map === 'object' ? map : {})) {
@@ -1227,7 +1305,8 @@ export class AttendanceStorageService {
     return DEFAULT_SCHEDULE_SLOTS;
   }
 
-  static saveScheduleSlots(slots: ScheduleSlot[]): void {
+  static saveScheduleSlots(slots: ScheduleSlot[], origin: 'local' | 'cloud' = 'local'): void {
+    if (origin === 'local') this.markLocalSyncDirty(); // Ronda 57
     localStorage.setItem(SCHEDULE_SLOTS_KEY, JSON.stringify(slots));
     this.notify();
   }
@@ -1264,7 +1343,8 @@ export class AttendanceStorageService {
     return INITIAL_SCHEDULE_ASSIGNMENTS;
   }
 
-  static saveScheduleAssignments(assignments: ClassScheduleAssignment[]): void {
+  static saveScheduleAssignments(assignments: ClassScheduleAssignment[], origin: 'local' | 'cloud' = 'local'): void {
+    if (origin === 'local') this.markLocalSyncDirty(); // Ronda 57
     localStorage.setItem(SCHEDULE_ASSIGNMENTS_KEY, JSON.stringify(assignments));
     this.notify();
   }
