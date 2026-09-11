@@ -71,16 +71,17 @@ export class CloudflareSyncService {
         // escrituras/día de KV. Un dispositivo idle ahora consume CUOTA CERO de
         // escritura. El push MANUAL (botón Sincronizar) siempre corre.
         const dirty = AttendanceStorageService.getLocalSyncDirty();
-        const sessionNow = AttendanceStorageService.getCurrentSession();
         if (!dirty) {
-          // Nada que publicar. Rectoría (ADMIN) mantiene la convergencia hacia ABAJO
-          // con un Pull (lecturas baratas, CERO escrituras en la nube); el resto de
-          // perfiles no hace nada en este ciclo — un dispositivo idle consume cuota 0.
-          if (sessionNow?.role === 'ADMIN') {
-            this.pullFromCloudflare().catch(() => {
-              /* sin red: el próximo ciclo reintenta */
-            });
-          }
+          // Nada que publicar → SOLO PULL (Ronda 60: para TODOS los roles). Antes solo
+          // Rectoría bajaba en idle y los demás perfiles quedaban congelados con datos
+          // viejos — la causa raíz del bug del representante: tarjetas de clase firmadas
+          // por un dispositivo con secret desactualizado (o verificadas por uno que jamás
+          // bajó el institucional). El pull es de SOLO-LECTURA (1 lectura KV/D1): cuota
+          // de escritura CERO, y mantiene convergiendo secret, carnés pre-firmados,
+          // verificadores de login y catálogo en docentes/estudiantes/terminales.
+          this.pullFromCloudflare().catch(() => {
+            /* sin red: el próximo ciclo reintenta */
+          });
           return;
         }
         this.performCloudflareSync().then(async (pushResult) => {
@@ -642,6 +643,15 @@ export class CloudflareSyncService {
         changed++;
       }
     }
+    // Ronda 60: si la nube trae qrSecret, el de ESTE dispositivo ES el institucional
+    // → se sella qrSecretSyncedAt. Las superficies que GENERAN tarjetas (Horarios →
+    // QR de Clase, Mi Tarjeta del docente) advierten sin el sello: "tus tarjetas no
+    // verificarán en otros dispositivos hasta sincronizar". Es la visibilidad del
+    // bug original del representante (tarjetas firmadas con un secret divergente).
+    if (typeof cloudSettings.qrSecret === 'string' && cloudSettings.qrSecret && !(merged as any).qrSecretSyncedAt) {
+      (merged as any).qrSecretSyncedAt = new Date().toISOString();
+      changed++;
+    }
     if (changed > 0) {
       // syncToCloud=false: el pull no debe re-respaldar a Firestore lo que acaba de bajar.
       AttendanceStorageService.saveSettings(merged as SchoolSettings, false);
@@ -668,6 +678,40 @@ export class CloudflareSyncService {
       map.set(key, item);
     }
     return { result: Array.from(map.values()), changed };
+  }
+
+  /**
+   * Ronda 60 — VERIFICACIÓN DE TARJETA DE CLASE VÍA EL WORKER (server-side).
+   *
+   * Para dispositivos SIN el secret institucional (el portal del estudiante desde
+   * Ronda 59 no lo recibe por diseño: verificar HMAC = poder firmar). El Worker sí
+   * tiene el secret (vive en el snapshot) y devuelve SOLO el veredicto — el
+   * dispositivo jamás recibe la llave. Es el camino que repara el flujo del
+   * representante: escanear la Tarjeta QR de Clase desde el portal estudiante.
+   */
+  static async verifyClassTokenWithWorker(token: string): Promise<{ ok: boolean; verified?: boolean; reason?: string; kind?: string; context?: any; message?: string }> {
+    const cleanBaseUrl = this.getWorkerBaseUrl();
+    const schoolCode = AttendanceStorageService.getSettings().schoolCode || 'INAS_2026';
+    if (!cleanBaseUrl) {
+      return { ok: false, message: 'URL del Worker no configurada (Ajustes → Sync y Seguridad).' };
+    }
+    try {
+      const res = await fetch(`${cleanBaseUrl.replace(/\/+$/, '')}/api/verify/class-token`, {
+        method: 'POST',
+        headers: await this.workerHeaders(),
+        body: JSON.stringify({ token, schoolCode })
+      });
+      const json: any = await res.json().catch(() => null);
+      if (res.status === 401 || res.status === 403) {
+        return { ok: false, message: 'La nube no aceptó la credencial de este dispositivo. Sincroniza una vez (Pull) o inicia sesión con tu cuenta.' };
+      }
+      if (!res.ok) {
+        return { ok: false, message: json?.error || 'La nube no pudo verificar la tarjeta en este momento.' };
+      }
+      return { ok: true, verified: json.verified === true, reason: json.reason, kind: json.kind, context: json.context };
+    } catch {
+      return { ok: false, message: 'Sin conexión con la nube: no se puede verificar la tarjeta de clase desde este portal sin internet (por seguridad, este dispositivo no guarda la llave del colegio).' };
+    }
   }
 
   /**

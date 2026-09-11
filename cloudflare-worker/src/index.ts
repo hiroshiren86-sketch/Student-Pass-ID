@@ -17,6 +17,8 @@ import {
   type Authz, type IdentityRole, type TokenRole, type FbProfile, type FbIdentity
 } from './authz';
 import { corsBaseHeaders, corsPreflightResponse, withCorsHeaders } from './cors';
+// Ronda 60: verificación server-side de tarjetas de clase (portales sin secret).
+import { verifyClassToken } from './verifyToken';
 
 // Re-export de compatibilidad: las suites QA (qa-r49-identity.ts) y herramientas
 // importan estas primitivas desde './index'.
@@ -1102,6 +1104,50 @@ async function handleRoute(request: Request, env: Env, ctx: ExecutionContext): P
         }
 
         return errorResponse('No se encontraron datos de sincronización previos para este colegio.', 404);
+      }
+
+      // =========================================================================
+      // RUTA: VERIFY CLASS TOKEN (Ronda 60 — verificación server-side de tarjetas
+      // de clase para dispositivos SIN el secret institucional, p. ej. el portal
+      // del estudiante/representante desde Ronda 59). El Worker tiene el secret en
+      // el snapshot y devuelve SOLO el veredicto — el dispositivo nunca lo recibe.
+      // Requiere la misma credencial que el pull (identidad o token de dispositivo);
+      // es de solo-lectura (1 lectura KV/D1) y no expone nada sensible.
+      // =========================================================================
+      if (path === '/api/verify/class-token' && request.method === 'POST') {
+        const body = await request.json() as any;
+        const token = String(body?.token || '').trim();
+        const schoolCode = body?.schoolCode || env.SCHOOL_CODE || 'INAS-ANTONIA-SANTOS-2026';
+        if (!token) {
+          return errorResponse('Falta el token de la tarjeta (campo "token").', 400);
+        }
+        // Cargar el secret institucional del snapshot (KV primero, D1 después —
+        // mismo orden y llaves que /api/sync/pull para consistencia).
+        let settings: any = null;
+        if (env.ATTENDANCE_KV) {
+          const cached = await env.ATTENDANCE_KV.get(`latest_snapshot_${schoolCode}`, 'json') as any;
+          if (cached && cached.data?.settings) settings = cached.data.settings;
+        }
+        if (!settings && env.DB) {
+          const row = await env.DB.prepare(
+            `SELECT data_json FROM sync_snapshots WHERE school_code = ? OR id = ? LIMIT 1`
+          ).bind(schoolCode, `snapshot_${schoolCode}`).first() as any;
+          if (row && row.data_json) {
+            try { settings = (JSON.parse(row.data_json) || {}).settings; } catch { settings = null; }
+          }
+        }
+        if (!settings || !(settings.qrSecret || settings.legacyQrSecret)) {
+          return errorResponse('La institución no tiene clave de firma configurada en la nube. Rectoría debe sincronizar una vez (Push) para habilitar la verificación.', 409);
+        }
+        const verdict = await verifyClassToken(token, [settings.qrSecret, settings.legacyQrSecret].filter(Boolean));
+        return jsonResponse({
+          success: true,
+          verified: verdict.verified,
+          reason: verdict.reason,
+          kind: verdict.kind,
+          context: verdict.context,
+          serverVerifiedAt: new Date().toISOString()
+        });
       }
 
       // =========================================================================

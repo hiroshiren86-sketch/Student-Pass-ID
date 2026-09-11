@@ -14,6 +14,9 @@ interface TeacherCardQrModalProps {
   teacherName: string;      // nombre completo del docente
   schoolName?: string;      // settings.schoolName
   downloadName: string;     // nombre del archivo PNG (sin extensión)
+  // Ronda 60: aviso cuando la tarjeta se firma con un secret AÚN NO sincronizado con
+  // la institución (esas tarjetas NO verificarán en otros dispositivos / en la nube).
+  warning?: string;
   onClose: () => void;
 }
 
@@ -23,6 +26,7 @@ export const TeacherCardQrModal: React.FC<TeacherCardQrModalProps> = ({
   teacherName,
   schoolName,
   downloadName,
+  warning,
   onClose
 }) => {
   useEffect(() => {
@@ -53,6 +57,12 @@ export const TeacherCardQrModal: React.FC<TeacherCardQrModalProps> = ({
             <X className="w-4 h-4" />
           </button>
         </div>
+
+        {warning && (
+          <div className="p-3 rounded-xl bg-amber-50 dark:bg-amber-950/40 border border-amber-300 dark:border-amber-800 text-[11px] font-bold text-amber-900 dark:text-amber-200 leading-relaxed" role="alert">
+            ⚠️ {warning}
+          </div>
+        )}
 
         {dataUrl && (
           <img src={dataUrl} alt={`Tarjeta QR de Docente: ${subject}, ${teacherName}`} className="w-full rounded-2xl border border-slate-200 dark:border-zinc-800" />

@@ -345,6 +345,11 @@ export interface SchoolSettings {
   // false = modo legado (los carnés 1D planos y el tecleo se aceptan, con
   // verifiedHmac:false honesto en planilla/CSV). Palanca visible en Ajustes.
   requireSignedCards?: boolean;
+  // Ronda 60: instante en que el qrSecret de ESTE dispositivo llegó desde la nube
+  // (pull) — es decir, es EL institucional. Las superficies que generan tarjetas
+  // advierten si falta: firmar con un secret divergente produce tarjetas que nadie
+  // más puede verificar (el bug original del representante).
+  qrSecretSyncedAt?: string;
   // Ronda 58 (F-23): secret institucional ANTERIOR. Cuando Rectoría rota qrSecret,
   // los tempPasswordVerifier firmados con el secret viejo siguen verificando contra
   // este (ventana de transición). Lo mantiene applyCloudSettingsToDevice.

@@ -53,7 +53,7 @@ async function section(title: string, fn: () => Promise<void> | void) {
 import { readFileSync } from 'fs';
 
 const crypto = await import('../src/utils/crypto');
-const { AttendanceStorageService, getTodayDateString } = await import('../src/services/attendanceStorage');
+const { AttendanceStorageService, getTodayDateString, getCurrentTimeString } = await import('../src/services/attendanceStorage');
 const { CloudflareSyncService } = await import('../src/services/cloudflareSync');
 const worker = await import('../cloudflare-worker/src/index');
 const authzMod = await import('../cloudflare-worker/src/authz');
@@ -322,6 +322,119 @@ await section('I — R59: filterSnapshotByRole — el qrSecret jamás baja al es
   // ADMIN/OPERATOR: sin cambios (terminal de escaneo completa).
   const opScoped = authzMod.filterSnapshotByRole(snapshot, { role: 'OPERATOR', isAdmin: true, canWriteCatalog: false } as any);
   check('I9 OPERATOR recibe el snapshot completo (terminal de escaneo)', opScoped.settings.qrSecret === 'SECRETO-INSTITUCIONAL' && opScoped.students.length === 3);
+});
+
+// ═══════════════════ J. Ronda 60 — verificación de tarjeta de clase vía servidor ═══════════════════
+await section('J — R60: el representante activa la clase aunque su portal NO tenga el secret', async () => {
+  // Escenario EXACTO del bug reportado por el propietario (origen de la auditoría):
+  // el portal del estudiante (sin qrSecret desde R59) escanea la Tarjeta de Clase.
+  localStorage.clear();
+  svc.saveSettings({ ...svc.getSettings() }, false);
+  const secret = svc.getSettings().qrSecret;
+  (svc as any).getSchoolDayWindow = () => ({ start: '00:00', end: '23:59', startMin: 0, endMin: 1439 });
+  const [hNow, mNow] = getCurrentTimeString().split(':').map(Number);
+  svc.saveScheduleSlots([{ id: 'slot-r60', order: 1, type: 'CLASS', name: '1ª Hora', startTime: `${String(Math.max(hNow - 1, 0)).padStart(2, '0')}:${mNow}`, endTime: '23:59', durationMinutes: 60 } as any]);
+
+  // Tarjeta VÁLIDA firmada por la institución y tarjeta FIRMADA CON OTRO SECRET
+  // (lo que ve el portal si el docente generó su tarjeta con un secret divergente).
+  const validCard = await crypto.generateTeacherCardPayload('prof-r60', 'filosofia', Date.now() + 3600_000, secret);
+  const foreignCard = await crypto.generateTeacherCardPayload('prof-r60', 'filosofia', Date.now() + 3600_000, 'secret-de-otro-dispositivo');
+
+  // J1: el portal del estudiante tiene su PROPIO secret aleatorio de fábrica (nunca
+  // recibe el institucional desde R59) → la tarjeta institucional NO verifica ahí.
+  // Este es exactamente el bug reportado por el propietario.
+  svc.saveSettings({ ...svc.getSettings(), qrSecret: 'random-local-del-portal-estudiante' }, false);
+  const noSecret = await svc.setActiveTeacherCard(validCard);
+  check('J1 portal con secret PROPIO (no el institucional): la verificación local falla (el bug reportado)', noSecret.type === 'error' && noSecret.title === 'Tarjeta con firma inválida');
+  // restaurar settings con secret para los demás checks
+  svc.saveSettings({ ...svc.getSettings(), qrSecret: secret }, false);
+
+  // J2: serverVerified activa la clase aunque la firma local no se pueda verificar.
+  const bypass = await svc.setActiveTeacherCard(foreignCard, 'QR_CLASE_V2', { serverVerified: true });
+  check('J2 serverVerified (Worker verificó): la clase SÍ se activa', bypass.type === 'class_activated', JSON.stringify(bypass).slice(0, 120));
+
+  // J3: sin serverVerified, la firma foránea sigue rechazada (el bypass no es gratis).
+  svc.clearActiveClass();
+  const noBypass = await svc.setActiveTeacherCard(foreignCard);
+  check('J3 sin serverVerified: la firma foránea se rechaza igual que siempre', noBypass.type === 'error' && noBypass.title === 'Tarjeta con firma inválida');
+
+  // J4: serverVerified NO salta las demás validaciones (tarjeta EXPIRADA sigue muerta).
+  const expiredCard = await crypto.generateTeacherCardPayload('prof-r60', 'filosofia', Date.now() - 1000, secret);
+  const expiredBypass = await svc.setActiveTeacherCard(expiredCard, 'QR_CLASE_V2', { serverVerified: true });
+  check('J4 serverVerified no revive tarjetas VENCIDAS (solo salta la firma local)', expiredBypass.type === 'error' && expiredBypass.title === 'Tarjeta expirada');
+
+  // J5: v1 (QR de pizarra) mismo comportamiento.
+  const dowToday = new Date().getDay();
+  const v1Foreign = await crypto.generateClassQrPayload('10°1', 'slot-r60', dowToday, Date.now() + 3600_000, 'secret-ajeno');
+  const v1Local = await svc.setActiveClassFromToken(v1Foreign);
+  const v1Bypass = await svc.setActiveClassFromToken(v1Foreign, 'QR_CLASE', { serverVerified: true });
+  check('J5 v1: local rechaza + serverVerified activa', v1Local.type === 'error' && v1Bypass.type === 'class_activated', `${v1Local.type} / ${v1Bypass.type}`);
+  svc.clearActiveClass();
+
+  // ── El Worker verifica por el portal: verifyClassToken + RUTA completa ──
+  const verifyMod = await import('../cloudflare-worker/src/verifyToken');
+
+  const vOk = await verifyMod.verifyClassToken(validCard, [secret]);
+  check('J6 verifyClassToken: tarjeta institucional válida → verified', vOk.verified === true && vOk.kind === 'CLASE_V2' && vOk.context?.teacherId === 'prof-r60');
+  const vForeign = await verifyMod.verifyClassToken(foreignCard, [secret]);
+  check('J7 verifyClassToken: firma de OTRO secret → BAD_SIGNATURE', vForeign.verified === false && vForeign.reason === 'BAD_SIGNATURE');
+  const vExpired = await verifyMod.verifyClassToken(expiredCard, [secret]);
+  check('J8 verifyClassToken: expirada → EXPIRED', vExpired.verified === false && vExpired.reason === 'EXPIRED');
+  const vLegacy = await verifyMod.verifyClassToken(validCard.slice(0, -32) + validCard.slice(-32, -16), [secret]);
+  check('J9 verifyClassToken: firma legacy 16 hex aceptada (tarjetas impresas pre-R58)', vLegacy.verified === true);
+  const vRotated = await verifyMod.verifyClassToken(foreignCard, [secret, 'secret-de-otro-dispositivo']);
+  check('J10 verifyClassToken: tolerancia a rotación (secret viejo como legacy)', vRotated.verified === true);
+  const vMalformed = await verifyMod.verifyClassToken('CLASE:v2:solo:tres', [secret]);
+  check('J11 verifyClassToken: malformada → MALFORMED', vMalformed.verified === false && vMalformed.reason === 'MALFORMED');
+
+  // RUTA completa (fetch handler del Worker con mock de D1): el portal llama,
+  // el Worker lee el secret del snapshot y responde SOLO el veredicto.
+  class MiniD1Verify {
+    row: any;
+    prepare(q: string): any {
+      const self = this;
+      return {
+        bind(..._args: any[]): any {
+          return {
+            async first(): Promise<any> { return q.includes('FROM sync_snapshots') ? self.row : null; },
+            async run(): Promise<any> { return { meta: { changes: 0 } }; }
+          };
+        }
+      };
+    }
+  }
+  const envR60: any = {
+    AUTH_TOKEN: 'token-admin-r60',
+    DB: Object.assign(new MiniD1Verify(), {
+      row: { data_json: JSON.stringify({ settings: { qrSecret: secret }, students: [], records: [] }) }
+    })
+  };
+  const callRoute = async (token: string, authHeader?: string) => {
+    const req = new Request('https://worker.test/api/verify/class-token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...(authHeader ? { Authorization: authHeader } : {}) },
+      body: JSON.stringify({ token, schoolCode: 'SCHOOL-R60' })
+    });
+    const res = await (worker as any).default.fetch(req, envR60, {});
+    return { status: res.status, json: await res.json().catch(() => null) };
+  };
+  const rValid = await callRoute(validCard, 'Bearer token-admin-r60');
+  check('J12 RUTA: tarjeta válida → verified:true + contexto ( Worker verifica por el portal)', rValid.status === 200 && rValid.json.verified === true && rValid.json.context.teacherId === 'prof-r60');
+  const rForeign = await callRoute(foreignCard, 'Bearer token-admin-r60');
+  check('J13 RUTA: firma foránea → verified:false BAD_SIGNATURE', rForeign.status === 200 && rForeign.json.verified === false && rForeign.json.reason === 'BAD_SIGNATURE');
+  const rNoAuth = await callRoute(validCard);
+  check('J14 RUTA: sin credencial → 401 (mismo gate que el pull)', rNoAuth.status === 401);
+  const rNoSecretEnv: any = { AUTH_TOKEN: 'token-admin-r60', DB: Object.assign(new MiniD1Verify(), { row: { data_json: JSON.stringify({ settings: {} }) } }) };
+  const reqNoSecret = new Request('https://worker.test/api/verify/class-token', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer token-admin-r60' }, body: JSON.stringify({ token: validCard, schoolCode: 'SCHOOL-R60' }) });
+  const rNoSecret = await (worker as any).default.fetch(reqNoSecret, rNoSecretEnv, {});
+  const rNoSecretJson = await rNoSecret.json().catch(() => null);
+  check('J15 RUTA: institución sin secret en la nube → 409 con guía (Rectoría debe sincronizar)', rNoSecret.status === 409 && !!rNoSecretJson?.error);
+
+  // J16: el fallback del portal está cableado (fuente) y el pull idle ya no distingue rol.
+  const portalSrc = readFileSync('src/components/StudentPortalView.tsx', 'utf8');
+  const syncSrc = readFileSync('src/services/cloudflareSync.ts', 'utf8');
+  check('J16 portal: fallback verifyClassTokenWithWorker cableado en las dos ramas (v1/v2)', portalSrc.includes('activateClassForRep') && portalSrc.includes('verifyClassTokenWithWorker'));
+  check('J17 auto-sync idle: Pull para TODOS los roles (convergencia del secret)', syncSrc.includes('SOLO PULL (Ronda 60: para TODOS los roles)') && !/if \(sessionNow\?\.role === 'ADMIN'\)/.test(syncSrc));
 });
 
 // ═══════════════════ Resumen ═══════════════════

@@ -2063,7 +2063,7 @@ export class AttendanceStorageService {
    * firma HMAC → vigencia (expiresAt) → día correcto → asignación vigente.
    * Devuelve un ScanResultFeedback listo para mostrar en cualquiera de los 3 escáneres.
    */
-  static async setActiveClassFromToken(token: string, activatedBy: ActiveClassSource = 'QR_CLASE'): Promise<ScanResultFeedback> {
+  static async setActiveClassFromToken(token: string, activatedBy: ActiveClassSource = 'QR_CLASE', opts: { serverVerified?: boolean } = {}): Promise<ScanResultFeedback> {
     const settings = this.getSettings();
     const parsed = await parseAndVerifyClassScan(token, settings.qrSecret);
 
@@ -2073,7 +2073,8 @@ export class AttendanceStorageService {
     if (!parsed.isValidFormat || parsed.grade === undefined || parsed.slotId === undefined || parsed.dayOfWeek === undefined) {
       return { type: 'error', title: 'QR de Clase malformado', message: 'El token CLASE:v1 está incompleto o dañado. Genera la tarjeta de nuevo en Horarios → QR de Clase.', timestamp: new Date().toISOString() };
     }
-    if (parsed.isSignatureValid === false || parsed.signature === undefined) {
+    // Ronda 60: opts.serverVerified — verificación delegada al Worker (portal estudiante).
+    if ((parsed.isSignatureValid === false || parsed.signature === undefined) && !opts.serverVerified) {
       return { type: 'error', title: 'QR de Clase con firma inválida', message: 'La firma HMAC no coincide: el QR fue alterado o pertenece a otra institución. No se activó ninguna clase.', timestamp: new Date().toISOString() };
     }
     if (parsed.isExpired) {
@@ -2179,7 +2180,7 @@ export class AttendanceStorageService {
    * se registra con la asignatura/docente de la tarjeta y el GRADO DE SU CARNÉ (§2.3,
    * Refinamiento A).
    */
-  static async setActiveTeacherCard(token: string, activatedBy: ActiveClassSource = 'QR_CLASE_V2'): Promise<ScanResultFeedback> {
+  static async setActiveTeacherCard(token: string, activatedBy: ActiveClassSource = 'QR_CLASE_V2', opts: { serverVerified?: boolean } = {}): Promise<ScanResultFeedback> {
     const settings = this.getSettings();
     const parsed = await parseAndVerifyTeacherCard(token, settings.qrSecret);
 
@@ -2189,7 +2190,12 @@ export class AttendanceStorageService {
     if (!parsed.isValidFormat || parsed.teacherId === undefined || parsed.subjectSlug === undefined) {
       return { type: 'error', title: 'Tarjeta de docente malformada', message: 'El token CLASE:v2 está incompleto o dañado. Genera la tarjeta de nuevo en Mis Tarjetas QR (Portal Docente) o en Horarios → QR de Clase (Rectoría).', timestamp: new Date().toISOString() };
     }
-    if (parsed.isSignatureValid === false || parsed.signature === undefined) {
+    // Ronda 60: opts.serverVerified → el WORKER ya verificó la firma con el secret
+    // institucional (POST /api/verify/class-token). Es el camino del PORTAL ESTUDIANTE,
+    // que por diseño NO tiene el secret (R59: verificar HMAC = poder firmar). Se
+    // saltan SOLO los checks de firma LOCAL; formato, expiración y validaciones de
+    // negocio (docente inactivo, asignatura retirada, bloque por reloj) siguen corriendo.
+    if ((parsed.isSignatureValid === false || parsed.signature === undefined) && !opts.serverVerified) {
       return { type: 'error', title: 'Tarjeta con firma inválida', message: 'La firma HMAC no coincide: la tarjeta fue alterada o pertenece a otra institución. No se activó ninguna clase.', timestamp: new Date().toISOString() };
     }
     if (parsed.isExpired) {

@@ -136,7 +136,7 @@ export const TeacherClassroomView: React.FC<TeacherClassroomViewProps> = ({
 
   // Ronda 43 — TARJETAS QR DE DOCENTE (v2): "Mis Tarjetas QR" + 1-toque por asignatura
   const [showMyCards, setShowMyCards] = useState<boolean>(false);
-  const [teacherCardModal, setTeacherCardModal] = useState<{ dataUrl: string; subject: string; teacherName: string } | null>(null);
+  const [teacherCardModal, setTeacherCardModal] = useState<{ dataUrl: string; subject: string; teacherName: string; warning?: string } | null>(null);
   const [v2DirectSubject, setV2DirectSubject] = useState<string>(teacher?.subjects?.[0] || '');
 
   /** Genera el QR firmado CLASE:v2 de una asignatura de ESTE docente y abre el modal A6.
@@ -148,7 +148,11 @@ export const TeacherClassroomView: React.FC<TeacherClassroomViewProps> = ({
     try {
       const payload = await generateTeacherCardPayload(teacher.id, slugifySubject(subject), schoolYearEndEpochMs(), settings.qrSecret);
       const url = await QRCode.toDataURL(payload, { width: 512, margin: 2 });
-      setTeacherCardModal({ dataUrl: url, subject, teacherName: teacher.fullName });
+      // Ronda 60: si la llave de este teléfono no es la institucional (aún sin Pull),
+      // la tarjeta que se muestre NO verificará en los terminales ni en la nube.
+      const warning = settings.qrSecretSyncedAt ? undefined
+        : 'La llave de este teléfono aún no se sincroniza con la del colegio: esta tarjeta NO verificará al escanearla en otros dispositivos. Sincroniza (Pull) desde Ajustes y vuelve a generarla.';
+      setTeacherCardModal({ dataUrl: url, subject, teacherName: teacher.fullName, warning });
     } catch (e: any) {
       setScanFeedback({ type: 'error', message: e?.message || 'No se pudo generar la tarjeta QR de esta asignatura.' });
       setTimeout(() => setScanFeedback(null), 6000);
@@ -1717,6 +1721,7 @@ export const TeacherClassroomView: React.FC<TeacherClassroomViewProps> = ({
           teacherName={teacherCardModal.teacherName}
           schoolName={settings.schoolName}
           downloadName={`tarjeta_docente_${slugifySubject(teacherCardModal.subject)}_${slugifySubject(teacherCardModal.teacherName)}`}
+          warning={teacherCardModal.warning}
           onClose={() => setTeacherCardModal(null)}
         />
       )}

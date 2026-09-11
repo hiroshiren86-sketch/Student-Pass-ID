@@ -34,6 +34,7 @@ import jsQR from 'jsqr';
 import QRCode from 'qrcode';
 import { Student, AttendanceRecord, StudentAttendanceStats, StudentPersonalSchedule, StudentPersonalScheduleEntry, SchoolSettings } from '../types/attendance';
 import { AttendanceStorageService, getTodayDateString, getCurrentTimeString, scannedByRoleLabel } from '../services/attendanceStorage';
+import { CloudflareSyncService } from '../services/cloudflareSync';
 import { generateStudentQrPayload, generateSignedQRPayload } from '../utils/crypto';
 import { generateStudentCardPdf, downloadPdfBlob } from '../utils/pdfGenerator';
 import { generateBarcodeDataUrl } from '../utils/barcode';
@@ -291,13 +292,40 @@ export const StudentPortalView: React.FC<StudentPortalViewProps> = ({ onLogout, 
   const handleRepRegister = async (rawCode: string, method: 'CAMERA' | 'USB' | 'MANUAL') => {
     if (!activeStudent || !rawCode.trim()) return;
 
+    // ── Ronda 60 — ACTIVACIÓN CON VERIFICACIÓN DELEGADA EN LA NUBE ──
+    // Este portal NO tiene el secret institucional (Ronda 59: con HMAC, verificar
+    // sería poder firmar). La verificación local falla SIEMPRE aquí → se delega al
+    // Worker (POST /api/verify/class-token), que sí tiene el secret y devuelve solo
+    // el veredicto. Esto repara el flujo del representante: escanear la Tarjeta de
+    // Clase desde el portal estudiante (bug original que motivó la auditoría).
+    const activateClassForRep = async (rawToken: string, kind: 'v1' | 'v2') => {
+      const local = kind === 'v2'
+        ? await AttendanceStorageService.setActiveTeacherCard(rawToken)
+        : await AttendanceStorageService.setActiveClassFromToken(rawToken);
+      const firmaInvalida = local.type === 'error' && (local.title === 'Tarjeta con firma inválida' || local.title === 'QR de Clase con firma inválida');
+      if (!firmaInvalida) return { activation: local, serverNote: '' };
+      const server = await CloudflareSyncService.verifyClassTokenWithWorker(rawToken);
+      if (server.ok && server.verified) {
+        const retry = kind === 'v2'
+          ? await AttendanceStorageService.setActiveTeacherCard(rawToken, 'QR_CLASE_V2', { serverVerified: true })
+          : await AttendanceStorageService.setActiveClassFromToken(rawToken, 'QR_CLASE', { serverVerified: true });
+        return { activation: retry, serverNote: ' · Firma verificada por la nube del colegio' };
+      }
+      // Inválida también para la nube, o sin conexión: mensaje accionable.
+      local.message = server.ok
+        ? `${local.message} (Se verificó además con la nube: ${server.reason === 'EXPIRED' ? 'la tarjeta está vencida — pide una nueva al docente' : 'la firma no es de esta institución'}.)`
+        : `${local.message} (${server.message})`;
+      return { activation: local, serverNote: '' };
+    };
+
     // Ronda 43 — TARJETAS QR DE DOCENTE (CLASE:v2): la tarjeta del profesor identifica
     // docente+asignatura; el representante la escanea y su dispositivo queda con la
     // asignatura activa (el bloque vigente lo aporta el reloj).
     if (rawCode.trim().startsWith('CLASE:v2:')) {
-      const activation = await AttendanceStorageService.setActiveTeacherCard(rawCode.trim());
+      const { activation, serverNote } = await activateClassForRep(rawCode.trim(), 'v2');
       // Ronda 46 — auto-registro del representante: quien desbloquea la clase está presente.
       if (activation.type === 'class_activated') {
+        activation.message = `${activation.message}${serverNote}`;
         const self = await AttendanceStorageService.registerRepresentativeSelf(activeStudent.code, method);
         if (self.type === 'success_punctual' || self.type === 'success_tardy' || self.type === 'already_scanned') {
           activation.message = `${activation.message} · Además quedaste registrado (${self.record?.status || 'presente'}) con esta materia.`;
@@ -320,9 +348,10 @@ export const StudentPortalView: React.FC<StudentPortalViewProps> = ({ onLogout, 
     // estudiantes. El representante escanea el QR de clase y su dispositivo queda con el
     // contexto exacto (materia/bloque) para todos los carnés de su curso.
     if (rawCode.trim().startsWith('CLASE:v1:')) {
-      const activation = await AttendanceStorageService.setActiveClassFromToken(rawCode.trim());
+      const { activation, serverNote } = await activateClassForRep(rawCode.trim(), 'v1');
       // Ronda 46 — auto-registro del representante (misma regla que v2).
       if (activation.type === 'class_activated') {
+        activation.message = `${activation.message}${serverNote}`;
         const self = await AttendanceStorageService.registerRepresentativeSelf(activeStudent.code, method);
         if (self.type === 'success_punctual' || self.type === 'success_tardy' || self.type === 'already_scanned') {
           activation.message = `${activation.message} · Además quedaste registrado (${self.record?.status || 'presente'}) con esta materia.`;

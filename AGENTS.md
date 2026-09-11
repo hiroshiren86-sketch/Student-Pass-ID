@@ -228,6 +228,17 @@ Esta sección documenta el mapa exhaustivo de comunicaciones, protocolos, plataf
 
 ## 📋 3. Bitácora de Implementaciones y Correcciones Realizadas
 
+### ✅ Ronda 60 (11/09/2026) — VERIFICACIÓN DE TARJETA DE CLASE VÍA EL WORKER (repara el flujo del representante, el bug que originó la auditoría) + PULL IDLE PARA TODOS LOS ROLES + ALERTA DE LLAVE SIN SINCRONIZAR
+
+**Contexto del propietario (el hallazgo CERO de toda la auditoría)**: probando como representante — desde Rectoría volvió representante a un estudiante y entró por el portal estudiante — al escanear la Tarjeta QR de Clase (inglés, filosofía, economía…, v1 o v2) recibía "firma inválida" y la clase no se activaba. Causa raíz: la verificación HMAC exige el qrSecret DEL DISPOSITIVO y el del portal estudiante era otro (aleatorio de fábrica, o divergente). Ronda 59 lo agravó por diseño: el estudiante YA NO recibe el secret (verificar = poder firmar).
+
+**La solución (3 piezas, "verificar no es firmar" lado servidor):**
+1. **`POST /api/verify/class-token` (Worker, verifyToken.ts)**: el Worker tiene el secret institucional (vive en el snapshot) y verifica la tarjeta POR el dispositivo: devuelve SOLO el veredicto (verified/reason/contexto firmado), jamás la llave. Mismo gate de credencial que el pull (identidad o token); solo-lectura (1 lectura KV/D1); acepta firmas 32 y 16 hex (tarjetas impresas pre-R58) y tolera rotación (qrSecret + legacy). Sin secret en la nube → 409 con guía.
+2. **Fallback del portal (StudentPortalView)**: al fallar la firma local (v1 o v2) → `verifyClassTokenWithWorker` → si la nube valida, se re-intenta la activación con `setActiveTeacherCard/setActiveClassFromToken(…, {serverVerified:true})` — el bypass salta SOLO el check de firma local; formato, expiración, docente inactivo, asignatura retirada y bloque por reloj SIGUEN corriendo. Mensaje honesto "Firma verificada por la nube del colegio". Sin conexión o inválida → mensaje accionable (el portal no guarda la llave por seguridad).
+3. **Convergencia y visibilidad (la prevención)**: (a) el auto-sync idle ahora hace PULL para TODOS los roles (antes solo ADMIN — docentes/estudiantes quedaban congelados con secrets/catálogos viejos: la otra mitad del bug original); solo-lectura, cuota de escritura 0. (b) `qrSecretSyncedAt`: cuando el pull trae el qrSecret se sella que ESTE dispositivo usa el institucional; las superficies que GENERAN tarjetas (Horarios → QR de Clase / Mi Tarjeta del docente) muestran un aviso ámbar SIN el sello: "esta tarjeta no verificará en otros dispositivos — sincroniza y regenera" (era invisible que un teléfono con secret divergente fabricaba tarjetas muertas).
+
+**Validación**: qa-r58 **68✓** (§J nueva: 17 checks — repro del bug, bypass acotado, Worker verify+ruta completa con mock D1, 401/409, cableado) · R43 64✓ · R46 40✓ · R47 18✓ · tsc cliente+worker 0 · build OK.
+
 ### ✅ Ronda 59 (11/09/2026) — EL SECRETO VIAJA POR ROL ("verificar NO es firmar"): el qrSecret JAMÁS baja a los estudiantes; su carné viaja PRE-FIRMADO y su login offline usa una llave derivada SOLO de su propia ficha
 
 **Mandato del propietario**: "cómo se soluciona el problema de que el QR Secret viaje hacia los estudiantes… rectoría la pone en su panel y se le reparte automáticamente a todos los usuarios… según su rol" — el flujo de distribución automática por rol SE CONSERVA; lo que cambia es QUÉ recibe cada rol.

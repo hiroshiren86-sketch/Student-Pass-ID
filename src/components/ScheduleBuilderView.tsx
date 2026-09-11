@@ -166,7 +166,7 @@ export const ScheduleBuilderView: React.FC = () => {
   // Ronda 44 (mandato del propietario): las tarjetas v1 (por cátedra/pizarra) quedan OCULTAS
   // por completo de la interfaz — su generación se retiró de Horarios; el protocolo CLASE:v1
   // sigue vivo SOLO en el código para que las tarjetas v1 ya impresas sigan escaneando.
-  const [teacherCardModal, setTeacherCardModal] = useState<{ dataUrl: string; subject: string; teacherName: string } | null>(null);
+  const [teacherCardModal, setTeacherCardModal] = useState<{ dataUrl: string; subject: string; teacherName: string; warning?: string } | null>(null);
   const [printingAllCards, setPrintingAllCards] = useState<boolean>(false);
 
   const openTeacherCard = async (teacher: Teacher, subject: string) => {
@@ -174,7 +174,11 @@ export const ScheduleBuilderView: React.FC = () => {
     try {
       const payload = await generateTeacherCardPayload(teacher.id, slugifySubject(subject), schoolYearEndEpochMs(), settings.qrSecret);
       const url = await QRCode.toDataURL(payload, { width: 512, margin: 2 });
-      setTeacherCardModal({ dataUrl: url, subject, teacherName: teacher.fullName });
+      // Ronda 60: visibilidad del bug original del representante — una tarjeta firmada
+      // con un secret que NUNCA bajó de la nube no verificará en otros dispositivos.
+      const warning = settings.qrSecretSyncedAt ? undefined
+        : 'La llave de firma de este dispositivo aún no se sincroniza con la institución: esta tarjeta NO verificará en otros teléfonos ni en el portal. Haz un Pull (Ajustes → Sync y Seguridad) y genera la tarjeta de nuevo antes de repartirla.';
+      setTeacherCardModal({ dataUrl: url, subject, teacherName: teacher.fullName, warning });
     } catch (e: any) {
       // Ronda 44 (Refinamiento C.1): error explícito del generador, nunca silencioso.
       showToast(e?.message || 'No se pudo generar la tarjeta QR de esta asignatura.');
@@ -1540,6 +1544,7 @@ export const ScheduleBuilderView: React.FC = () => {
           teacherName={teacherCardModal.teacherName}
           schoolName={AttendanceStorageService.getSettings().schoolName}
           downloadName={`tarjeta_docente_${slugifySubject(teacherCardModal.subject)}_${slugifySubject(teacherCardModal.teacherName)}`}
+          warning={teacherCardModal.warning}
           onClose={() => setTeacherCardModal(null)}
         />
       )}

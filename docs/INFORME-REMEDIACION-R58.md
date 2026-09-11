@@ -194,3 +194,21 @@ Sin búsqueda por nombre en el camino de autenticación (era enumeración del ro
 **Límite honesto que queda (documentado, no oculto):** con HMAC simétrico, un DOCENTE/terminal que verifica también podría firmar (verificar y firmar usan la misma llave). Eso es confianza de personal del colegio, no de estudiantes. La solución definitiva a ese residuo es **firma asimétrica Ed25519** (Rectoría firma con la llave privada; absolutamente todos —incluidos docentes— solo verifican con la pública; nadie más puede firmar nada). Queda como roadmap recomendado, no emprendido en esta ronda.
 
 **Validación:** qa-r58 **51✓** (§D reescrita + §I nueva de scopeo, 9 checks) · R43 64✓ · R46 40✓ · R47 18✓ · `tsc` cliente+Worker 0 · build OK.
+
+
+---
+
+# ADDENDUM 2 — RONDA 60: el bug que originó todo (el representante y la Tarjeta de Clase)
+
+**Contexto del propietario:** la auditoría nació de una prueba real: convertido un estudiante en representante de su salón desde Rectoría, al entrar por el portal estudiante y escanear la Tarjeta QR de Clase (inglés, filosofía, economía…), la respuesta era **"firma inválida"** y la clase jamás se activaba.
+
+**Diagnóstico (evidencia de código):** `StudentPortalView → setActiveTeacherCard → parseAndVerifyTeacherCard(token, settings.qrSecret)` — la verificación HMAC usa el secret DEL DISPOSITIVO. El del portal estudiante era otro (aleatorio de fábrica en la era pre-R56, o divergente), y desde Ronda 59 ya no viaja a ese rol **por diseño** (verificar HMAC = poder firmar). El flujo del representante era estructuralmente imposible sin rediseño.
+
+**Solución — "verificar no es firmar", lado servidor (3 piezas):**
+1. **`POST /api/verify/class-token`** (Worker): el Worker SÍ tiene el secret institucional (vive en el snapshot) y verifica la tarjeta **por** el dispositivo. Devuelve solo el veredicto — la llave jamás baja al estudiante. Mismo gate de credencial que el pull; acepta firmas legacy de 16 hex (tarjetas impresas pre-R58) y tolera rotación de secret.
+2. **Fallback del portal**: firma local falla → se pregunta a la nube → si la nube valida, la clase se activa con `{serverVerified:true}` (el bypass salta ÚNICAMENTE el check de firma local; vencimiento, docente inactivo, asignatura retirada y bloque por reloj siguen aplicando). Sin conexión → mensaje claro: el portal no guarda la llave del colegio por seguridad.
+3. **Prevención**: (a) el auto-sync idle ahora hace Pull para TODOS los roles (docentes/estudiantes ya no quedan con secrets y catálogos congelados — la otra mitad del bug); (b) aviso ámbar al generar una Tarjeta de Clase si la llave del dispositivo nunca bajó de la nube ("esta tarjeta no verificará en otros dispositivos — sincroniza y regenera"): antes era INVISIBLE que un teléfono con secret divergente fabricaba tarjetas muertas.
+
+**Validación:** qa-r58 **68✓** (§J: 17 checks — repro del bug exacto, bypass acotado, Worker con mock de D1, 401/409, cableado del fallback) · R43 64✓ · R46 40✓ · R47 18✓ · `tsc` cliente+Worker 0 · build OK.
+
+**Estado del flujo del representante tras R58+R59+R60:** Rectoría designa al representante → el rol baja por sync a todos los dispositivos → el representante escanea la Tarjeta de Clase desde SU portal → el Worker verifica la firma → la clase se activa y queda registrado (con "Firma verificada por la nube"). Sin claves institucionales en teléfonos de estudiantes.
