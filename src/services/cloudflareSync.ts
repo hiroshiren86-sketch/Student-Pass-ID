@@ -754,7 +754,9 @@ export class CloudflareSyncService {
       } else {
         tombApplied = AttendanceStorageService.applyCloudTombstones(cloudTombstones);
       }
-      if (tombApplied.merged > 0) {
+      // Ronda 57: visibilidad total del barrido — loggea si integró tombstones NUEVOS
+      // o si REMOVIÓ entidades locales (aunque ya conociera los tombstones).
+      if (tombApplied.merged > 0 || tombApplied.studentsRemoved > 0 || tombApplied.teachersRemoved > 0) {
         console.info(`[Sync Pull] Tombstones de la nube integrados: ${tombApplied.merged} (estudiantes removidos: ${tombApplied.studentsRemoved}, docentes: ${tombApplied.teachersRemoved}).`);
       }
 
