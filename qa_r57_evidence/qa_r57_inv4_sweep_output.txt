@@ -1,0 +1,3 @@
+porción=38 trasInyección=39 trasReLogin=38 fantasmaVivo=false
+barridoLog="[Sync Pull] Tombstones de la nube integrados: 0 (estudiantes removidos: 1, docentes: 0)." erroresJS=0
+INV-4 SWEEP: PASS
