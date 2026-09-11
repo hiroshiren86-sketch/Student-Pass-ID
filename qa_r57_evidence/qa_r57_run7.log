@@ -1,0 +1,59 @@
+[F0] nube: v=40 students=80 teachers=20 assignments=180 templates=0 slots=7 dailyEndTime=18:30 qrSecret=(presente len 64)
+PASS · F0 tombstone del estudiante 999999999 existe en la nube (semilla INV-4) — total tombstones=2
+PASS · F0 Andrés en nube con tempPassword legible — id=prof-1788654146792
+PASS · F1.p0 arranque limpio NO sella (fix hueco #7: lazy-init system)
+PASS · F1.0 teléfono limpio: jornada base de la nube (18:30) — dailyEndTime=18:30
+PASS · F1.0 teléfono limpio: SIN sello tras login+pull
+[pageA] [SEAL-SET]     at fx.markLocalSyncDirty (https://student-pass-id.pages.dev/assets/index-fURkMXyO.js:4071:27020) |     at fx.saveSettings (https://student-pass-id.pages.dev/assets/index-fURkMXyO.js:4071:23270) |     at ht (https://student-pass-id.pages.dev/assets/index-fURkMXyO.js:4279:65518) |     at UT (https://student-pass-id.pages.dev/assets/index-fURkMXyO.js:48:141767)
+[pageA] [SEAL-SET]     at fx.markLocalSyncDirty (https://student-pass-id.pages.dev/assets/index-fURkMXyO.js:4071:27020) |     at fx.saveSettings (https://student-pass-id.pages.dev/assets/index-fURkMXyO.js:4071:23270) |     at fx.applyDayTemplate (https://student-pass-id.pages.dev/assets/index-fURkMXyO.js:4071:35237) |     at ht (https://student-pass-id.pages.dev/assets/index-fURkMXyO.js:4279:65558)
+[pageA] [SEAL-SET]     at fx.markLocalSyncDirty (https://student-pass-id.pages.dev/assets/index-fURkMXyO.js:4071:27020) |     at fx.saveScheduleSlots (https://student-pass-id.pages.dev/assets/index-fURkMXyO.js:4071:41649) |     at fx.applyDayTemplate (https://student-pass-id.pages.dev/assets/index-fURkMXyO.js:4071:35307) |     at ht (https://student-pass-id.pages.dev/assets/index-fURkMXyO.js:4279:65558)
+PASS · F1.1 editar jornada 18:35 ACTIVA el sello dirty — seal="2026-09-11T00:35:19.762Z"
+PASS · F1.2 la nube AÚN no conoce el 18:35 (sin push) — nube=18:30
+  …esperando auto-sync (120s, sello presente)
+  …esperando auto-sync (240s, sello presente)
+[pageA] [SEAL-CLEAR]     at fx.clearLocalSyncDirty (https://student-pass-id.pages.dev/assets/index-fURkMXyO.js:4071:27193) |     at yc.performCloudflareSync (https://student-pass-id.pages.dev/assets/index-fURkMXyO.js:4279:7517)
+PASS · F1.3 auto-sync liberó el sello tras push exitoso — espera=260s
+PASS · F1.4 lo local adelantado SOBREVIVIÓ al ciclo (18:35 intacto) — dailyEndTime=18:35
+PASS · F1.5 la nube CONVERGIÓ al 18:35 local (push lo publicó) — nube=18:35
+PASS · F1.6 sin errores JS en Rectoría durante todo el ciclo
+[pageA] [SEAL-SET]     at fx.markLocalSyncDirty (https://student-pass-id.pages.dev/assets/index-fURkMXyO.js:4071:27020) |     at fx.saveSettings (https://student-pass-id.pages.dev/assets/index-fURkMXyO.js:4071:23270) |     at ht (https://student-pass-id.pages.dev/assets/index-fURkMXyO.js:4279:65518) |     at UT (https://student-pass-id.pages.dev/assets/index-fURkMXyO.js:48:141767)
+[pageA] [SEAL-SET]     at fx.markLocalSyncDirty (https://student-pass-id.pages.dev/assets/index-fURkMXyO.js:4071:27020) |     at fx.saveSettings (https://student-pass-id.pages.dev/assets/index-fURkMXyO.js:4071:23270) |     at fx.applyDayTemplate (https://student-pass-id.pages.dev/assets/index-fURkMXyO.js:4071:35237) |     at ht (https://student-pass-id.pages.dev/assets/index-fURkMXyO.js:4279:65558)
+[pageA] [SEAL-SET]     at fx.markLocalSyncDirty (https://student-pass-id.pages.dev/assets/index-fURkMXyO.js:4071:27020) |     at fx.saveScheduleSlots (https://student-pass-id.pages.dev/assets/index-fURkMXyO.js:4071:41649) |     at fx.applyDayTemplate (https://student-pass-id.pages.dev/assets/index-fURkMXyO.js:4071:35307) |     at ht (https://student-pass-id.pages.dev/assets/index-fURkMXyO.js:4279:65558)
+PASS · F2.1 segunda edición (18:40) activa el sello
+[pageA] [SEAL-SET]     at fx.markLocalSyncDirty (https://student-pass-id.pages.dev/assets/index-fURkMXyO.js:4071:27020) |     at fx.saveSettings (https://student-pass-id.pages.dev/assets/index-fURkMXyO.js:4071:23270) |     at xt (https://student-pass-id.pages.dev/assets/index-fURkMXyO.js:4279:64380) |     at UT (https://student-pass-id.pages.dev/assets/index-fURkMXyO.js:48:141767)
+PASS · F2.2 resumen del pull declara "ajustes locales sin subir preservados" — msg="¡Sincronización Exitosa!
+
+✓ Datos descargados del Cloudflare Worker: 80 estudiantes, 20 docentes, 180 cátedras de horarios, 7 bloques de jornada, 0 nuevas asist"
+PASS · F2.3 lo local adelantado NO fue pisado por el pull (18:40 intacto) — dailyEndTime=18:40
+PASS · F2.4 la nube sigue en 18:35 (el pull no cambia la nube) — nube=18:35
+PASS · F3.0 logout real (vuelve a la puerta de login)
+PASS · F3.1 fantasma 999999999 presente localmente tras logout (BD sucia con forma completa) — students=81
+FAIL · F3.2 barrido reporta integración con ELIMINACIÓN del fantasma
+PASS · F3.4 tombstone 999999999 quedó unido a la lista local (no resucita con push) — total local=2
+PASS · F3.5 matrícula real intacta tras el barrido (80) — students=80
+PASS · F3.6 sin errores JS en el segundo teléfono
+[pageA] [SEAL-SET]     at fx.markLocalSyncDirty (https://student-pass-id.pages.dev/assets/index-fURkMXyO.js:4071:27020) |     at fx.saveSettings (https://student-pass-id.pages.dev/assets/index-fURkMXyO.js:4071:23270) |     at ht (https://student-pass-id.pages.dev/assets/index-fURkMXyO.js:4279:65518) |     at UT (https://student-pass-id.pages.dev/assets/index-fURkMXyO.js:48:141767)
+[pageA] [SEAL-SET]     at fx.markLocalSyncDirty (https://student-pass-id.pages.dev/assets/index-fURkMXyO.js:4071:27020) |     at fx.saveSettings (https://student-pass-id.pages.dev/assets/index-fURkMXyO.js:4071:23270) |     at fx.applyDayTemplate (https://student-pass-id.pages.dev/assets/index-fURkMXyO.js:4071:35237) |     at ht (https://student-pass-id.pages.dev/assets/index-fURkMXyO.js:4279:65558)
+[pageA] [SEAL-SET]     at fx.markLocalSyncDirty (https://student-pass-id.pages.dev/assets/index-fURkMXyO.js:4071:27020) |     at fx.saveScheduleSlots (https://student-pass-id.pages.dev/assets/index-fURkMXyO.js:4071:41649) |     at fx.applyDayTemplate (https://student-pass-id.pages.dev/assets/index-fURkMXyO.js:4071:35307) |     at ht (https://student-pass-id.pages.dev/assets/index-fURkMXyO.js:4279:65558)
+PASS · F4.1 edición de restauración (18:30) activa el sello
+[pageA] [SEAL-SET]     at fx.markLocalSyncDirty (https://student-pass-id.pages.dev/assets/index-fURkMXyO.js:4071:27020) |     at fx.saveSettings (https://student-pass-id.pages.dev/assets/index-fURkMXyO.js:4071:23270) |     at it (https://student-pass-id.pages.dev/assets/index-fURkMXyO.js:4279:65068) |     at UT (https://student-pass-id.pages.dev/assets/index-fURkMXyO.js:48:141767)
+[pageA] [SEAL-CLEAR]     at fx.clearLocalSyncDirty (https://student-pass-id.pages.dev/assets/index-fURkMXyO.js:4071:27193) |     at yc.performCloudflareSync (https://student-pass-id.pages.dev/assets/index-fURkMXyO.js:4279:7517) |     at async it (https://student-pass-id.pages.dev/assets/index-fURkMXyO.js:4279:65093)
+PASS · F4.2 push manual publicado — msg="¡Sincronización Exitosa!
+
+Sincronización Cloudflare completada: 80 estudiantes y 2 asistencias guardadas en D1 y KV (catálogo v42).
+
+Cerrar"
+PASS · F4.3 push manual liberó el sello
+PASS · F4.4 nube restaurada: dailyEndTime 18:30 — nube=18:30
+PASS · F4.5 nube idéntica al estado F0 (estudiantes/docentes/cátedras/plantillas/slots/tombstones) — s=80/80 t=20/20 a=180/180 tmpl=0/0 slots=7/7 tombs=2/2
+PASS · F4.6 qrSecret preservado BYTE-EXACTO vs F0 (el canónico vive intacto) — len=64/64
+PASS · F4.7 login docente OK (pull scopeado sin gate)
+PASS · F4.8 docente recibió jornada institucional 18:30 — dailyEndTime=18:30
+PASS · F4.9 docente recibió su porción de matrícula (UPSERT intacto) — students=38
+PASS · F4.10 rol de la representante Camila (11°3) sigue bajando — grade=11°3 rep=true
+PASS · F4.11 sin errores JS en docente
+
+==== RESUMEN QA R57: 31/32 PASS ====
+FALLOS:
+ - F3.2 barrido reporta integración con ELIMINACIÓN del fantasma
+EXIT=1
