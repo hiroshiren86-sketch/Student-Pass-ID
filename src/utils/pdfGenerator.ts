@@ -86,8 +86,11 @@ export async function generateStudentCardPdf(student: Student, settings: SchoolS
     color: rgb(0.1, 0.3, 0.6)
   });
 
-  // Generar QR firmado con HMAC-SHA256
-  const qrPayload = await generateStudentQrPayload(student, settings.qrSecret);
+  // Generar QR firmado con HMAC-SHA256.
+  // Ronda 59: si la ficha ya trae el token PRE-FIRMADO por Rectoría (signedCardToken),
+  // se imprime ESE — así el carné impreso y el QR del portal del estudiante son el
+  // MISMO token (y el portal no necesita el secret institucional para coincidir).
+  const qrPayload = student.signedCardToken || await generateStudentQrPayload(student, settings.qrSecret);
   const qrDataUrl = await QRCode.toDataURL(qrPayload, {
     margin: 1,
     width: 250,

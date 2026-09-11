@@ -228,6 +228,21 @@ Esta sección documenta el mapa exhaustivo de comunicaciones, protocolos, plataf
 
 ## 📋 3. Bitácora de Implementaciones y Correcciones Realizadas
 
+### ✅ Ronda 59 (11/09/2026) — EL SECRETO VIAJA POR ROL ("verificar NO es firmar"): el qrSecret JAMÁS baja a los estudiantes; su carné viaja PRE-FIRMADO y su login offline usa una llave derivada SOLO de su propia ficha
+
+**Mandato del propietario**: "cómo se soluciona el problema de que el QR Secret viaje hacia los estudiantes… rectoría la pone en su panel y se le reparte automáticamente a todos los usuarios… según su rol" — el flujo de distribución automática por rol SE CONSERVA; lo que cambia es QUÉ recibe cada rol.
+
+**El problema (evidencia)**: `filterSnapshotByRole` para ESTUDIANTE_ACUDIENTE hacía `...data` → el estudiante recibía `settings.qrSecret` completo (política R56) → cualquier estudiante podía FIRMAR el carné de cualquier compañero del colegio. Además el portal firmaba su QR en vivo con ese secret (para eso lo necesitaba en el dispositivo).
+
+**La solución (3 piezas, distribución automática intacta):**
+1. **Worker (la corrección de verdad)**: ESTUDIANTE_ACUDIENTE recibe settings SIN `qrSecret`/`legacyQrSecret` (lo operativo sí: nombre, jornada, bloques); la PROPIA ficha intacta; los COMPAÑEROS DE GRADO despojados de `loginKey`/`tempPasswordVerifier`/`signedCardToken`/`documentId` (mínimo privilegio Ley 1581). DOCENTE conserva el secret (verificar firmas offline lo exige) pero con fichas de estudiantes SIN credenciales (deriva del secret al vuelo). ADMIN/OPERATOR sin cambios (terminales de escaneo).
+2. **Carné pre-firmado (`Student.signedCardToken`)**: el push de Rectoría adjunta a cada ficha su token QR firmado (igual que imprime el PDF — pdfGenerator prefiere el token de la ficha: carné impreso == QR del portal). El portal del estudiante MUESTRA ese token en vez de firmar en el dispositivo; sin token ni secret → mensaje honesto, nunca una firma basura.
+3. **Login offline sin master (`Student.loginKey`)**: `loginKey = HMAC(qrSecret, "loginkey:v1:"+code)` y `tempPasswordVerifier = HMAC(loginKey, clave)` (cambio de fórmula F-23 — nada desplegado aún, sin migración). La loginKey viaja SOLO en la propia ficha → el estudiante verifica SU clave offline sin poder verificar (ni falsificar) la de nadie más; las terminales derivan cualquier loginKey del qrSecret/legacy que ya tienen. El par (loginKey, verifier) es AUTOCONTENIDO → el login del estudiante sobrevive a rotaciones del secret incluso ANTES del re-push de Rectoría. Defensa en profundidad client-side: `applyCloudSettingsToDevice` no instala qrSecret en sesiones ESTUDIANTE_ACUDIENTE (protege contra un Worker viejo aún desplegado).
+
+**Límite documentado (honestidad)**: con HMAC simétrico, DOCENTE/OPERATOR verifican = pueden firmar (personal docente = confianza del colegio; el estudiante YA NO). La solución definitiva a ese residuo es firma ASIMÉTRICA (Ed25519: Rectoría firma con la llave privada, todos verifican con la pública, nadie más puede firmar) — queda como roadmap documentado, no emprendido en esta ronda.
+
+**Validación**: qa-r58 pasó de 36 a **51✓** (§D reescrita a la fórmula R59 + §I nueva: scopeo del worker, 9 checks) · R43 64✓ · R46 40✓ · R47 18✓ · tsc cliente+worker 0 · build OK.
+
 ### ✅ Ronda 58 (11/09/2026) — REMEDIACIÓN DE LA AUDITORÍA EXTERNA 2026-09 (hallazgos F-1…F-25): política de carné firmado, CAS del snapshot, fin de la puerta trasera del portal, credenciales fuera del push, quota-burn del auto-sync y CI que nunca existió
 
 **Mandato**: el propietario aportó `INFORME-AUDITORIA-INAS-2026-09.md` (hallazgos F-1…F-25) y autorizó verificar cada uno con evidencia de código y corregirlo. **23 confirmados y corregidos, 2 refutados/explicados con evidencia** (ver final). Cero regresiones: R43 64✓ · R46 40✓ · R47 18✓ · **R58 36✓ (suite nueva)** · R49 SKIP-limpio · tsc cliente+worker 0 · vite build OK.

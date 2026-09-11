@@ -88,6 +88,24 @@ export async function generateHmacSignature(data: string, secret: string): Promi
 }
 
 /**
+ * Ronda 59 (secreto por rol) — DERIVACIÓN DE LLAVE POR ESTUDIANTE.
+ *
+ * loginKey = HMAC-SHA256(qrSecret institucional, `loginkey:v1:${code}`)
+ *
+ * Propósito: separar "poder verificar la PROPIA clave" (lo que necesita el portal del
+ * estudiante offline) de "poder firmar carnés" (lo que exige el qrSecret y que JAMÁS
+ * debe llegar a un dispositivo de estudiante). El estudiante recibe su loginKey en su
+ * PROPIA ficha: con ella verifica su contraseña, pero NO puede firmar carnés (la firma
+ * de carnés usa el qrSecret directamente) ni verificar las claves de sus compañeros
+ * (cada compañero tiene su propia loginKey, que el Worker elimina de las fichas ajenas).
+ * Las terminales de escaneo (que sí tienen el qrSecret para verificar firmas offline)
+ * derivan la loginKey de cualquier estudiante al vuelo.
+ */
+export async function deriveStudentLoginKey(qrSecret: string, studentCode: string): Promise<string> {
+  return generateHmacSignature(`loginkey:v1:${studentCode}`, qrSecret);
+}
+
+/**
  * Genera el payload firmado para el QR del carné
  * Formato canónico: "IEDSJ:v1:<code>:<doc>:<grade>:<sec>:<exp>:<sig32>"
  */

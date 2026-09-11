@@ -259,6 +259,36 @@ export async function resolveAuthz(request: Request, env: Env): Promise<Authz | 
 export function filterSnapshotByRole(data: any, authz: Authz): any {
   if (!data || authz.role === 'ADMIN' || authz.role === 'OPERATOR') return data;
 
+  // =========================================================================
+  // Ronda 59 — EL SECRETO VIAJA POR ROL ("verificar NO es firmar").
+  //
+  // El qrSecret institucional es capacidad de FIRMAR carnés: mientras viajara en
+  // settings hacia TODOS los roles (incl. estudiantes — decisión R56), cualquier
+  // estudiante podía falsificar el carné de CUALQUIER compañero del colegio. Ahora:
+  //   · ADMIN / OPERATOR (terminales de escaneo y Rectoría): reciben el secret —
+  //     tienen que VERIFICAR firmas offline (y con HMAC simétrico, verificar implica
+  //     poder firmar: es el límite del diseño actual, ver plan Ed25519 en AGENTS.md).
+  //   · DOCENTE: recibe el secret (verifica escaneos offline) pero las fichas de
+  //     estudiantes llegan SIN loginKey/verifier (los deriva del secret al vuelo).
+  //   · ESTUDIANTE_ACUDIENTE: JAMÁS recibe qrSecret/legacyQrSecret. Su propio carné
+  //     viaja PRE-FIRMADO en su ficha (signedCardToken) y su login offline funciona
+  //     con la loginKey de SU PROPIA ficha (verificador HMAC por estudiante).
+  //     Las fichas de sus COMPAÑEROS DE GRADO llegan despojadas de credenciales,
+  //     token firmado y documento (mínimo privilegio Ley 1581).
+  // =========================================================================
+
+  // Despoja una ficha de estudiante de todo lo que no necesita un tercio:
+  // credenciales (loginKey/verifier/claves), el token firmado de SU carné y su documento.
+  const stripStudentRecord = (s: any) => {
+    if (!s || typeof s !== 'object') return s;
+    const {
+      loginKey: _lk, tempPasswordVerifier: _tv, tempPassword: _tp,
+      password: _pw, passwordHash: _ph, signedCardToken: _sc, documentId: _doc,
+      ...rest
+    } = s;
+    return rest;
+  };
+
   if (authz.role === 'DOCENTE') {
     // El docente ve SOLO sus cursos asignados (assignedGrades de SU ficha, en el snapshot).
     const teachers = Array.isArray(data.teachers) ? data.teachers : [];
@@ -266,7 +296,9 @@ export function filterSnapshotByRole(data: any, authz: Authz): any {
     const grades = new Set<string>(Array.isArray(self?.assignedGrades) ? self.assignedGrades : []);
     return {
       ...data,
-      students: Array.isArray(data.students) ? data.students.filter((s: any) => grades.has(s.grade)) : [],
+      students: Array.isArray(data.students)
+        ? data.students.filter((s: any) => grades.has(s.grade)).map(stripStudentRecord)
+        : [],
       assignments: Array.isArray(data.assignments) ? data.assignments.filter((a: any) => grades.has(a.grade)) : [],
       records: Array.isArray(data.records) ? data.records.filter((r: any) => grades.has(r.studentGrade || r.grade)) : [],
       teachers: self ? [self] : [],
@@ -276,12 +308,22 @@ export function filterSnapshotByRole(data: any, authz: Authz): any {
 
   if (authz.role === 'ESTUDIANTE_ACUDIENTE') {
     const students = Array.isArray(data.students) ? data.students : [];
-    const self = students.find((s: any) => String(s.code) === String(authz.linkedStudentCode));
+    const selfCode = String(authz.linkedStudentCode || '');
+    const self = students.find((s: any) => String(s.code) === selfCode);
     const grade = self?.grade;
-    const codes = new Set<string>(String(authz.linkedStudentCode) ? [String(authz.linkedStudentCode)] : []);
+    const codes = new Set<string>(selfCode ? [selfCode] : []);
+    // settings SIN secretos de firma (el resto de ajustes sí: nombre, jornada, bloques).
+    const { qrSecret: _qs, legacyQrSecret: _lqs, ...safeSettings } = data.settings || {};
     return {
       ...data,
-      students: Array.isArray(data.students) ? data.students.filter((s: any) => (grade && s.grade === grade)) : [],
+      settings: safeSettings,
+      students: Array.isArray(data.students)
+        ? data.students
+            .filter((s: any) => grade && s.grade === grade)
+            // La PROPIA ficha viaja INTACTA (con su signedCardToken y loginKey — el
+            // portal los necesita); las de los compañeros, despojadas (stripStudentRecord).
+            .map((s: any) => (String(s.code) === selfCode ? s : stripStudentRecord(s)))
+        : [],
       assignments: Array.isArray(data.assignments) ? data.assignments.filter((a: any) => grade && a.grade === grade) : [],
       records: Array.isArray(data.records) ? data.records.filter((r: any) => codes.has(r.studentCode)) : [],
       teachers: [],

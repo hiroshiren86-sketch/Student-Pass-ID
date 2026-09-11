@@ -149,12 +149,23 @@ export interface Student {
   active: boolean;        // Estado activo
   createdAt: string;      // Fecha ISO
   tempPassword?: string;  // Contraseña inicial (SOLO en el dispositivo de Rectoría; jamás sube a la nube desde R58)
-  // Ronda 58 (F-23): verificador HMAC de la clave inicial para terminales que NO
-  // tienen la clave en claro. Viaja en el snapshot en LUGAR de tempPassword:
-  // HMAC-SHA256(clave institucional (qrSecret), `${code}|${password}`) — 32 hex.
-  // No es un KDF (verificarlo requiere el qrSecret, que viaja en el mismo snapshot
-  // por diseño del propietario): la verificación FUERTE sigue siendo Firebase Auth.
+  // Ronda 58 (F-23) → Ronda 59 (secreto por rol): verificador HMAC de la clave inicial
+  // para dispositivos que NO tienen la clave en claro. Viaja en el snapshot EN LUGAR
+  // de tempPassword: HMAC-SHA256(loginKey del estudiante, password) — 32 hex, donde
+  // loginKey = HMAC-SHA256(qrSecret, `loginkey:v1:${code}`) (derivación por sujeto:
+  // el estudiante solo puede verificar SU PROPIA clave, no la de sus compañeros).
+  // La verificación FUERTE sigue siendo Firebase Auth.
   tempPasswordVerifier?: string;
+  // Ronda 59: llave de login DERIVADA por estudiante (HMAC(qrSecret, `loginkey:v1:${code}`)).
+  // Viaja SOLO en la PROPIA ficha del estudiante (el Worker la elimina de las fichas
+  // de sus compañeros de grado): permite al portal del estudiante verificar su clave
+  // offline SIN recibir el qrSecret institucional (que le daría a firmar carnés ajenos).
+  loginKey?: string;
+  // Ronda 59: token QR del carné PRE-FIRMADO por Rectoría (generateStudentQrPayload
+  // con el secret institucional). Viaja en la propia ficha: el portal del estudiante
+  // MUESTRA este token en vez de firmar en el dispositivo (firmar requeriría el secret
+  // institucional). El carné impreso y el QR del portal son el mismo token.
+  signedCardToken?: string;
   hasCustomPassword?: boolean; // Indica si el estudiante ya personalizó su contraseña
   isRepresentative?: boolean; // Subrol: Representante Titular
   isSubstituteRepresentative?: boolean; // Subrol: Representante Suplente

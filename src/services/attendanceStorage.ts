@@ -35,7 +35,7 @@ import {
   INITIAL_SCHEDULE_ASSIGNMENTS,
   DAY_TEMPLATES_DEFINITIONS
 } from './mockData';
-import { parseAndVerifyScan, parseAndVerifyClassScan, parseAndVerifyTeacherCard, slugifySubject, prettifySubjectSlug, generateHmacSignature } from '../utils/crypto';
+import { parseAndVerifyScan, parseAndVerifyClassScan, parseAndVerifyTeacherCard, slugifySubject, prettifySubjectSlug, generateHmacSignature, deriveStudentLoginKey } from '../utils/crypto';
 import { isValidGrade } from '../utils/documentParser';
 import { FirebaseService } from './firebase';
 import { SEED_DEMO_ON_FIRST_LAUNCH } from './demoConfig';
@@ -557,25 +557,38 @@ export class AttendanceStorageService {
   // Tolerancia a rotación: prueba qrSecret Y legacyQrSecret (el secret anterior).
   // SIN fallback: una ficha sin clave ni verificador NO deja pasar a nadie
   // (antes: el portal aceptaba 'SJ-2026'/'colegio2026'/el propio código — F-24).
-  static async verifyStudentCredential(student: { code: string; tempPassword?: string; tempPasswordVerifier?: string }, password: string): Promise<{ ok: boolean; reason: 'OK' | 'no_credential' | 'no_key' | 'mismatch'; message?: string }> {
+  static async verifyStudentCredential(student: { code: string; tempPassword?: string; tempPasswordVerifier?: string; loginKey?: string }, password: string): Promise<{ ok: boolean; reason: 'OK' | 'no_credential' | 'no_key' | 'mismatch'; message?: string }> {
     const pass = String(password || '').trim();
     if (!pass) {
       return { ok: false, reason: 'no_credential', message: 'Ingresa la clave de acceso impresa en el reverso del carné.' };
     }
-    // 1) Clave en claro local (si existe). Una clave personalizada en OTRO dispositivo
-    //    puede hacer que la local esté desactualizada → se sigue con el verificador.
+    // 1) Clave en claro local (si existe — dispositivo de Rectoría o ficha creada aquí).
+    //    Una clave personalizada en OTRO dispositivo puede hacer que la local esté
+    //    desactualizada → se sigue con el verificador.
     if (student.tempPassword && pass === student.tempPassword) {
       return { ok: true, reason: 'OK' };
     }
-    // 2) Verificador HMAC institucional.
+    // 2) Verificador HMAC con LLAVE DERIVADA POR ESTUDIANTE (Ronda 59):
+    //    verifier = HMAC(loginKey, password), loginKey = HMAC(qrSecret, `loginkey:v1:code`).
+    //    Candidatos de loginKey — en orden:
+    //      a) la loginKey de la PROPIA ficha (portal del estudiante: verifican SU clave
+    //         offline SIN el qrSecret institucional; el par loginKey+verifier es
+    //         autocontenido y sobrevive a rotaciones del secret hasta el próximo push);
+    //      b) la derivada del qrSecret/legacyQrSecret DEL DISPOSITIVO (terminales de
+    //         escaneo y Rectoría, que sí tienen el secret para verificar firmas).
     if (student.tempPasswordVerifier) {
       const settings = this.getSettings();
-      const secrets = [settings.qrSecret, settings.legacyQrSecret].filter((s): s is string => !!s);
-      if (secrets.length === 0) {
-        return { ok: false, reason: 'no_key', message: 'Este dispositivo no tiene la clave institucional configurada. Sincroniza (Ajustes → Sync y Seguridad → Descargar Pull) e inténtalo de nuevo.' };
+      const keys: string[] = [];
+      if (student.loginKey) keys.push(student.loginKey);
+      for (const secret of [settings.qrSecret, settings.legacyQrSecret]) {
+        if (secret) keys.push(await deriveStudentLoginKey(secret, student.code));
       }
-      for (const secret of secrets) {
-        const expected = await generateHmacSignature(`${student.code}|${pass}`, secret);
+      const uniqueKeys = Array.from(new Set(keys));
+      if (uniqueKeys.length === 0) {
+        return { ok: false, reason: 'no_key', message: 'Este dispositivo no puede verificar claves todavía. Sincroniza una vez (Portal → actualizar, o Ajustes → Sync y Seguridad → Descargar Pull) e inténtalo de nuevo.' };
+      }
+      for (const key of uniqueKeys) {
+        const expected = await generateHmacSignature(pass, key);
         if (expected === student.tempPasswordVerifier) {
           return { ok: true, reason: 'OK' };
         }

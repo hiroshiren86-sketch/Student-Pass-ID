@@ -59,6 +59,7 @@ export const StudentPortalView: React.FC<StudentPortalViewProps> = ({ onLogout, 
   const [showPasswordModal, setShowPasswordModal] = useState(false);
   const [studentStats, setStudentStats] = useState<StudentAttendanceStats | null>(null);
   const [qrDataUrl, setQrDataUrl] = useState<string | null>(null);
+  const [qrUnavailableMsg, setQrUnavailableMsg] = useState<string | null>(null); // Ronda 59: carné no emitido en este dispositivo
   const [settings, setSettings] = useState<SchoolSettings>(AttendanceStorageService.getSettings());
 
   // Ronda 8 (B3): el portal era la ÚNICA vista grande sin suscripción al storage — el guard
@@ -128,12 +129,26 @@ export const StudentPortalView: React.FC<StudentPortalViewProps> = ({ onLogout, 
       // Ronda 4 (F4): cargar mi horario opcional
       setMySchedule(AttendanceStorageService.getStudentPersonalSchedule(activeStudent.code));
 
-      // Ronda 58 (F-2): el QR del carné en vivo se firma con el SECRET INSTITUCIONAL
-      // de este dispositivo (settings.qrSecret — llega por Pull desde R56). ANTES:
-      // se firmaba con el DEFAULT_QR_SECRET hardcodeado del repo → el QR mostrado
-      // NUNCA verificaba en un terminal con el secret institucional, y quien leyera
-      // el repo podía firmar carnés válidos para dispositivos en default de fábrica.
-      generateStudentQrPayload(activeStudent, settings.qrSecret).then((payload) => {
+      // Ronda 59 (secreto por rol): el QR del carné se resuelve en cascada:
+      //   1. signedCardToken de la PROPIA ficha — el token PRE-FIRMADO por Rectoría
+      //      que viaja en el snapshot. Es lo NORMAL en un dispositivo de estudiante
+      //      (que NO recibe el qrSecret institucional y por tanto no puede firmar).
+      //   2. firma en vivo con settings.qrSecret — SOLO si este dispositivo lo tiene
+      //      (Rectoría / terminales de escaneo, que sí pueden firmar).
+      //   3. sin token ni secret → mensaje honesto (antes se firmaba con un secret
+      //      público del repo: QR que jamás verificaba — Ronda 58 F-2).
+      const tokenPromise: Promise<string | null> = activeStudent.signedCardToken
+        ? Promise.resolve(activeStudent.signedCardToken)
+        : settings.qrSecret
+          ? generateStudentQrPayload(activeStudent, settings.qrSecret)
+          : Promise.resolve(null);
+      tokenPromise.then((payload) => {
+        if (!payload) {
+          setQrDataUrl(null);
+          setQrUnavailableMsg('Tu carné digital aún no está emitido en este dispositivo. Sincroniza una vez o solicítalo en Rectoría (Carnés).');
+          return;
+        }
+        setQrUnavailableMsg(null);
         QRCode.toDataURL(payload, { margin: 1, width: 256 })
           .then((url) => setQrDataUrl(url))
           .catch((err) => console.error('Error generando QR para carné de estudiante:', err));
@@ -771,6 +786,11 @@ export const StudentPortalView: React.FC<StudentPortalViewProps> = ({ onLogout, 
                         <img src={qrDataUrl} alt="QR carné" className="w-full h-full object-contain" />
                       ) : (
                         <QrCode className="w-12 h-12 text-slate-700" />
+                      )}
+                      {qrUnavailableMsg && !qrDataUrl && (
+                        <div className="absolute inset-0 bg-black/60 rounded-xl flex items-center justify-center p-1">
+                          <span className="text-[6px] leading-tight text-white font-bold text-center">{qrUnavailableMsg}</span>
+                        </div>
                       )}
                       <div className="absolute -bottom-1 -right-1 px-1 bg-indigo-600 text-white text-[6px] font-black rounded">
                         HMAC

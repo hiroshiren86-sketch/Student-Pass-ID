@@ -2,7 +2,7 @@ import { Student, Teacher, AttendanceRecord, ClassScheduleAssignment, SchoolSett
 import { AttendanceStorageService } from './attendanceStorage';
 import { FirebaseService } from './firebase';
 import { compressDataUrl, PHOTO_DATAURL_SOFT_LIMIT } from '../utils/imageCompressor';
-import { generateHmacSignature } from '../utils/crypto';
+import { generateHmacSignature, deriveStudentLoginKey, generateStudentQrPayload } from '../utils/crypto';
 
 export interface CloudflareSyncResult {
   success: boolean;
@@ -304,21 +304,33 @@ export class CloudflareSyncService {
           omitted.push(`${st.firstName} ${st.lastName} (${st.code})`);
         }
       }
-      // F-23: egreso de credenciales — verificador en lugar de la clave en claro.
-      if (entry.tempPassword && secretForVerifier) {
-        const verifier = await generateHmacSignature(`${entry.code}|${entry.tempPassword}`, secretForVerifier);
-        const { tempPassword: _tp, password: _pw, passwordHash: _ph, ...rest } = entry as any;
-        void _tp; void _pw; void _ph;
-        entry = { ...rest, tempPasswordVerifier: verifier } as Student;
+      // F-23 + Ronda 59 (secreto por rol): egreso de credenciales.
+      //   - signedCardToken: el QR del carné PRE-FIRMADO con el secret institucional
+      //     viaja en la propia ficha → el portal del estudiante MUESTRA su QR sin
+      //     necesidad de recibir el qrSecret (que le permitiría firmar carnés ajenos).
+      //   - loginKey + verifier: par autocontenido por estudiante — loginKey =
+      //     HMAC(qrSecret, `loginkey:v1:code`) y verifier = HMAC(loginKey, clave).
+      //     La loginKey viaja SOLO en la propia ficha (el Worker la elimina de las
+      //     fichas de los compañeros de grado), así el estudiante verifica SU clave
+      //     offline sin poder atacar la de nadie más.
+      const { tempPassword: _tp, password: _pw, passwordHash: _ph, ...rest } = entry as any;
+      void _tp; void _pw; void _ph;
+      let out = rest as Student;
+      if (secretForVerifier) {
+        try {
+          out = { ...out, signedCardToken: await generateStudentQrPayload(entry, secretForVerifier) };
+        } catch { /* sin campos suficientes para el token: sube sin él */ }
+        if (entry.tempPassword) {
+          const loginKey = await deriveStudentLoginKey(secretForVerifier, entry.code);
+          const verifier = await generateHmacSignature(entry.tempPassword, loginKey);
+          out = { ...out, loginKey, tempPasswordVerifier: verifier };
+        }
       } else if (entry.tempPassword) {
         // Sin secret local no se puede calcular el verificador: JAMÁS se sube la clave
         // en claro como fallback (Regla 6). La ficha sube sin credencial; los otros
         // terminales ven "sin clave asignada" hasta que Rectoría sincronice con secret.
-        const { tempPassword: _tp, password: _pw, passwordHash: _ph, ...rest } = entry as any;
-        void _tp; void _pw; void _ph;
-        entry = rest as Student;
       }
-      clean.push(entry);
+      clean.push(out);
     }
 
     return { clean, omitted };
@@ -605,11 +617,18 @@ export class CloudflareSyncService {
     }
     const current = AttendanceStorageService.getSettings();
     const merged: any = { ...current };
+    // Ronda 59 (secreto por rol): en sesiones de ESTUDIANTE/ACUDIENTE el secret de
+    // firma NO se instala en el dispositivo (defensa en profundidad — el Worker YA lo
+    // elimina del snapshot para ese rol; este guard protege contra un Worker viejo
+    // aún sin actualizar). El estudiante verifica su clave con la loginKey de SU ficha.
+    const sessionNow = AttendanceStorageService.getCurrentSession();
+    const studentLikeSession = sessionNow?.role === 'ESTUDIANTE_ACUDIENTE';
     let changed = 0;
     for (const [key, value] of Object.entries(cloudSettings)) {
       if (this.DEVICE_LOCAL_SETTINGS.has(key)) continue;
       if (value === undefined || value === null || value === '') continue; // vacío no pisa
       if (key === 'qrSecret' && typeof value !== 'string') continue;
+      if (studentLikeSession && (key === 'qrSecret' || key === 'legacyQrSecret')) continue; // R59
       if (JSON.stringify((current as any)[key]) !== JSON.stringify(value)) {
         // Ronda 58 (F-23): al rotar el qrSecret institucional, el anterior pasa a
         // legacyQrSecret — los tempPasswordVerifier firmados con el secret viejo

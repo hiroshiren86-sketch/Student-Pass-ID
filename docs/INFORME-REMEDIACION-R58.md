@@ -166,3 +166,31 @@ Sin búsqueda por nombre en el camino de autenticación (era enumeración del ro
 2. **Desplegar** el Worker (`wrangler deploy` tras `wrangler d1 migrations`) y las `firestore.rules` — con el CI manual o manualmente. El deploy de Pages sale solo con el push.
 3. **Configurar secrets del CI**: `CLOUDFLARE_API_TOKEN`, `FIREBASE_SERVICE_ACCOUNT`.
 4. Decidir la política operativa de lectores 1D (palanca "Exigir carné firmado" en Ajustes → Sync y Seguridad; default ON).
+
+
+---
+
+# ADDENDUM — RONDA 59 (mismo día): el secreto viaja por rol
+
+**Pregunta del propietario:** *"¿Cómo se soluciona el problema de que el QR Secret viaje hacia los estudiantes? … Rectoría la pone en su panel y se le reparte automáticamente a todos los usuarios… según su rol."*
+
+**Respuesta corta:** el flujo de Rectoría-una-vez + distribución automática por rol se CONSERVA exactamente igual. Lo que cambia es **qué** recibe cada rol, porque *verificar no es lo mismo que firmar*:
+
+| Rol | ¿Qué recibía (R56)? | ¿Qué recibe (R59)? |
+|---|---|---|
+| Rectoría (ADMIN) | qrSecret | qrSecret (firma todo) — sin cambios |
+| Terminal de escaneo (OPERATOR) | qrSecret | qrSecret (verifica firmas offline) — sin cambios |
+| Docente (identidad) | qrSecret + fichas con verificador | qrSecret (verifica offline) + fichas SIN credenciales (deriva al vuelo) |
+| **Estudiante** | **qrSecret completo** ← el problema | **NADA de secret.** Su carné pre-firmado en SU ficha + SU llave de login derivada |
+
+## Las 3 piezas implementadas
+
+1. **El Worker no lo envía (la corrección de verdad, servidor-side).** `filterSnapshotByRole` para `ESTUDIANTE_ACUDIENTE`: settings sin `qrSecret`/`legacyQrSecret`; la propia ficha intacta; los compañeros de grado sin `loginKey`/verificador/token/documento. Aunque el cliente fuera manipulado, el servidor ya no entrega el secret a ese rol.
+2. **Carné pre-firmado (`signedCardToken`).** El push de Rectoría adjunta a cada ficha su token QR ya firmado — el mismo que se imprime en el PDF (`pdfGenerator` prefiere el token de la ficha → carné impreso y QR del portal son idénticos). El portal del estudiante **muestra** ese token; ya no firma nada en su dispositivo.
+3. **Login offline sin secret institucional (`loginKey`).** `loginKey = HMAC(qrSecret, "loginkey:v1:"+código)` y `verifier = HMAC(loginKey, clave)`. La loginKey viaja **solo en la propia ficha** del estudiante: con ella su portal verifica **su** clave offline, pero no puede verificar ni falsificar la de ningún compañero. Las terminales (que sí tienen el qrSecret para verificar escaneos) derivan cualquier loginKey al vuelo. Bonus: el par es autocontenido → el login del estudiante **sigue funcionando tras una rotación del secret incluso antes del re-push de Rectoría**.
+
+**Defensa en profundidad:** el cliente además rechaza instalar `qrSecret` si la sesión local es de estudiante (protege mientras el Worker nuevo no esté desplegado).
+
+**Límite honesto que queda (documentado, no oculto):** con HMAC simétrico, un DOCENTE/terminal que verifica también podría firmar (verificar y firmar usan la misma llave). Eso es confianza de personal del colegio, no de estudiantes. La solución definitiva a ese residuo es **firma asimétrica Ed25519** (Rectoría firma con la llave privada; absolutamente todos —incluidos docentes— solo verifican con la pública; nadie más puede firmar nada). Queda como roadmap recomendado, no emprendido en esta ronda.
+
+**Validación:** qa-r58 **51✓** (§D reescrita + §I nueva de scopeo, 9 checks) · R43 64✓ · R46 40✓ · R47 18✓ · `tsc` cliente+Worker 0 · build OK.

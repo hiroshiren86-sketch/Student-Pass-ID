@@ -114,23 +114,38 @@ await section('D — F-23: tempPasswordVerifier en el egreso + verifyStudentCred
   const secret = settings.qrSecret;
   const student = { code: '7000000007', documentId: '7000000007', firstName: 'Clara', lastName: 'Verificada', grade: '11°1', section: '1', active: true, createdAt: new Date().toISOString(), tempPassword: 'CLAVE-IMPRESA-2026' };
 
-  // 1) El push ya no lleva la clave en claro: sanitizeStudentsForSync la sustituye.
+  // 1) El push ya no lleva la clave en claro: sanitizeStudentsForSync la sustituye
+  //    por el par (loginKey, verifier) y adjunta el carné pre-firmado (Ronda 59).
   const { clean } = await (CloudflareSyncService as any).sanitizeStudentsForSync([student]);
   const sent = clean[0];
   check('D1 el push NO lleva tempPassword en claro', sent.tempPassword === undefined);
-  check('D2 el push lleva tempPasswordVerifier (HMAC de la clave)', typeof sent.tempPasswordVerifier === 'string' && /^[0-9a-f]{32}$/.test(sent.tempPasswordVerifier));
-  // 2) verifyStudentCredential acepta la clave original contra el verificador (ficha sin claro local).
-  const v1 = await svc.verifyStudentCredential({ code: student.code, tempPasswordVerifier: sent.tempPasswordVerifier }, 'CLAVE-IMPRESA-2026');
-  check('D3 terminal sin clave en claro verifica la clave correcta vía verificador', v1.ok === true);
-  const v2 = await svc.verifyStudentCredential({ code: student.code, tempPasswordVerifier: sent.tempPasswordVerifier }, 'otra-clave');
+  check('D2 el push lleva tempPasswordVerifier (HMAC de la loginKey)', typeof sent.tempPasswordVerifier === 'string' && /^[0-9a-f]{32}$/.test(sent.tempPasswordVerifier));
+  check('D2b el push lleva la loginKey DERIVADA del estudiante (verificación sin qrSecret)', typeof sent.loginKey === 'string' && /^[0-9a-f]{32}$/.test(sent.loginKey));
+  check('D2c el push lleva el carné PRE-FIRMADO (signedCardToken IEDSJ:v1)', typeof sent.signedCardToken === 'string' && sent.signedCardToken.startsWith('IEDSJ:v1:'));
+  // El verificador es HMAC(loginKey, clave) — comprobación directa de la fórmula R59.
+  const manualVerifier = await crypto.generateHmacSignature('CLAVE-IMPRESA-2026', sent.loginKey);
+  check('D2d fórmula R59: verifier = HMAC(loginKey, clave)', manualVerifier === sent.tempPasswordVerifier);
+  // 2) Portal del estudiante SIN qrSecret: verifica su clave con la loginKey de SU ficha.
+  const v1 = await svc.verifyStudentCredential({ code: student.code, tempPasswordVerifier: sent.tempPasswordVerifier, loginKey: sent.loginKey }, 'CLAVE-IMPRESA-2026');
+  check('D3 dispositivo de estudiante (sin qrSecret) verifica su clave vía loginKey de su ficha', v1.ok === true);
+  const v2 = await svc.verifyStudentCredential({ code: student.code, tempPasswordVerifier: sent.tempPasswordVerifier, loginKey: sent.loginKey }, 'otra-clave');
   check('D4 clave incorrecta → rechazo (mismatch)', v2.ok === false && v2.reason === 'mismatch');
+  // 2b) Terminal CON qrSecret: deriva la loginKey al vuelo aunque la ficha no la traiga.
+  const v1b = await svc.verifyStudentCredential({ code: student.code, tempPasswordVerifier: sent.tempPasswordVerifier }, 'CLAVE-IMPRESA-2026');
+  check('D3b terminal con qrSecret deriva la loginKey (ficha sin loginKey)', v1b.ok === true);
   // 3) Clave en claro local sigue funcionando (dispositivo de Rectoría).
   const v3 = await svc.verifyStudentCredential({ code: student.code, tempPassword: 'CLAVE-IMPRESA-2026' }, 'CLAVE-IMPRESA-2026');
   check('D5 clave en claro local verifica (Rectoría)', v3.ok === true);
-  // 4) Rotación de secret: el verificador firmado con el secret VIEJO sigue verificando.
-  svc.saveSettings({ ...svc.getSettings(), qrSecret: 'nuevo-secret-institucional', legacyQrSecret: secret }, false);
-  const v4 = await svc.verifyStudentCredential({ code: student.code, tempPasswordVerifier: sent.tempPasswordVerifier }, 'CLAVE-IMPRESA-2026');
-  check('D6 tras rotar qrSecret, el verificador viejo sigue verificando (legacyQrSecret)', v4.ok === true);
+  // 4) Rotación de secret: el par (loginKey, verifier) es AUTOCONTENIDO → el login del
+  //    estudiante sigue funcionando incluso ANTES del re-push de Rectoría.
+  svc.saveSettings({ ...svc.getSettings(), qrSecret: 'nuevo-secret-institucional' }, false);
+  const v4 = await svc.verifyStudentCredential({ code: student.code, tempPasswordVerifier: sent.tempPasswordVerifier, loginKey: sent.loginKey }, 'CLAVE-IMPRESA-2026');
+  check('D6 tras rotar qrSecret, el par de la ficha sigue verificando (autocontenido)', v4.ok === true);
+  // 4b) Y una ficha NUEVA firmada con el secret nuevo verifica en terminal (derivación).
+  const { clean: clean2 } = await (CloudflareSyncService as any).sanitizeStudentsForSync([student]);
+  svc.saveSettings({ ...svc.getSettings(), legacyQrSecret: secret }, false);
+  const v4b = await svc.verifyStudentCredential({ code: student.code, tempPasswordVerifier: clean2[0].tempPasswordVerifier }, 'CLAVE-IMPRESA-2026');
+  check('D6b ficha re-firmada con secret nuevo + legacy en terminal → verifica (legacyQrSecret)', v4b.ok === true);
   // 5) Sin credencial alguna → rechazo accionable (adiós SJ-2026/colegio2026).
   const v5 = await svc.verifyStudentCredential({ code: student.code }, 'lo-que-sea');
   check('D7 ficha sin clave ni verificador → rechazo con guía (no_credential)', v5.ok === false && v5.reason === 'no_credential');
@@ -239,7 +254,7 @@ await section('G — F-2/F-22/F-24: controles de fuente (lo que el CSV/portal di
 
   // F-2: sin default secret + portal firma con el institucional.
   check('G1 crypto.ts SIN default de secret (el parámetro es obligatorio)', !/secret(:\s*string)?\s*=\s*['"]/.test(cryptoSrc));
-  check('G2 el portal firma el carné en vivo con settings.qrSecret', portal.includes('generateStudentQrPayload(activeStudent, settings.qrSecret)'));
+  check('G2 el portal prefiere el token PRE-FIRMADO de la ficha (R59)', portal.includes('activeStudent.signedCardToken') && portal.includes('generateStudentQrPayload(activeStudent, settings.qrSecret)'));
   // F-24: puerta trasera retirada.
   check('G3 SIN la palabra mágica de la puerta trasera en código del portal', !portal.includes('colegio2026'));
   check('G4 SIN el fallback SJ-2026 ni el código como contraseña', !portal.includes("'SJ-2026'") && !portal.includes('!== student.code'));
@@ -267,6 +282,46 @@ await section('H — F-12: opId SHA-256 del contenido (no de conteos)', async ()
   check('H1 mismo contenido → mismo opId (reintento idempotente)', op1 === op2);
   check('H2 mismos CONTEOS pero contenido distinto → opId DISTINTO (fin de las colisiones FNV-1a)', op1 !== op3, `${op1} vs ${op3}`);
   check('H3 opId con forma op-<32 hex> (SHA-256 truncado)', /^op-[0-9a-f]{32}$/.test(op1));
+});
+
+// ═══════════════════ I. Ronda 59 — el secret NO viaja al estudiante (Worker) ═══════════════════
+await section('I — R59: filterSnapshotByRole — el qrSecret jamás baja al estudiante', () => {
+  const snapshot = {
+    settings: { schoolName: 'INAS', qrSecret: 'SECRETO-INSTITUCIONAL', legacyQrSecret: 'SECRETO-VIEJO', dailyStartTime: '06:30' },
+    students: [
+      { code: '111', grade: '10°1', documentId: 'D111', firstName: 'Yo', loginKey: 'lk111', tempPasswordVerifier: 'tv111', signedCardToken: 'IEDSJ:v1:111', photoUrl: 'x' },
+      { code: '222', grade: '10°1', documentId: 'D222', firstName: 'Compa', loginKey: 'lk222', tempPasswordVerifier: 'tv222', signedCardToken: 'IEDSJ:v1:222', photoUrl: 'y' },
+      { code: '333', grade: '11°2', documentId: 'D333', firstName: 'OtroGrado', loginKey: 'lk333', tempPasswordVerifier: 'tv333', signedCardToken: 'IEDSJ:v1:333' }
+    ],
+    records: [
+      { id: 'r1', studentCode: '111' }, { id: 'r2', studentCode: '222' }
+    ],
+    teachers: [{ id: 't1', password: 'p' }],
+    assignments: []
+  };
+  const studentAuthz = { role: 'ESTUDIANTE_ACUDIENTE', isAdmin: false, canWriteCatalog: false, linkedStudentCode: '111' } as any;
+  const scoped = authzMod.filterSnapshotByRole(snapshot, studentAuthz);
+
+  check('I1 settings del estudiante SIN qrSecret ni legacyQrSecret', scoped.settings.qrSecret === undefined && scoped.settings.legacyQrSecret === undefined);
+  check('I1b settings del estudiante conserva lo operativo (nombre, jornada)', scoped.settings.schoolName === 'INAS' && scoped.settings.dailyStartTime === '06:30');
+  const me = scoped.students.find((s: any) => s.code === '111');
+  const mate = scoped.students.find((s: any) => s.code === '222');
+  check('I2 la PROPIA ficha viaja INTACTA (signedCardToken + loginKey + verifier)', me.signedCardToken === 'IEDSJ:v1:111' && me.loginKey === 'lk111' && me.tempPasswordVerifier === 'tv111' && me.documentId === 'D111');
+  check('I3 el COMPAÑERO de grado llega SIN credenciales/token/documento', mate.loginKey === undefined && mate.tempPasswordVerifier === undefined && mate.signedCardToken === undefined && mate.documentId === undefined && mate.firstName === 'Compa');
+  check('I4 otros grados no llegan', !scoped.students.some((s: any) => s.code === '333'));
+  check('I5 registros SOLO del propio código', scoped.records.length === 1 && scoped.records[0].studentCode === '111');
+  check('I6 sin fichas de docentes', scoped.teachers.length === 0);
+
+  // DOCENTE: conserva el secret (verifica offline) pero fichas SIN credenciales.
+  const docAuthz = { role: 'DOCENTE', isAdmin: false, canWriteCatalog: false, linkedTeacherId: 't1' } as any;
+  const docScoped = authzMod.filterSnapshotByRole({ ...snapshot, teachers: [{ id: 't1', assignedGrades: ['10°1'] }] }, docAuthz);
+  check('I7 DOCENTE conserva qrSecret en settings (verificación offline de escaneos)', docScoped.settings.qrSecret === 'SECRETO-INSTITUCIONAL');
+  const docMate = docScoped.students.find((s: any) => s.code === '222');
+  check('I8 DOCENTE: fichas de estudiantes SIN loginKey/verifier (deriva del secret)', docMate.loginKey === undefined && docMate.tempPasswordVerifier === undefined);
+
+  // ADMIN/OPERATOR: sin cambios (terminal de escaneo completa).
+  const opScoped = authzMod.filterSnapshotByRole(snapshot, { role: 'OPERATOR', isAdmin: true, canWriteCatalog: false } as any);
+  check('I9 OPERATOR recibe el snapshot completo (terminal de escaneo)', opScoped.settings.qrSecret === 'SECRETO-INSTITUCIONAL' && opScoped.students.length === 3);
 });
 
 // ═══════════════════ Resumen ═══════════════════
