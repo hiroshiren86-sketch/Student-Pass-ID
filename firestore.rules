@@ -77,10 +77,16 @@ service cloud.firestore {
     }
 
     // ===== Configuración institucional (doc 'main'; sin secretos — Ronda 16) =====
-    // Cualquier sesión (incluida la anónima del terminal) puede leer/escribir:
-    // la sincronización de ajustes del terminal depende de esto (Ronda 18).
+    // Ronda 58 (F-4): ANTES cualquier sesión AUTENTICADA — incluida la ANÓNIMA que
+    // el propio terminal abre con ensureAnonymousAuth() y cuya Web API Key es
+    // pública por diseño — podía ESCRIBIR la configuración de TODA la institución:
+    // reemplazar cloudflareWorkerUrl de todos los dispositivos (el cliente manda
+    // Bearer <AUTH_TOKEN> a esa URL → redirección de credenciales) y envenenar
+    // jornada/plantilla/schoolCode. AHORA: lectura para sesiones autenticadas
+    // (los terminales hidratan ajustes al arrancar), escritura SOLO ADMIN.
     match /school_settings/{settingId} {
-      allow read, write: if isAuthenticated();
+      allow read: if isAuthenticated();
+      allow write: if isAdmin();
     }
 
     // ===== Datos operativos sensibles: solo Rectoría (ADMIN) =====
@@ -100,11 +106,14 @@ service cloud.firestore {
     }
 
     // ===== Registros de asistencia =====
-    // Escritura para cualquier sesión autenticada (los terminales/docentes registran
-    // en operación), lectura para sesiones autenticadas (portales).
+    // Ronda 58 (F-4): este espejo de Firestore NO tiene consumidor crítico (la
+    // autoridad de hechos es el Worker/D1; syncAttendanceRecord no tiene llamadores
+    // y el respaldo backupAllToFirestore corre bajo la sesión de Rectoría). Antes,
+    // cualquier sesión ANÓNIMA podía leer TODA la asistencia del colegio y escribir
+    // registros que luego el pull propagaba. Ahora: solo ADMIN.
     match /attendance_records/{recordId} {
-      allow read: if isAuthenticated();
-      allow write: if isAuthenticated();
+      allow read: if isAdmin();
+      allow write: if isAdmin();
     }
 
     // ===== TODO LO DEMÁS: DENEGADO (política de mínima superficie, Ronda 18) =====

@@ -112,14 +112,24 @@ export default function App() {
     return unsubscribe;
   }, []);
 
-  // Ronda 4 (F3): Cierre Automático de Jornada — evaluación perezosa e idempotente cada 60s.
+  // Ronda 4 (F3) + Ronda 58 (F-9): Cierre Automático de Jornada — evaluación perezosa
+  // e idempotente cada 60s, PERO SOLO en sesión de Rectoría (ADMIN). Antes corría en
+  // CUALQUIER dispositivo con la app abierta (docentes, portales de estudiantes):
+  // N dispositivos → N series de registros AUSENTE con IDs aleatorios que el merge
+  // de la nube SUMABA en vez de deduplicar (planillas infladas). Ahora hay UN solo
+  // escritor del cierre (el terminal de Rectoría) y además los registros de
+  // auto-cierre llevan ID determinista (rec-autoclose-<fecha>-<bloque>-<estudiante>),
+  // así que incluso un cierre concurrente converge en el merge por id.
   useEffect(() => {
     let running = false;
     const tick = async () => {
       if (running) return;
       running = true;
       try {
-        await AttendanceStorageService.maybeAutoCloseDay();
+        const session = AttendanceStorageService.getCurrentSession();
+        if (session?.role === 'ADMIN') {
+          await AttendanceStorageService.maybeAutoCloseDay();
+        }
       } catch (err) {
         console.error('Auto-cierre de jornada falló (reintentará):', err);
       } finally {

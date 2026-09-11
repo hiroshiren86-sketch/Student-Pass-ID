@@ -74,6 +74,12 @@ function timePlus(minutes: number): string {
   return `${String(Math.floor(total / 60) % 24).padStart(2, '0')}:${String(total % 60).padStart(2, '0')}`;
 }
 
+// Ronda 58 (F-1): esta suite ejercita el flujo del representante con códigos 1D
+// PLANOS (USB) → corre en modo legado explícito (requireSignedCards=false), igual
+// que un colegio que opera con lectores 1D. La política ACTIVADA se prueba en la
+// sección E de verify_ronda43.ts.
+svc.saveSettings({ ...svc.getSettings(), requireSignedCards: false }, false);
+
 const SECRET = svc.getSettings().qrSecret;
 const EXP = Date.parse(`${new Date().getFullYear()}-12-19T23:59:59`);
 

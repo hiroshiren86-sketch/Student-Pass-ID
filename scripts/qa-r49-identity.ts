@@ -19,9 +19,21 @@ const require = createRequire(import.meta.url);
 const projectId = 'gen-lang-client-0224520207';
 const dbId = 'ai-studio-sistemaderegistr-4ed2ba90-8017-4c3e-ad77-5e55392e495f';
 
-// Cargar config de Firebase (apiKey pública) y SA
+// Cargar config de Firebase (apiKey pública) y SA.
+// Ronda 58 (F-19): sin la SA (gitignored, vive SOLO en la máquina de QA), la suite
+// entra en modo SKIP EXPLÍCITO con exit 0 — antes MORÍA en un clone limpio y ningún
+// CI podía confiar en ella. El humano ve exactamente qué falta.
+// Ronda 58 (F-25): la contraseña de Rectoría ya no vive aquí — viene del entorno
+// (INAS_REC_EMAIL/INAS_REC_PASS o ~/.inas-qa.env).
+let sa: any = null;
+try {
+  sa = JSON.parse(fs.readFileSync('.firebase-sa.json', 'utf8'));
+} catch {
+  console.log('SKIP: falta .firebase-sa.json (cuenta de servicio, gitignored). Esta suite requiere credenciales reales de QA; ejecútala en la máquina que las tenga.');
+  console.log('  RONDA 49 IDENTIDAD — SKIP (0 ejecutados, 0 fallos)');
+  process.exit(0);
+}
 const appConfig = JSON.parse(fs.readFileSync('firebase-applet-config.json', 'utf8'));
-const sa = JSON.parse(fs.readFileSync('.firebase-sa.json', 'utf8'));
 
 let passed = 0, failed = 0;
 const failures: string[] = [];
@@ -62,7 +74,14 @@ async function login(email: string, pass: string): Promise<string> {
 // ==============================================================================
 async function sectionA() {
   console.log('\n━━━ A — Verificación del ID token (firma RS256) + rol del perfil ━━━');
-  const token = await login('rectoria@inas.edu.co', 'INAS-Rectoria#2026');
+  const recEmail = process.env.INAS_REC_EMAIL || 'rectoria@inas.edu.co';
+  const recPass = process.env.INAS_REC_PASS;
+  if (!recPass) {
+    console.log('SKIP: falta INAS_REC_PASS (contraseña de Rectoría para QA). Exporta la variable o crea ~/.inas-qa.env (chmod 600, FUERA del repo).');
+    console.log('  RONDA 49 IDENTIDAD — SKIP (0 ejecutados, 0 fallos)');
+    process.exit(0);
+  }
+  const token = await login(recEmail, recPass);
 
   check('A0 se obtuvo un ID token real de Rectoría', !!token);
   const identity = await verifyFirebaseIdentity(mkReq(token), env);

@@ -148,7 +148,13 @@ export interface Student {
   photoUrl?: string;      // Fotografía opcional tamaño carné (Base64 / DataUrl)
   active: boolean;        // Estado activo
   createdAt: string;      // Fecha ISO
-  tempPassword?: string;  // Contraseña inicial
+  tempPassword?: string;  // Contraseña inicial (SOLO en el dispositivo de Rectoría; jamás sube a la nube desde R58)
+  // Ronda 58 (F-23): verificador HMAC de la clave inicial para terminales que NO
+  // tienen la clave en claro. Viaja en el snapshot en LUGAR de tempPassword:
+  // HMAC-SHA256(clave institucional (qrSecret), `${code}|${password}`) — 32 hex.
+  // No es un KDF (verificarlo requiere el qrSecret, que viaja en el mismo snapshot
+  // por diseño del propietario): la verificación FUERTE sigue siendo Firebase Auth.
+  tempPasswordVerifier?: string;
   hasCustomPassword?: boolean; // Indica si el estudiante ya personalizó su contraseña
   isRepresentative?: boolean; // Subrol: Representante Titular
   isSubstituteRepresentative?: boolean; // Subrol: Representante Suplente
@@ -322,6 +328,16 @@ export interface SchoolSettings {
   trimMinutes: number; // 0, 5, 10, 15, custom
   tardyGracePeriodMinutes: number; // e.g. 10 minutos
   qrSecret: string;
+  // Ronda 58 (F-1): política de verificación criptográfica del carné en los puntos
+  // de escaneo. true (default) = un escaneo SIN firma válida (código 1D plano,
+  // tecleo manual, QR forjado o carné vencido) se RECHAZA con mensaje accionable.
+  // false = modo legado (los carnés 1D planos y el tecleo se aceptan, con
+  // verifiedHmac:false honesto en planilla/CSV). Palanca visible en Ajustes.
+  requireSignedCards?: boolean;
+  // Ronda 58 (F-23): secret institucional ANTERIOR. Cuando Rectoría rota qrSecret,
+  // los tempPasswordVerifier firmados con el secret viejo siguen verificando contra
+  // este (ventana de transición). Lo mantiene applyCloudSettingsToDevice.
+  legacyQrSecret?: string;
   sessionSecret: string;
   soundFeedback: boolean;
   autoFocusUsb: boolean;

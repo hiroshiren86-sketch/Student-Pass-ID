@@ -8,7 +8,20 @@
 
 import { handleExcusesRoutes } from './excuses';
 import { handlePushRoutes } from './push';
-import { SignJWT, jwtVerify, importPKCS8, importX509 } from 'jose';
+// Ronda 58: autorización y CORS extraídos a módulos compartidos (sin ciclos).
+// authz.ts: la primitiva de identidad+rol que ANTES solo usaban las rutas de sync
+//           (F-3: excusas y push también la usan ahora — nada de roles autodeclarados).
+// cors.ts : allowlist de orígenes (F-17: se retiró el Allow-Origin '*').
+import {
+  timingSafeEqual, clientIp, resolveTokenScope, verifyFirebaseIdentity, resolveAuthz, filterSnapshotByRole,
+  type Authz, type IdentityRole, type TokenRole, type FbProfile, type FbIdentity
+} from './authz';
+import { corsBaseHeaders, corsPreflightResponse, withCorsHeaders } from './cors';
+
+// Re-export de compatibilidad: las suites QA (qa-r49-identity.ts) y herramientas
+// importan estas primitivas desde './index'.
+export { timingSafeEqual, clientIp, resolveTokenScope, verifyFirebaseIdentity, resolveAuthz, filterSnapshotByRole };
+export type { Authz, IdentityRole, TokenRole, FbProfile, FbIdentity };
 
 // Tipos autocontenidos para Cloudflare Worker Runtime
 export interface D1PreparedStatement {
@@ -95,13 +108,16 @@ export interface Env {
 // este Allow-Headers no los declaraba → el preflight OPTIONS los rechazaba y TODA
 // llamada del navegador al Worker caía en "Failed to fetch" (Pull/Push, ficha del
 // docente en teléfono nuevo). Se añaden los tres; nada más cambia.
-const corsHeaders = {
-  'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Methods': 'GET, POST, PUT, PATCH, DELETE, OPTIONS',
-  'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-School-Code, X-Requested-With, X-Device-Id, X-Device-Name, X-Firebase-Id-Token',
-  'Access-Control-Max-Age': '86400',
-};
-export { corsHeaders }; // Ronda 24: compartido con push.ts (sus rutas Cross-Origin)
+// Ronda 58 (F-17): el Allow-Origin '*' fue RETIRADO. Los headers base (métodos,
+// allow-headers, max-age) viven en ./cors.ts; el origen permitido se resuelve POR
+// REQUEST contra una allowlist (producción Pages + previews + localhost + dominio
+// del colegio en ALLOWED_ORIGINS) en el wrapper del fetch handler. Las respuestas
+// de navegadores con origen no permitido salen SIN Access-Control-Allow-Origin
+// (el navegador las bloquea) y los preflight de esos orígenes reciben 403.
+// Compat: push.ts importa `corsHeaders` desde aquí — se mantiene el export como
+// alias de los headers base (sin origen).
+const corsHeaders = { ...corsBaseHeaders };
+export { corsHeaders };
 
 function jsonResponse(data: any, status = 200) {
   return new Response(JSON.stringify(data), {
@@ -117,49 +133,9 @@ function errorResponse(message: string, status = 400, details?: any) {
   return jsonResponse({ success: false, error: message, details }, status);
 }
 
-// Ronda 18: comparación en tiempo constante (OWASP) — evita ataques de timing
-// sobre el token; un string === corto-circuita en el primer carácter distinto.
-function timingSafeEqual(a: string, b: string): boolean {
-  const len = Math.max(a.length, b.length);
-  let mismatch = a.length === b.length ? 0 : 1;
-  for (let i = 0; i < len; i++) {
-    mismatch |= (a.charCodeAt(i) || 0) ^ (b.charCodeAt(i) || 0);
-  }
-  return mismatch === 0;
-}
-
-// Verificación de token Bearer opcional o institucional
-function verifyAuth(request: Request, env: Env): boolean {
-  if (!env.AUTH_TOKEN && !env.OPERATOR_TOKEN) return true; // Sin tokens → acceso abierto (solo desarrollo)
-  const authHeader = request.headers.get('Authorization');
-  if (!authHeader) return false;
-  const token = authHeader.replace(/^Bearer\s+/i, '').trim();
-  // ADMIN si coincide con AUTH_TOKEN; OPERADOR si coincide con OPERATOR_TOKEN; si el
-  // token coincide con ambos (iguales) gana ADMIN.
-  if (env.AUTH_TOKEN && timingSafeEqual(token, env.AUTH_TOKEN.trim())) return true;
-  if (env.OPERATOR_TOKEN && timingSafeEqual(token, env.OPERATOR_TOKEN.trim())) return true;
-  return false;
-}
-
-// ==============================================================================
-// Ronda 47 (Fase 2 — Flanco 1): resolución del ALCANCE del token. Devuelve el rol
-// efectivo del terminal para una petición: 'ADMIN' | 'OPERATOR' | null (token inválido).
-// Regla de retrocompatibilidad: si no hay NINGÚN token configurado (modo abierto), un
-// terminal equivale a ADMIN (hoy todos lo son y nada rompe). Si hay AUTH_TOKEN pero la
-// petición viene con OPERATOR_TOKEN → OPERATOR (limitado a hechos). Si viene con
-// AUTH_TOKEN → ADMIN.
-// ==============================================================================
-type TokenRole = 'ADMIN' | 'OPERATOR';
-
-export function resolveTokenScope(request: Request, env: Env): TokenRole | null {
-  const authHeader = request.headers.get('Authorization');
-  if (!authHeader) return (env.AUTH_TOKEN || env.OPERATOR_TOKEN) ? null : 'ADMIN';
-  const token = authHeader.replace(/^Bearer\s+/i, '').trim();
-  if (!(env.AUTH_TOKEN || env.OPERATOR_TOKEN)) return 'ADMIN'; // modo abierto (desarrollo)
-  if (env.AUTH_TOKEN && timingSafeEqual(token, env.AUTH_TOKEN.trim())) return 'ADMIN';
-  if (env.OPERATOR_TOKEN && timingSafeEqual(token, env.OPERATOR_TOKEN.trim())) return 'OPERATOR';
-  return null;
-}
+// Ronda 58: timingSafeEqual / verifyAuth / resolveTokenScope / verifyFirebaseIdentity /
+// resolveAuthz / filterSnapshotByRole viven en authz.ts (re-exportados arriba).
+// verifyAuth fue ELIMINADO: no tenía llamadores (el router usa resolveAuthz).
 
 // ------------------------------------------------------------------------------
 // Flanco 2 — identidad de dispositivo: origen determinista y estable del terminal.
@@ -331,6 +307,104 @@ export function stampServerVersion(records: any[]): any[] {
 }
 
 // ==============================================================================
+// Ronda 58 (F-6) — ESCRITURA DEL SNAPSHOT CON CAS (compare-and-swap).
+//
+// ANTES: el camino de operador hacía SELECT → merge en memoria → INSERT OR REPLACE,
+// sin exclusión mutua. Dos docentes que pushean en la misma ventana se pisaban la
+// fusión: el último en escribir ELIMINABA del snapshot las asistencias del primero
+// (pérdida silenciosa de datos; D1 no ofrece transacciones read-then-write por HTTP).
+//
+// AHORA: la escritura se hace con guard de versión sobre `updated_at` (precisión
+// de milisegundos) y REINTENTO con re-lectura + re-fusión (hasta 3 intentos). Si
+// otro push gana la carrera, este la pierde, RE-LEE el snapshot ya actualizado y
+// fusiona sus registros encima — nadie pierde datos. Si los 3 intentos fallan
+// (contención extrema), se degrada honestamente al INSERT final (comportamiento
+// previo) y se registra en el log del Worker.
+// ==============================================================================
+const SNAPSHOT_MAX_CAS_ATTEMPTS = 3;
+
+export async function casWriteSnapshot(
+  env: Env,
+  schoolCode: string,
+  mutate: (prev: any, row: { students_count?: number; school_name?: string | null } | null) => {
+    data: any;
+    studentsCount: number;
+    recordsCount: number;
+    schoolName: string;
+  }
+): Promise<boolean> {
+  const snapshotId = `snapshot_${schoolCode}`;
+  for (let attempt = 0; attempt < SNAPSHOT_MAX_CAS_ATTEMPTS; attempt++) {
+    const row = await env.DB.prepare(
+      `SELECT data_json, students_count, school_name, updated_at FROM sync_snapshots WHERE id = ?`
+    ).bind(snapshotId).first<{ data_json: string; students_count: number; school_name: string | null; updated_at: string }>();
+
+    const prev = row?.data_json ? safeJsonParse(row.data_json) : null;
+    const out = mutate(prev ?? null, row ?? null);
+
+    if (!row) {
+      // Primera escritura: INSERT OR IGNORE gana la carrera de creación; si otro
+      // la ganó, se reintenta como UPDATE (re-leyendo lo que el ganador escribió).
+      const r = await env.DB.prepare(
+        `INSERT OR IGNORE INTO sync_snapshots (id, school_code, school_name, data_json, students_count, records_count, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ','now'))`
+      ).bind(snapshotId, schoolCode, out.schoolName, JSON.stringify(out.data), out.studentsCount, out.recordsCount).run();
+      const changes = (r as any)?.meta?.changes;
+      if (changes === undefined || changes > 0) return true;
+      continue; // alguien creó el snapshot entre el SELECT y el INSERT → reintentar como update
+    }
+
+    const r = await env.DB.prepare(
+      `UPDATE sync_snapshots SET school_name = ?, data_json = ?, students_count = ?, records_count = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+       WHERE id = ? AND updated_at = ?`
+    ).bind(out.schoolName, JSON.stringify(out.data), out.studentsCount, out.recordsCount, snapshotId, row.updated_at).run();
+    const changes = (r as any)?.meta?.changes;
+    if (changes === undefined || changes > 0) return true;
+    // changes === 0 → otro push escribió entre nuestro SELECT y nuestro UPDATE → reintentar.
+  }
+  console.warn(`[sync/push] CAS: ${SNAPSHOT_MAX_CAS_ATTEMPTS} intentos con contención; última escritura gana (degradación honesta, se registra).`);
+  return false;
+}
+
+function safeJsonParse(s: string): any {
+  try { return JSON.parse(s); } catch { return null; }
+}
+
+// ==============================================================================
+// Ronda 58 (F-23) — SANITIZACIÓN DE CREDENCIALES EN EL SNAPSHOT (defensa en
+// profundidad del lado del servidor).
+//
+// El cliente nuevo ya envía `tempPasswordVerifier` (HMAC) en vez de la clave en
+// claro (ver cloudflareSync.sanitizeStudentsForSync). Este strip del Worker
+// protege contra terminales VIEJOS que todavía suban `tempPassword` /
+// `password` / `passwordHash` en el payload: la clave en claro JAMÁS debe
+// quedar persistida en el snapshot de D1/KV, donde cualquier poseedor de un
+// token de operador puede leerla (y con ella entrar al portal de cualquier
+// estudiante — hallazgo F-23 del informe de auditoría 2026-09).
+// ==============================================================================
+export function stripSnapshotCredentials(data: any): any {
+  if (!data || typeof data !== 'object') return data;
+  const out: any = { ...data };
+  if (Array.isArray(out.students)) {
+    out.students = out.students.map((s: any) => {
+      if (!s || typeof s !== 'object') return s;
+      const { tempPassword: _tp, password: _pw, passwordHash: _ph, ...rest } = s;
+      void _tp; void _pw; void _ph;
+      return rest;
+    });
+  }
+  if (Array.isArray(out.teachers)) {
+    out.teachers = out.teachers.map((t: any) => {
+      if (!t || typeof t !== 'object') return t;
+      const { tempPassword: _tp, password: _pw, passwordHash: _ph, ...rest } = t;
+      void _tp; void _pw; void _ph;
+      return rest;
+    });
+  }
+  return out;
+}
+
+// ==============================================================================
 // Ronda 28 — PURGA DE LA NUBE con rate limit (defensa en profundidad, patrón
 // H-2 de push.ts): máx. 3 purgas por hora por IP. El Map vive mientras viva el
 // isolate — suficiente contra abuso casual; la barrera real es el AUTH_TOKEN
@@ -411,226 +485,8 @@ async function injectExcuseLinks(env: Env, data: any): Promise<void> {
   }
 }
 
-function clientIp(request: Request): string {
-  return (
-    request.headers.get('CF-Connecting-IP') ||
-    request.headers.get('X-Forwarded-For')?.split(',')[0].trim() ||
-    'unknown'
-  );
-}
-
-// ==============================================================================
-// Ronda 49 (Identidad-nube, Opción B) — ACCESO A LA NUBE POR IDENTIDAD Y ROL.
-//
-// El cliente autenticado (Rectoría / DOCENTE con cuenta Firebase) envía su ID token
-// de Firebase en el header `X-Firebase-Id-Token`. El Worker:
-//   1. VERIFICA el ID token: firma RS256 contra las llaves públicas de Google
-//      (se descargan de securetoken@system.gserviceaccount.com y se cachean).
-//   2. LEE el ROL del perfil users/{uid} en Firestore con la cuenta de servicio
-//      (la "fuente de verdad" del rol — inmutable por reglas; ver firestore.rules).
-//   3. AUTORIZA por rol (ADMIN / DOCENTE / ESTUDIANTE_ACUDIENTE) en cada endpoint.
-//
-// Esto NO reemplaza el token de dispositivo (AUTH_TOKEN / OPERATOR_TOKEN): es una
-// capa ADITIVA. La identidad, cuando está presente y es válida, GANA; si no hay ID
-// token, el Worker usa el scope del token de dispositivo (retrocompat 100%).
-//
-// NOTA de privacidad (Ley 1581): el rol del perfil es un dato mínimo, leído con
-// cuenta de servicio SOLO en el edge, nunca expuesto al cliente. Nunca se filtra
-// asistencia ajena: cada rol ve SOLO lo que le corresponde (ver filterSnapshotByRole).
-// ==============================================================================
-
-// Firebase issuer / audience del proyecto (instalaciones distintas = proyecto distinto).
-function firebaseIssuer(env: Env): string {
-  const proj = env.FIREBASE_PROJECT_ID || 'gen-lang-client-0224520207';
-  return `https://securetoken.google.com/${proj}`;
-}
-function firebaseAudience(env: Env): string {
-  return env.FIREBASE_PROJECT_ID || 'gen-lang-client-0224520207';
-}
-
-// Cache de certificados públicos de Google (rotan ~cada 24h; se cachean 6h).
-let fbCertsCache: { certs: Record<string, string>; fetchedAt: number } | null = null;
-async function getFbCerts(env: Env): Promise<Record<string, string>> {
-  if (fbCertsCache && Date.now() - fbCertsCache.fetchedAt < 6 * 60 * 60 * 1000) {
-    return fbCertsCache.certs;
-  }
-  const res = await fetch('https://www.googleapis.com/robot/v1/metadata/x509/securetoken@system.gserviceaccount.com');
-  if (!res.ok) throw new Error('No se pudo obtener los certificados de Firebase');
-  const certs = await res.json() as Record<string, string>;
-  fbCertsCache = { certs, fetchedAt: Date.now() };
-  return certs;
-}
-
-// Cache de CryptoKeys por kid (evita re-importar X.509 en cada verificación).
-let fbKeyCache: Record<string, any> = {};
-// Cache del perfil users/{uid} por ~60s (evita golpear Firestore en cada auto-sync).
-const fbProfileCache = new Map<string, { profile: FbProfile; fetchedAt: number }>();
-
-// Cache del access_token de la cuenta de servicio (vence ~1h; se cachea 50min).
-let saCache: { token: string; expiresAt: number } | null = null;
-async function getSaAccessToken(env: Env): Promise<string> {
-  if (saCache && Date.now() < saCache.expiresAt) return saCache.token;
-  const email = env.FIREBASE_SA_CLIENT_EMAIL;
-  const pk = env.FIREBASE_SA_PRIVATE_KEY;
-  if (!email || !pk) throw new Error('Firebase SA no configurada (FIREBASE_SA_CLIENT_EMAIL / FIREBASE_SA_PRIVATE_KEY).');
-  const now = Math.floor(Date.now() / 1000);
-  const key = await importPKCS8(pk.replace(/\\n/g, '\n'), 'RS256');
-  // El flujo "service account" de Google exige el claim `scope` (espacios) en el JWT:
-  // cloud-platform para Firestore y firebase para leer users/{uid}.
-  const assertion = await new SignJWT({ scope: 'https://www.googleapis.com/auth/cloud-platform https://www.googleapis.com/auth/firebase' })
-    .setProtectedHeader({ alg: 'RS256', typ: 'JWT' })
-    .setSubject(email)
-    .setIssuer(email)
-    .setAudience('https://oauth2.googleapis.com/token')
-    .setIssuedAt(now)
-    .setExpirationTime(now + 3600)
-    .sign(key);
-  const res = await fetch('https://oauth2.googleapis.com/token', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    body: new URLSearchParams({
-      grant_type: 'urn:ietf:params:oauth:grant-type:jwt-bearer',
-      assertion
-    }).toString()
-  });
-  const json = await res.json() as any;
-  if (!json.access_token) throw new Error('No se pudo obtener access_token de la SA: ' + (json.error_description || json.error || res.status));
-  saCache = { token: json.access_token, expiresAt: Date.now() + 50 * 60 * 1000 };
-  return json.access_token;
-}
-
-interface FbProfile { role?: string; linkedTeacherId?: string; linkedStudentCode?: string }
-interface FbIdentity { uid: string; profile: FbProfile }
-
-// Lee el perfil users/{uid} de Firestore vía REST con la SA (la fuente del rol).
-async function readFbUserProfile(env: Env, uid: string): Promise<FbProfile> {
-  const proj = env.FIREBASE_PROJECT_ID || 'gen-lang-client-0224520207';
-  const db = encodeURIComponent(env.FIREBASE_DB_ID || '(default)');
-  const token = await getSaAccessToken(env);
-  const res = await fetch(
-    `https://firestore.googleapis.com/v1/projects/${proj}/databases/${db}/documents/users/${encodeURIComponent(uid)}`,
-    { headers: { Authorization: `Bearer ${token}` } }
-  );
-  if (res.status === 404) return {}; // usuario sin perfil
-  if (!res.ok) throw new Error('Firestore read falló: ' + res.status);
-  const doc = await res.json() as any;
-  const f = doc.fields || {};
-  const sv = (v: any) => v?.stringValue;
-  return {
-    role: f.role ? sv(f.role) : undefined,
-    linkedTeacherId: f.linkedTeacherId ? sv(f.linkedTeacherId) : undefined,
-    linkedStudentCode: f.linkedStudentCode ? sv(f.linkedStudentCode) : undefined
-  };
-}
-
-// Verifica el ID token y devuelve la identidad (uid + rol del perfil). null si no hay.
-export async function verifyFirebaseIdentity(request: Request, env: Env): Promise<FbIdentity | null> {
-  const token = request.headers.get('X-Firebase-Id-Token');
-  if (!token) return null;
-  try {
-    const certs = await getFbCerts(env);
-    const header = JSON.parse(Buffer.from(token.split('.')[0], 'base64url').toString('utf8'));
-    const pem = certs[header.kid];
-    if (!pem) throw new Error('No hay certificado para el kid ' + header.kid);
-    let key = fbKeyCache[header.kid];
-    if (!key) {
-      key = await importX509(pem, 'RS256');
-      fbKeyCache[header.kid] = key;
-    }
-    const { payload } = await jwtVerify(token, key, {
-      issuer: firebaseIssuer(env),
-      audience: firebaseAudience(env)
-    });
-    const uid = String(payload.sub);
-    const cachedProfile = fbProfileCache.get(uid);
-    if (cachedProfile && Date.now() - cachedProfile.fetchedAt < 60 * 1000) {
-      return { uid, profile: cachedProfile.profile };
-    }
-    const profile = await readFbUserProfile(env, uid);
-    fbProfileCache.set(uid, { profile, fetchedAt: Date.now() });
-    return { uid, profile };
-  } catch (e: any) {
-    console.warn('[identity] ID token no verificado:', e?.message || e);
-    return null;
-  }
-}
-
-type IdentityRole = 'ADMIN' | 'DOCENTE' | 'ESTUDIANTE_ACUDIENTE';
-
-// Autorización resuelta: puede venir de la IDENTIDAD (Firebase, si hay token válido) o,
-// en su defecto, del scope del token de dispositivo (retrocompat). El rol resultante es
-// el que arbitra permisos de lectura/escritura por endpoint.
-export interface Authz {
-  source: 'identity' | 'token';
-  role: string;                       // 'ADMIN' | 'OPERATOR' | 'DOCENTE' | 'ESTUDIANTE_ACUDIENTE'
-  uid?: string;
-  linkedTeacherId?: string;
-  linkedStudentCode?: string;
-  // true si puede escribir el CATÁLOGO (estudiantes/docentes/horarios/slots).
-  canWriteCatalog: boolean;
-}
-async function resolveAuthz(request: Request, env: Env): Promise<Authz | null> {
-  const identity = await verifyFirebaseIdentity(request, env);
-  if (identity && identity.profile.role) {
-    const r = identity.profile.role as IdentityRole;
-    return {
-      source: 'identity',
-      role: r,
-      uid: identity.uid,
-      linkedTeacherId: identity.profile.linkedTeacherId,
-      linkedStudentCode: identity.profile.linkedStudentCode,
-      canWriteCatalog: r === 'ADMIN'
-    };
-  }
-  // Sin identidad (o verificación fallida) → scope del token de dispositivo.
-  // resolveTokenScope devuelve 'ADMIN' solo en modo abierto (sin tokens configurados);
-  // devuelve null cuando hay tokens pero ninguno matchea (credencial inválida).
-  const tokenRole = resolveTokenScope(request, env);
-  if (tokenRole === null) return null; // no autenticado (ni identidad ni device token válido)
-  return {
-    source: 'token',
-    role: tokenRole,
-    canWriteCatalog: tokenRole === 'ADMIN'
-  };
-}
-
-// Filtra el snapshot según el rol, para que cada identidad vea SOLO lo que le corresponde
-// (mínimo privilegio / Ley 1581). ADMIN (y token-admin) devuelve todo intacto.
-export function filterSnapshotByRole(data: any, authz: Authz): any {
-  if (!data || authz.role === 'ADMIN' || authz.role === 'OPERATOR') return data;
-
-  if (authz.role === 'DOCENTE') {
-    // El docente ve SOLO sus cursos asignados (assignedGrades de SU ficha, en el snapshot).
-    const teachers = Array.isArray(data.teachers) ? data.teachers : [];
-    const self = teachers.find((t: any) => String(t.id) === String(authz.linkedTeacherId));
-    const grades = new Set<string>(Array.isArray(self?.assignedGrades) ? self.assignedGrades : []);
-    return {
-      ...data,
-      students: Array.isArray(data.students) ? data.students.filter((s: any) => grades.has(s.grade)) : [],
-      assignments: Array.isArray(data.assignments) ? data.assignments.filter((a: any) => grades.has(a.grade)) : [],
-      records: Array.isArray(data.records) ? data.records.filter((r: any) => grades.has(r.studentGrade || r.grade)) : [],
-      teachers: self ? [self] : [],
-      scopedFor: { role: 'DOCENTE', grades: Array.from(grades), teacherId: authz.linkedTeacherId }
-    };
-  }
-
-  if (authz.role === 'ESTUDIANTE_ACUDIENTE') {
-    const students = Array.isArray(data.students) ? data.students : [];
-    const self = students.find((s: any) => String(s.code) === String(authz.linkedStudentCode));
-    const grade = self?.grade;
-    const codes = new Set<string>(String(authz.linkedStudentCode) ? [String(authz.linkedStudentCode)] : []);
-    return {
-      ...data,
-      students: Array.isArray(data.students) ? data.students.filter((s: any) => (grade && s.grade === grade)) : [],
-      assignments: Array.isArray(data.assignments) ? data.assignments.filter((a: any) => grade && a.grade === grade) : [],
-      records: Array.isArray(data.records) ? data.records.filter((r: any) => codes.has(r.studentCode)) : [],
-      teachers: [],
-      scopedFor: { role: 'ESTUDIANTE_ACUDIENTE', grade, studentCode: authz.linkedStudentCode }
-    };
-  }
-
-  return data;
-}
+// Ronda 58: clientIp / verifyFirebaseIdentity / resolveAuthz / filterSnapshotByRole
+// viven en ./authz.ts (importados y re-exportados arriba).
 
 // ==============================================================================
 // Ronda 54 — PULL INCREMENTAL (`since`) + PULL DE HECHOS (`scope=facts`).
@@ -670,19 +526,33 @@ export function applyTombstones(data: any): any {
   if (!data) return data;
   const tombstones: any[] = Array.isArray(data.tombstones) ? data.tombstones : [];
   if (tombstones.length === 0) return data;
-  const studentIds = new Set<string>();
-  const teacherIds = new Set<string>();
+  // Ronda 58 (F-8): mapa id → deletedAt. El filtro de entidades compara FECHAS:
+  // una entidad cuyo updatedAt/createdAt es POSTERIOR al tombstone fue RE-MATRICULADA
+  // (revivida) y NO se filtra. Las entidades sin fecha tratan el tombstone como
+  // vigente (comportamiento previo — mejor perder la entidad que resucitar un borrado).
+  const tombDeletedAt = new Map<string, number>();
   for (const t of tombstones) {
     if (!t || !t.id) continue;
-    if (t.type === 'teacher') teacherIds.add(String(t.id));
-    else studentIds.add(String(t.id));
+    const key = t.type === 'teacher' ? `t:${String(t.id)}` : `s:${String(t.id)}`;
+    const ts = Date.parse(String(t.deletedAt || ''));
+    const prev = tombDeletedAt.get(key) ?? -Infinity;
+    tombDeletedAt.set(key, Number.isNaN(ts) ? prev : Math.max(prev, ts));
   }
+  const entityNewerThanTombstone = (id: string, type: 'student' | 'teacher', entity: any): boolean => {
+    const deletedAt = tombDeletedAt.get(type === 'teacher' ? `t:${String(id)}` : `s:${String(id)}`);
+    if (deletedAt === undefined) return false; // no hay tombstone → no aplica el filtro
+    const entDate = Date.parse(String(entity?.updatedAt || entity?.createdAt || ''));
+    if (Number.isNaN(entDate) || !entDate) return false; // sin fecha: el tombstone manda
+    return entDate > deletedAt; // la entidad es MÁS NUEVA que su tombstone → revive
+  };
+  const studentIds = new Set<string>(Array.from(tombDeletedAt.keys()).filter(k => k.startsWith('s:')).map(k => k.slice(2)));
+  const teacherIds = new Set<string>(Array.from(tombDeletedAt.keys()).filter(k => k.startsWith('t:')).map(k => k.slice(2)));
   const result: any = { ...data };
   if (Array.isArray(data.students) && studentIds.size > 0) {
-    result.students = data.students.filter((s: any) => s && !studentIds.has(String(s.code)));
+    result.students = data.students.filter((s: any) => s && !(studentIds.has(String(s.code)) && !entityNewerThanTombstone(s.code, 'student', s)));
   }
   if (Array.isArray(data.teachers) && teacherIds.size > 0) {
-    result.teachers = data.teachers.filter((t: any) => t && !teacherIds.has(String(t.id)));
+    result.teachers = data.teachers.filter((t: any) => t && !(teacherIds.has(String(t.id)) && !entityNewerThanTombstone(t.id, 'teacher', t)));
   }
   // Records: se conservan (agregado), pero se retira el identificador personal si la entidad
   // fue eliminada, cumpliendo la minimización de la Ley 1581 (anonimización, no borrado).
@@ -699,15 +569,16 @@ export function applyTombstones(data: any): any {
   return result;
 }
 
-export default {
-  async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
-    // 1. Manejo de preflight OPTIONS para navegadores web
-    if (request.method === 'OPTIONS') {
-      return new Response(null, { headers: corsHeaders });
-    }
-
-    const url = new URL(request.url);
-    const path = url.pathname;
+// ==============================================================================
+// Ronda 58 (F-17): WRAPPER DE CORS. Todo el enrutamiento vive en handleRoute;
+// este wrapper añade los headers CORS SOLO si el Origin del request está en la
+// allowlist (ver ./cors.ts) y responde los preflight OPTIONS (403 a orígenes
+// desconocidos). Los requests sin Origin (curl/Node/suites/healthchecks) pasan
+// intactos: CORS es una política de navegador, no del servidor.
+// ==============================================================================
+async function handleRoute(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
+  const url = new URL(request.url);
+  const path = url.pathname;
 
     try {
       // =========================================================================
@@ -863,46 +734,72 @@ export default {
         //    borra un registro que ya estaba en el snapshot.
         let adminSnapshotData: any = data;
         let adminRecordsCount = records.length;
-        let prevTombstones: any[] = [];
         if (isAdmin && env.DB) {
+          // =========================================================================
+          // Ronda 58 (F-6 + F-7 + F-8 + F-23) — reescritura del camino ADMIN:
+          //   F-6: la escritura del snapshot es CAS (guard sobre updated_at + re-
+          //        intento con re-fusión) — ver casWriteSnapshot. Un push ADMIN que
+          //        llegue tras un push de operador ya no PISA sus asistencias.
+          //   F-7: el sello de servidor (serverUpdatedAt) se aplica SOLO a los
+          //        registros ENTRANTES de este push, ANTES de fusionar. Antes se
+          //        sellaba el array fusionado completo → los registros heredados
+          //        heredaban un "now" falso y podían ganar por LWW a ediciones
+          //        legítimas aún no subidas desde un terminal offline.
+          //   F-8: REVIVIFICACIÓN — si el catálogo entrante contiene el código
+          //        (re-matrícula), el tombstone de esa entidad se RETIRA del
+          //        snapshot (un código re-matriculado vuelve a vivir; antes quedaba
+          //        muerto para siempre porque la unión de tombstones lo re-añadía).
+          //   F-23: strip de credenciales en claro (tempPassword/password) del
+          //        snapshot antes de persistirlo — defensa en profundidad para
+          //        terminales viejos que aún las suban.
+          // =========================================================================
           try {
-            const existingSnapshot = await env.DB.prepare(
+            const stampedIncoming = stampServerVersion(records); // F-7: SOLO lo entrante
+            const written = await casWriteSnapshot(env, schoolCode, (prev, row) => {
+              let mergedRecords: any[];
+              let mergedTombstones: any[];
+              if (prev) {
+                const prevRecords = Array.isArray(prev.records) ? prev.records : [];
+                mergedRecords = mergeRecordsByUpdatedAt(prevRecords, stampedIncoming);
+                const prevTombs = Array.isArray(prev.tombstones) ? prev.tombstones : [];
+                const incomingTombs = Array.isArray(data.tombstones) ? data.tombstones : [];
+                mergedTombstones = mergeRecordsByUpdatedAt(prevTombs, incomingTombs);
+                // F-8: retirar tombstones de entidades re-matriculadas en ESTE push.
+                const incomingStudentIds = new Set(students.map((s: any) => String(s?.code)));
+                const incomingTeacherIds = new Set(teachers.map((t: any) => String(t?.id)));
+                mergedTombstones = mergedTombstones.filter((t: any) => {
+                  if (!t || !t.id) return true;
+                  if (t.type === 'student' && incomingStudentIds.has(String(t.id))) return false;
+                  if (t.type === 'teacher' && incomingTeacherIds.has(String(t.id))) return false;
+                  return true;
+                });
+              } else {
+                mergedRecords = stampedIncoming;
+                mergedTombstones = Array.isArray(data.tombstones) ? data.tombstones : [];
+              }
+              const snapshotData = stripSnapshotCredentials({   // F-23
+                ...data,
+                records: mergedRecords,
+                tombstones: mergedTombstones
+              });
+              return {
+                data: snapshotData,
+                studentsCount: students.length,
+                recordsCount: mergedRecords.length,
+                schoolName: body.schoolName || row?.school_name || env.SCHOOL_NAME || ''
+              };
+            });
+            void written; // el CAS degrada honestamente y lo registra casWriteSnapshot
+            adminSnapshotData = safeJsonParse((await env.DB.prepare(
               `SELECT data_json FROM sync_snapshots WHERE id = ?`
-            ).bind(`snapshot_${schoolCode}`).first<{ data_json: string }>();
-            if (existingSnapshot?.data_json) {
-              const prev = JSON.parse(existingSnapshot.data_json);
-              const mergedRecords = mergeRecordsByUpdatedAt(prev.records || [], records);
-              adminSnapshotData = { ...data, records: mergedRecords };
-              adminRecordsCount = mergedRecords.length;
-              prevTombstones = Array.isArray(prev.tombstones) ? prev.tombstones : [];
-            }
-          } catch {
-            /* snapshot corrupto o lectura fallida: usar el payload entrante tal cual (comportamiento previo) */
+            ).bind(`snapshot_${schoolCode}`).first<{ data_json: string }>())?.data_json || 'null') || data;
+            adminRecordsCount = Array.isArray(adminSnapshotData.records) ? adminSnapshotData.records.length : records.length;
+          } catch (e: any) {
+            /* snapshot corrupto o escritura fallida: usar el payload entrante tal cual (comportamiento previo) */
+            console.warn('[sync/push] camino ADMIN (CAS) no crítico:', e?.message || e);
+            adminSnapshotData = stripSnapshotCredentials({ ...data, records: stampServerVersion(records) });
+            adminRecordsCount = records.length;
           }
-          // Ronda 54 (hueco #4): sellar la versión de SERVIDOR en cada registro del snapshot.
-          // Esto hace el LWW determinista: los registros que este push tocó quedan con
-          // `serverUpdatedAt = now`; los heredados conservan su versión previa.
-          // Ronda 54 (hueco #5): conservar el histórico de tombstones (unión con los previos),
-          // para que una entidad borrada NUNCA resucite en el próximo pull.
-          const incomingTombstones: any[] = Array.isArray(adminSnapshotData.tombstones) ? adminSnapshotData.tombstones : [];
-          const mergedTombstones = mergeRecordsByUpdatedAt(prevTombstones, incomingTombstones);
-          adminSnapshotData = {
-            ...adminSnapshotData,
-            records: stampServerVersion(adminSnapshotData.records || []),
-            tombstones: mergedTombstones
-          };
-          adminRecordsCount = adminSnapshotData.records.length;
-          await env.DB.prepare(
-            `INSERT OR REPLACE INTO sync_snapshots (id, school_code, school_name, data_json, students_count, records_count, updated_at)
-             VALUES (?, ?, ?, ?, ?, ?, datetime('now'))`
-          ).bind(
-            `snapshot_${schoolCode}`,
-            schoolCode,
-            body.schoolName || env.SCHOOL_NAME || '',
-            JSON.stringify(adminSnapshotData),
-            students.length,
-            adminRecordsCount
-          ).run();
 
           // 2. Guardar Estudiantes en tabla relacional D1 en batches
           if (students.length > 0) {
@@ -954,46 +851,53 @@ export default {
         //     nuevas del día. El catálogo del snapshot queda intacto.
         if (isOperator && env.DB) {
           try {
-            // Leer snapshot vigente (D1) para conservar su catálogo.
-            const existing = await env.DB.prepare(
-              `SELECT data_json, students_count, records_count, school_name FROM sync_snapshots WHERE id = ?`
-            ).bind(`snapshot_${schoolCode}`).first<{ data_json: string; students_count: number; records_count: number; school_name: string | null }>();
+            // =========================================================================
+            // Ronda 58 (F-6 + F-7 + F-23) — el camino de operador ahora:
+            //   1. Sella SOLO sus registros entrantes (F-7) ANTES de fusionar.
+            //   2. Escribe con CAS (F-6): si otro push (docente o Rectoría) escribió
+            //      entre la lectura y la escritura, RE-LEE y RE-FUSIONA en vez de
+            //      pisar la fusión del otro (antes: el último borraba los hechos del
+            //      primero — pérdida silenciosa de asistencia).
+            //   3. Aplica stripSnapshotCredentials (F-23) por si un terminal viejo
+            //      aún sube tempPassword en claro.
+            // El catálogo del snapshot vigente se conserva intacto (comportamiento R47).
+            // =========================================================================
+            const stampedIncoming = stampServerVersion(records);
             let mergedData: any;
-            let mergedRecords: any[];
+            let mergedRecords: any[] = [];
             let catalogCount = 0;
-            if (existing?.data_json) {
-              const prev = JSON.parse(existing.data_json);
-              const prevById = new Map<string, any>((prev.records || []).map((r: any) => [String(r.id), r]));
-              // Ronda 54 (hueco #6): registros que YA existían y se resuelven por LWW (conflicto).
-              pushFusedCount = records.filter((r: any) => r && r.id && prevById.has(String(r.id))).length;
-              mergedRecords = mergeRecordsByUpdatedAt(prev.records || [], records);
-              // conservar catálogo previo; solo actualizar records
-              mergedData = { ...prev, records: mergedRecords };
-              catalogCount = Array.isArray(prev.students) ? prev.students.length : existing.students_count || 0;
-            } else {
-              // No hay snapshot previo: almacenar solo los hechos de este operador (sin catálogo).
-              mergedRecords = [...records];
-              mergedData = { ...data, records: mergedRecords };
+            const written = await casWriteSnapshot(env, schoolCode, (prev, row) => {
+              if (prev) {
+                const prevRecords = Array.isArray(prev.records) ? prev.records : [];
+                const prevById = new Map<string, any>(prevRecords.map((r: any) => [String(r.id), r]));
+                // Ronda 54 (hueco #6): registros que YA existían y se resuelven por LWW (conflicto).
+                pushFusedCount = records.filter((r: any) => r && r.id && prevById.has(String(r.id))).length;
+                mergedRecords = mergeRecordsByUpdatedAt(prevRecords, stampedIncoming);
+                mergedData = stripSnapshotCredentials({ ...prev, records: mergedRecords });
+                catalogCount = Array.isArray(prev.students) ? prev.students.length : (row?.students_count ?? 0);
+              } else {
+                // No hay snapshot previo: almacenar solo los hechos de este operador (sin catálogo).
+                mergedRecords = [...stampedIncoming];
+                mergedData = stripSnapshotCredentials({ ...data, records: mergedRecords });
+                catalogCount = Array.isArray(data.students) ? data.students.length : 0;
+              }
+              return {
+                data: mergedData,
+                studentsCount: catalogCount,
+                recordsCount: mergedRecords.length,
+                schoolName: body.schoolName || row?.school_name || env.SCHOOL_NAME || ''
+              };
+            });
+            if (!written) {
+              // Contención extrema tras 3 intentos: degradación honesta (última escritura
+              // gana), documentada en el log. El KV de abajo no se actualiza con datos
+              // posiblemente pisados: se omite para no servir una fusión perdida.
+              console.warn('[sync/push] operador: CAS sin éxito tras reintentos; KV no refrescado este ciclo.');
             }
-            // Ronda 54 (hueco #4): sello de versión de SERVIDOR en los hechos del operador,
-            // para que el LWW sea determinista (los relojes del dispositivo ya no arbitran).
-            mergedRecords = stampServerVersion(mergedRecords);
-            mergedData = { ...mergedData, records: mergedRecords };
-            await env.DB.prepare(
-              `INSERT OR REPLACE INTO sync_snapshots (id, school_code, school_name, data_json, students_count, records_count, updated_at)
-               VALUES (?, ?, ?, ?, ?, ?, datetime('now'))`
-            ).bind(
-              `snapshot_${schoolCode}`,
-              schoolCode,
-              (body.schoolName || existing?.school_name || env.SCHOOL_NAME || ''),
-              JSON.stringify(mergedData),
-              catalogCount,
-              mergedRecords.length
-            ).run();
 
             // Reflejar el snapshot fusionado en KV para que /api/sync/pull lo sirva fresco
             // (el pull lee KV primero). El catálogo conservado es el vigente, no el del operador.
-            if (env.ATTENDANCE_KV) {
+            if (env.ATTENDANCE_KV && written) {
               await env.ATTENDANCE_KV.put(`latest_snapshot_${schoolCode}`, JSON.stringify({
                 syncedAt: new Date().toISOString(),
                 studentsCount: catalogCount,
@@ -1108,7 +1012,7 @@ export default {
                 recordsSaved: records.length,
                 timestamp: new Date().toISOString()
               }),
-              { expirationTtl: 7 * 24 * 60 * 60 }
+              { expirationTtl: 24 * 60 * 60 } // R58 (F-12): ventana de dedup = 24 h (cubre reintentos; antes 7 d quemaba cuota KV)
             );
           } catch {
             /* el dedup es best-effort: no debe romper el push */
@@ -1552,7 +1456,8 @@ export default {
         // Ronda 54 (hueco #2): registrar el opId como aplicado para dedup de reintentos.
         if (r.opId && env.ATTENDANCE_KV) {
           try {
-            await env.ATTENDANCE_KV.put(`att_opid_${r.opId}`, JSON.stringify({ ok: true, id }), { expirationTtl: 7 * 24 * 60 * 60 });
+            // R58 (F-12): ventana de dedup = 24 h (cubre reintentos; antes 7 d quemaba cuota KV)
+            await env.ATTENDANCE_KV.put(`att_opid_${r.opId}`, JSON.stringify({ ok: true, id }), { expirationTtl: 24 * 60 * 60 });
           } catch { /* best-effort */ }
         }
 
@@ -1575,6 +1480,25 @@ export default {
     } catch (err: any) {
       console.error('Worker internal error:', err);
       return errorResponse(err.message || 'Error interno en Cloudflare Worker', 500);
+    }
+}
+
+export default {
+  async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
+    // Ronda 58 (F-17): preflight con allowlist + envoltura CORS de TODAS las respuestas.
+    if (request.method === 'OPTIONS') {
+      return corsPreflightResponse(request, env);
+    }
+    try {
+      const res = await handleRoute(request, env, ctx);
+      return withCorsHeaders(res, request, env);
+    } catch (err: any) {
+      // Error ANTES del try interno (p. ej. new URL malformada): respuesta honesta + CORS.
+      const fallback = new Response(JSON.stringify({ success: false, error: err?.message || 'Error interno' }), {
+        status: 500,
+        headers: { 'Content-Type': 'application/json', ...corsHeaders }
+      });
+      return withCorsHeaders(fallback, request, env);
     }
   }
 };

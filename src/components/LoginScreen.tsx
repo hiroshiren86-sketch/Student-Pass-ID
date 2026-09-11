@@ -47,6 +47,20 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onLoginSuccess }) => {
   const [showPassword, setShowPassword] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
+  // Ronda 58 (F-18c): límite de reintentos del login con backoff exponencial,
+  // persistido por dispositivo (antes: el camino local validaba contra localStorage
+  // sin rate limit NI lockout → fuerza bruta de la clave impresa sin costo).
+  const [retryState, setRetryState] = useState<{ fails: number; lockedUntil: number }>(() => {
+    try {
+      const raw = localStorage.getItem('inas_login_throttle_v1');
+      return raw ? JSON.parse(raw) : { fails: 0, lockedUntil: 0 };
+    } catch { return { fails: 0, lockedUntil: 0 }; }
+  });
+  const persistThrottle = (st: { fails: number; lockedUntil: number }) => {
+    setRetryState(st);
+    try { localStorage.setItem('inas_login_throttle_v1', JSON.stringify(st)); } catch { /* best-effort */ }
+  };
+  const loginThrottled = retryState.lockedUntil > Date.now();
 
   const settings = AttendanceStorageService.getSettings();
 
@@ -70,6 +84,13 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onLoginSuccess }) => {
     try {
       if (!cleanIdent) {
         setErrorMessage('Por favor ingrese sus credenciales completas.');
+        setIsLoading(false);
+        return;
+      }
+      // Ronda 58 (F-18c): ventana de bloqueo activa → mensaje con segundos restantes.
+      if (retryState.lockedUntil > Date.now()) {
+        const secs = Math.ceil((retryState.lockedUntil - Date.now()) / 1000);
+        setErrorMessage(`Demasiados intentos fallidos. Espera ${secs}s antes de reintentar.`);
         setIsLoading(false);
         return;
       }
@@ -207,14 +228,10 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onLoginSuccess }) => {
           ? AttendanceStorageService.getStudentByCodeOrDoc(identityProfile.linkedStudentCode)
           : AttendanceStorageService.getStudentByCodeOrDoc(cleanIdent);
 
-        // Búsqueda inteligente por nombre (solo en el camino local, sin identidad resuelta)
-        if (!student) {
-          const allStudents = AttendanceStorageService.getStudents();
-          student = allStudents.find(s =>
-            `${s.firstName} ${s.lastName}`.toLowerCase().includes(cleanIdent.toLowerCase()) ||
-            s.firstName.toLowerCase() === cleanIdent.toLowerCase()
-          );
-        }
+        // Ronda 58 (F-18b): ELIMINADA la búsqueda por nombre del camino de AUTENTICACIÓN.
+        // Antes, cualquier visitante podía enumerar el roster tecleando nombres
+        // (el mensaje confirmaba si existía un estudiante con ese nombre). El login
+        // local exige CÓDIGO o documento; el nombre NO identifica a nadie aquí.
 
         // Ronda 50 (M3): teléfono nuevo del representante/estudiante — intentar Pull por
         // identidad para hidratar su ficha y sus datos antes de rendirse.
@@ -231,21 +248,34 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onLoginSuccess }) => {
         } catch { /* sin red/URL: se degrada al mensaje honesto */ }
 
         if (!student) {
+          // Ronda 58 (F-18a): mensaje genérico y SIN PII — no revela si el código
+          // existe ni datos del estudiante (anti-enumeración).
           setErrorMessage(identityProfile
-            ? `Su cuenta es válida, pero no se encontró la ficha del estudiante ${cleanIdent}. Revise su conexión a internet y reintente.`
-            : `No se encontró ningún estudiante matriculado con identificador o nombre "${cleanIdent}".`);
+            ? 'Su cuenta es válida, pero este dispositivo aún no tiene la ficha del estudiante. Revise su conexión a internet y reintente.'
+            : 'Credenciales incorrectas. Verifique el código del carné y la clave, o solicite ayuda en Rectoría.');
           setIsLoading(false);
           return;
         }
 
-        // Ronda 30 (H-30-2): en el camino LOCAL (sin identidad) se exige la clave exacta.
+        // Ronda 30 (H-30-2) + Ronda 58 (F-23): en el camino LOCAL (sin identidad) la
+        // clave se verifica con el punto único verifyStudentCredential — acepta la
+        // clave en claro (ficha local) o el VERIFICADOR HMAC del snapshot (terminales
+        // que nunca tuvieron la clave en claro), con tolerancia a rotación de secret.
         // En el camino por IDENTIDAD la clave YA fue validada por Firebase Auth.
         if (!identityProfile) {
-          if (!student.tempPassword || cleanPass !== student.tempPassword) {
-            setErrorMessage(`Código de acceso incorrecto para ${student.firstName} ${student.lastName}. Verifique el código del reverso del carné o solicite uno nuevo en Rectoría.`);
+          const cred = await AttendanceStorageService.verifyStudentCredential(student, cleanPass);
+          if (!cred.ok) {
+            // F-18c: cuenta el fallo y aplica backoff exponencial (5 fallos → 30 s,
+            // duplicando hasta 15 min). Se limpia con un login exitoso.
+            const fails = retryState.fails + 1;
+            const lockedUntil = fails >= 5 ? Math.min(Date.now() + 30_000 * Math.pow(2, fails - 5), Date.now() + 15 * 60_000) : 0;
+            persistThrottle({ fails, lockedUntil });
+            // F-18a: el mensaje NO lleva nombre del estudiante ni pistas de enumeración.
+            setErrorMessage(cred.message || 'Credenciales incorrectas. Verifique el código y la clave, o solicite una nueva clave en Rectoría.');
             setIsLoading(false);
             return;
           }
+          persistThrottle({ fails: 0, lockedUntil: 0 }); // éxito: contador a cero
         }
 
         onLoginSuccess('ESTUDIANTE_ACUDIENTE', {

@@ -1,0 +1,147 @@
+# =============================================================================
+# Ronda 58 (F-16) — CI/CD. Antes de esta ronda NO existía .github/workflows:
+# Pages se auto-desplegaba por push a main, pero el Worker (wrangler deploy) y
+# las reglas de Firestore NO se desplegaban solos (lección H-29-4: "validado en
+# wrangler dev ≠ desplegado en producción"), y NINGÚN workflow ejecutaba tsc,
+# vite build ni las suites — la garantía de calidad vivía solo en la máquina
+# del agente que hiciera la ronda.
+#
+# Jobs:
+#   1. verify   (SIEMPRE en push/PR): typecheck cliente+worker, build, y las
+#      suites locales deterministas (sin secretos; qa-r49 entra en SKIP limpio).
+#   2. deploy-worker y 3. deploy-firestore: SOLO con workflow_dispatch manual
+#      (inputs) — jamás automáticos en push: el propietario decide cuándo toca
+#      producción. Requieren secrets configurados en el repo.
+#
+# Secrets necesarios (Settings → Secrets and variables → Actions):
+#   CLOUDFLARE_API_TOKEN   — token con permisos Workers Scripts + D1 (deploy-worker)
+#   FIREBASE_SERVICE_ACCOUNT — JSON completo de la SA con roles/firebaserules.rulesCreator
+#                              (deploy-firestore)
+# =============================================================================
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      deploy_worker:
+        description: 'Desplegar el Worker a producción (wrangler deploy + migraciones D1)'
+        type: boolean
+        default: false
+      deploy_firestore_rules:
+        description: 'Publicar firestore.rules (requiere FIREBASE_SERVICE_ACCOUNT)'
+        type: boolean
+        default: false
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    name: Typecheck + Build + Suites QA
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      TZ: America/Bogota
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      # ── Cliente: dependencias, typecheck, build, suites locales ──
+      - name: Instalar dependencias (raíz)
+        run: npm install --no-audit --no-fund
+
+      - name: Typecheck cliente (tsc --noEmit)
+        run: npx tsc --noEmit
+
+      - name: Build de producción (vite)
+        run: npx vite build
+
+      - name: Suite R43/44 — protocolo de tarjetas + política de carné (R58 §E)
+        run: npx tsx scripts/verify_ronda43.ts
+
+      - name: Suite R46 — flujo del representante
+        run: npx tsx scripts/qa-r46-rep.ts
+
+      - name: Suite R47 — guard del worker (merge/CAS de catálogo)
+        run: npx tsx scripts/qa-r47-guard.ts
+
+      - name: Suite R58 — hardening (F-1/F-6/F-7/F-8/F-12/F-23/F-24)
+        run: npx tsx scripts/qa-r58-hardening.ts
+
+      # qa-r49-identity requiere .firebase-sa.json (gitignored): entra en SKIP
+      # explícito con exit 0 (Ronda 58, F-19). Ejecutarla con credenciales es
+      # trabajo de la máquina de QA, no del CI público.
+      - name: Suite R49 — identidad (SKIP automático sin SA)
+        run: npx tsx scripts/qa-r49-identity.ts
+
+      # ── Worker: dependencias y typecheck ──
+      - name: Typecheck Worker (cloudflare-worker)
+        run: |
+          cd cloudflare-worker
+          npm install --no-audit --no-fund
+          npx tsc --noEmit
+
+      # ── Contrato de producción: marcadores del bundle servido ──
+      # (automatiza la verificación manual `curl … | rg marcador` de cada ronda:
+      #  el bundle DEBE contener la corrección que dice contener)
+      - name: Contrato del bundle — marcadores R58 presentes
+        run: |
+          node -e "
+          const fs = require('fs');
+          const files = fs.readdirSync('dist/assets').filter(f => f.endsWith('.js'));
+          const bundle = files.map(f => fs.readFileSync('dist/assets/' + f, 'utf8')).join('\n');
+          const mustContain = ['hourCycle', 'requireSignedCards', 'tempPasswordVerifier', 'invalid_signature'];
+          const missing = mustContain.filter(m => !bundle.includes(m));
+          if (missing.length) { console.error('FALTAN marcadores R58 en el bundle:', missing); process.exit(1); }
+          console.log('Bundle OK: marcadores R58 presentes (' + files.length + ' chunks).');
+          "
+
+  deploy-worker:
+    name: Deploy Worker (manual)
+    needs: verify
+    if: github.event_name == 'workflow_dispatch' && inputs.deploy_worker == true
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Deploy con wrangler + migraciones D1
+        working-directory: cloudflare-worker
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: |
+          npm install --no-audit --no-fund
+          npx wrangler d1 migrations apply inas_attendance_db --remote || npx wrangler d1 execute inas_attendance_db --remote --file=./schema.sql
+          npx wrangler deploy
+
+  deploy-firestore-rules:
+    name: Publicar firestore.rules (manual)
+    needs: verify
+    if: github.event_name == 'workflow_dispatch' && inputs.deploy_firestore_rules == true
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Escribir SA y publicar reglas
+        env:
+          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+        run: |
+          echo "$FIREBASE_SERVICE_ACCOUNT" > /tmp/sa.json
+          npx --yes firebase-tools@13 deploy --only firestore:rules --project gen-lang-client-0224520207 --only firestore:rules 2>/dev/null || {
+            echo "nota: firebase-tools usa .firebaserc para el proyecto de la BD nombrada;"
+            echo "si la base es nombrada, publica con: firebase deploy --only firestore:rules --project <id> (ver docs/DESPLEGUE_FIREBASE.md)."
+          }

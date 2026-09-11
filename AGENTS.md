@@ -228,6 +228,46 @@ Esta sección documenta el mapa exhaustivo de comunicaciones, protocolos, plataf
 
 ## 📋 3. Bitácora de Implementaciones y Correcciones Realizadas
 
+### ✅ Ronda 58 (11/09/2026) — REMEDIACIÓN DE LA AUDITORÍA EXTERNA 2026-09 (hallazgos F-1…F-25): política de carné firmado, CAS del snapshot, fin de la puerta trasera del portal, credenciales fuera del push, quota-burn del auto-sync y CI que nunca existió
+
+**Mandato**: el propietario aportó `INFORME-AUDITORIA-INAS-2026-09.md` (hallazgos F-1…F-25) y autorizó verificar cada uno con evidencia de código y corregirlo. **23 confirmados y corregidos, 2 refutados/explicados con evidencia** (ver final). Cero regresiones: R43 64✓ · R46 40✓ · R47 18✓ · **R58 36✓ (suite nueva)** · R49 SKIP-limpio · tsc cliente+worker 0 · vite build OK.
+
+**Seguridad (crítico):**
+- **F-1 (carné sin verificar se registraba)**: `registerClassScan` ahora aplica la política `requireSignedCards` (default ON, palanca en Ajustes → Sync y Seguridad): UNSIGNED/BAD_SIGNATURE/EXPIRED/LEGACY_COL_ASIS → RECHAZADOS con mensaje accionable. Exención documentada: `CLASS_UNLOCK_AUTO` (la autenticidad viene de la tarjeta de docente firmada, no del carné). **F-1b**: `verifiedHmac` solo es true si la firma se verificó de verdad; los AUTO_CIERRE ya no nacen con `verifiedHmac:true` (afirmaban "Token QR Firmado (VÁLIDO)" sin escaneo — hallazgo NUEVO de esta ronda) y el CSV deja de decirlo.
+- **F-2 (DEFAULT_QR_SECRET público)**: el secret es parámetro OBLIGATORIO en toda la API de crypto (rompió el compile a propósito); portal firma con `settings.qrSecret`; defaults sin secret (mockData vacío + getSettings regenera si llega el viejo literal).
+- **F-13**: firma HMAC a 32 hex (128 bits); el parser ACEPTA legacy 16-hex solo al verificar (carnés impresos en transición).
+- **F-3 (excusas sin gate)**: worker — `resolveAuthz` al frente; estudiante solo ve SUS excusas; PATCH solo Rectoría real; adjuntos por identidad. Retrocompat rota a propósito: token OPERADOR sin studentCode ahora recibe 403 en GET /api/excuses (era la fuga Ley 1581).
+- **F-5a (bypass identidad ADMIN)**: escribir catálogo exige identidad ADMIN **Y** token ADMIN cuando hay tokens configurados (`canWriteCatalog`).
+- **F-4 (firestore.rules)**: school_settings lectura autenticada / escritura solo ADMIN (la terminal anónima sigue hidratando: lee, no escribe); attendance_records solo ADMIN (sin consumidor crítico — la autoridad es D1). **DESPLEGAR REGLAS MANUALMENTE (ver CI)**.
+- **F-23 (claves en claro en el snapshot)**: el push sustituye `tempPassword` por `tempPasswordVerifier` = HMAC-SHA256(qrSecret, "code|clave"); docentes viajan sin password; el Worker además strippea (defensa en profundidad); `verifyStudentCredential` = punto único de verificación (claro local O verificador, con tolerancia a rotación vía `legacyQrSecret`).
+- **F-24 (puerta trasera del portal)**: ELIMINADAS 'colegio2026', el código como contraseña y 'SJ-2026'; `fillQuickStudent` ya no escribe la clave en pantalla; login del portal usa `verifyStudentCredential` (sin fallbacks, Regla 6).
+- **F-18 (login estudiante)**: sin búsqueda por nombre en autenticación (anti-enumeración), mensajes genéricos sin PII, throttle con backoff exponencial persistido (5 fallos → 30s → … → 15min).
+- **F-25 (credenciales en scripts)**: r47_fases/r47_planilla/qa-r49 leen de env/`~/.inas-qa.env` (chmod 600). **ACCIÓN DEL PROPIETARIO: rotar AUTH_TOKEN del Worker, contraseñas Firebase y (recomendado) qrSecret** — el historial git los filtró.
+
+**Integridad de datos:**
+- **F-6 (lost-update del snapshot)**: `casWriteSnapshot` — guard CAS sobre `updated_at`, 3 intentos con re-fusión sobre lo que el ganador escribió; probado con mock de D1 (suite E).
+- **F-7 (re-sello masivo)**: `stampServerVersion` SOLO sobre los registros entrantes, ANTES de merge; los heredados conservan su sello (suite B).
+- **F-8 (re-matriculado muerto)**: applyTombstones compara fechas (entidad más nueva que el tombstone → revive); addStudent/addTeacher llaman `clearTombstones`; el push admin retira tombstones de re-matriculados (suite C).
+- **F-9 (auto-cierre multi-dispositivo)**: solo corre en sesión ADMIN (App.tsx) + IDs DETERMINISTAS `rec-autoclose-<fecha>-<bloque>-<estudiante>` → N dispositivos que cierran convergen en el merge por id (suite E9).
+- **F-12 (colisión de opIds)**: opId = SHA-256 del CONTENIDO (antes FNV-1a 32 bits de CONTEOS: dos estados con mismos conteos y contenido distinto colisionaban y el push se descartaba en silencio) (suite H).
+- **F-11 (quota-burn 2.9M rows/día)**: (a) retirado el `slice(0,500)` del push (el Worker ya fusiona por id+updatedAt — el cap de R53 solo en el worker); (b) el auto-sync SOLO pushea si hay sello dirty de R57; Rectoría idle hace Pull (lecturas), el resto no hace nada → dispositivo idle = quota 0.
+
+**Infra/Calidad:**
+- **F-17 (CORS \*)**: allowlist (pages.dev prod, previews, localhost, extras por `ALLOWED_ORIGINS`); preflight no permitido → 403; requests sin Origin (curl/QA) sin CORS.
+- **F-15 (API key Gemini en query string)**: 4 usos migrados a header `x-goog-api-key`.
+- **F-22 (reloj 24:xx)**: `hourCycle:'h23'` explícito — con `hour12:false` algunos runtimes emiten "24:37" y el auto-cierre cerraba el día recién estrenado.
+- **F-19 (suite que SIEMPRE fallaba)**: watchdog de verify_ronda43 se limpia + `process.exit(0)` (era exit=2 a los 90s por diseño del harness, no por fallo); qa-r49-identity entra en SKIP explícito exit-0 sin la SA.
+- **F-16 (sin CI)**: `.github/workflows/ci.yml` — verify (tsc×2, build, 5 suites, contrato de marcadores del bundle) en TODO push/PR + deploy-worker/deploy-firestore SOLO manual (workflow_dispatch). **Pendiente propietario: secrets CLOUDFLARE_API_TOKEN y FIREBASE_SERVICE_ACCOUNT.**
+- **F-20 (deps muertas)**: fuera `motion`, `@zxing/browser`, `zod`; `@google/genai`/`express`/`dotenv` a devDependencies; build ya no genera `dist/server.cjs` (reliquia; `start` = `vite preview`).
+- **F-21 (bundle monolítico 2.64 MB)**: manualChunks funcional → 8 chunks (vendor react/firebase/pdf/qr/charts/icons). Parcial: el SW cachea por URL y la mejora completa requiere rev de cache (documentado en docs/PLAN-DE-ACCION-R58.md).
+- **F-10 (6.9 MB serializados por escaneo)**: cache de lectura + write-through en los 6 save* (`notify(false)` tras persistir; invalidación por defecto en el resto); espejo `inas_qrsecret_mirror_v1` para que un JSON corrupto de settings NO regenere el qrSecret en silencio. **Medido (scripts/perf-r58-probe.ts, 1500 est./15000 reg.): 6.9 MB leídos/escaneo → 0.00 MB; 61.5 ms → ~13 ms.** Las 2.8 MB de escritura por escaneo son inherentes a localStorage de array-completo (migrar a IndexedDB queda documentado).
+
+**Refutados/explicados (con evidencia, no opinión):**
+- **F-14 CONTRADICHO**: `hashPasswordPbkdf2` existía pero era CÓDIGO MUERTO (cero llamadores) y no se usaba en ninguna verificación — se ELIMINÓ igual (superficie de ataque), pero el informe debe corregirse: nunca estuvo en el camino de autenticación.
+- **F-19 explicado arriba**: exit=2 de verify_ronda43 era el watchdog del harness, no un fallo de la suite (los 51 checks estaban en verde).
+
+**Regresiones de suites por diseño de la nueva política**: verify_ronda43 §D y qa-r46-rep corren ahora con `requireSignedCards:false` explícito (prueban el flujo legado 1D); la política ACTIVA se prueba en §E de r43 (10 checks) y en qa-r58.
+
 ### ✅ Ronda 57 (10-11/09/2026) — BUCLE DE AUTO-MEJORA DE LA SINCRONIZACIÓN: 4 invariantes nuevos (sello dirty, gates de pull, orden push→pull, tombstones convergen al bajar) + 2 huecos cazados en el PROPIO trabajo R57 por el bucle de auditoría
 
 **Pedido del propietario (tras el cierre R56):** razonar a fondo TODOS los peligros de lo implementado — ni lo local ensucia a la nube ni la nube a lo local; **"si lo local está un poquito más adelantado, no me lo puede pisar"** (y viceversa); "muchos factores más"; "si puedes hacer un bucle de auto-mejora, mejor".

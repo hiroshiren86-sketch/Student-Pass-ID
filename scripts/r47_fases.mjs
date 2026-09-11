@@ -17,11 +17,41 @@ import { chromium } from 'file:///home/z/.npm-global/lib/node_modules/playwright
 const APP = 'https://student-pass-id.pages.dev';
 const API = 'https://inas-attendance-worker.hiroshiren86.workers.dev';
 const SCHOOL = 'INAS-ANTONIA-SANTOS-2026';
-const TOKEN = '622eb26403f3ebb52ffb0588be608b15ccbfebeb3ab459b21c30800153c55916';
-const REC_EMAIL = 'rectoria@inas.edu.co';
-const REC_PASS = 'INAS-Rectoria#2026';
-const DOC_EMAIL = 'mrestrepo@inas.edu.co';
-const DOC_PASS = 'DocenteR43#Aula2026';
+// Ronda 58 (F-25): las credenciales YA NO viven en el repo (el historial las filtró
+// públicas). Se cargan de process.env o de un .env FUERA del árbol del repo
+// (p. ej. ~/.inas-qa.env, permisos 600). El token filtrado y las contraseñas deben
+// ROTARSE en Cloudflare/Firebase — saneado el árbol, la rotación es del propietario.
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+function loadQaEnv() {
+  const candidates = [process.env.INAS_QA_ENV, path.join(os.homedir(), '.inas-qa.env'), '.inas-qa.env'];
+  for (const c of candidates) {
+    if (!c) continue;
+    try {
+      const txt = fs.readFileSync(c, 'utf8');
+      for (const line of txt.split('\n')) {
+        const m = line.match(/^([A-Z0-9_]+)=(.*)$/);
+        if (m && !process.env[m[1]]) process.env[m[1]] = m[2].trim();
+      }
+      return;
+    } catch { /* siguiente candidato */ }
+  }
+}
+loadQaEnv();
+function requireEnv(name) {
+  const v = process.env[name];
+  if (!v) {
+    console.error(`Falta ${name}. Exporta la variable o crea ~/.inas-qa.env con las credenciales de QA (fuera del repo, chmod 600).`);
+    process.exit(2);
+  }
+  return v;
+}
+const TOKEN = requireEnv('INAS_AUTH_TOKEN');
+const REC_EMAIL = requireEnv('INAS_REC_EMAIL');
+const REC_PASS = requireEnv('INAS_REC_PASS');
+const DOC_EMAIL = requireEnv('INAS_DOC_EMAIL');
+const DOC_PASS = requireEnv('INAS_DOC_PASS');
 const PROFILE = '/home/z/my-project/scripts/r47_profile';
 const SHOTS = '/home/z/my-project/scripts/r47_shots';
 fs.mkdirSync(SHOTS, { recursive: true });

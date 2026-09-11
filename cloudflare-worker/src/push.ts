@@ -20,7 +20,10 @@
  * ==============================================================================
  */
 import type { Env } from './index';
-import { corsHeaders } from './index';
+// Ronda 58 (F-3/F-17): autorización por resolveAuthz (nada de roles autodeclarados)
+// y CORS desde el módulo compartido (antes lo importaba de ./index → ciclo).
+import { resolveAuthz } from './authz';
+import { corsBaseHeaders as corsHeaders } from './cors';
 
 const B64URL_RE = /^[A-Za-z0-9_-]+$/;
 
@@ -274,7 +277,15 @@ export async function handlePushRoutes(request: Request, env: Env, url: URL, pat
     const endpoint = String(body.endpoint || '').trim();
     const p256dh = String(body.keys?.p256dh || '').trim();
     const auth = String(body.keys?.auth || '').trim();
-    const role = ['RECTORIA', 'PORTAL'].includes(String(body.role)) ? String(body.role) : 'PORTAL';
+    // Ronda 58 (F-3): el rol RECTORIA (que recibe las notificaciones de TODAS las
+    // excusas del colegio) YA NO se autodeclara en el body — lo resuelve el servidor
+    // con la sesión/token reales. Sin permiso → suscripción PORTAL (solo sus propias
+    // notificaciones por studentCode). Antes: cualquier dispositivo con el token de
+    // operador se suscribía como RECTORIA y veía todo el radar de excusas.
+    const authz = await resolveAuthz(request, env);
+    const canListenRectoria = !!authz && authz.role === 'ADMIN';
+    const requestedRole = ['RECTORIA', 'PORTAL'].includes(String(body.role)) ? String(body.role) : 'PORTAL';
+    const role = requestedRole === 'RECTORIA' && !canListenRectoria ? 'PORTAL' : requestedRole;
     const studentCode = body.studentCode ? String(body.studentCode).trim() : null;
     if (!endpoint.startsWith('https://') || !p256dh || !auth) {
       return err('Suscripción inválida: se requiere endpoint https, keys.p256dh y keys.auth.');
@@ -312,7 +323,11 @@ export async function handlePushRoutes(request: Request, env: Env, url: URL, pat
     }
     let body: any = {};
     try { body = await request.json(); } catch { /* cuerpo opcional */ }
-    const role = ['RECTORIA', 'PORTAL'].includes(String(body.role)) ? String(body.role) : 'RECTORIA';
+    // Ronda 58 (F-3): la prueba de envío masivo a RECTORIA también exige ser ADMIN.
+    const authz = await resolveAuthz(request, env);
+    const canListenRectoria = !!authz && authz.role === 'ADMIN';
+    const requestedRole = ['RECTORIA', 'PORTAL'].includes(String(body.role)) ? String(body.role) : 'RECTORIA';
+    const role = requestedRole === 'RECTORIA' && !canListenRectoria ? 'PORTAL' : requestedRole;
     const studentCode = body.studentCode ? String(body.studentCode).trim() : undefined;
     const detail = await sendPushDetailed(env, {
       role: studentCode ? undefined : role,

@@ -128,8 +128,12 @@ export const StudentPortalView: React.FC<StudentPortalViewProps> = ({ onLogout, 
       // Ronda 4 (F4): cargar mi horario opcional
       setMySchedule(AttendanceStorageService.getStudentPersonalSchedule(activeStudent.code));
 
-      // Generar código QR firmado criptográficamente para el carné en vivo
-      generateStudentQrPayload(activeStudent).then((payload) => {
+      // Ronda 58 (F-2): el QR del carné en vivo se firma con el SECRET INSTITUCIONAL
+      // de este dispositivo (settings.qrSecret — llega por Pull desde R56). ANTES:
+      // se firmaba con el DEFAULT_QR_SECRET hardcodeado del repo → el QR mostrado
+      // NUNCA verificaba en un terminal con el secret institucional, y quien leyera
+      // el repo podía firmar carnés válidos para dispositivos en default de fábrica.
+      generateStudentQrPayload(activeStudent, settings.qrSecret).then((payload) => {
         QRCode.toDataURL(payload, { margin: 1, width: 256 })
           .then((url) => setQrDataUrl(url))
           .catch((err) => console.error('Error generando QR para carné de estudiante:', err));
@@ -148,25 +152,36 @@ export const StudentPortalView: React.FC<StudentPortalViewProps> = ({ onLogout, 
     }
   };
 
+  // Ronda 58 (F-24): el autocompletado rápido SOLO prellena el CÓDIGO. Antes
+  // ESCRIBÍA la contraseña en pantalla con el patrón derivable 'SJ-' + últimos 4
+  // dígitos del código (F-18) — cualquiera que abriera el portal veía la clave de
+  // otro estudiante sin saber nada.
   const fillQuickStudent = (std: Student) => {
     setStudentCodeInput(std.code);
-    setPasswordInput(std.tempPassword || `SJ-${std.code.slice(-4)}`);
+    setPasswordInput('');
     setLoginError(null);
   };
 
-  const handleLogin = (e: React.FormEvent) => {
+  // Ronda 58 (F-24): ELIMINADAS las tres puertas traseras del portal:
+  //   1. la palabra fija 'colegio2026' abría el portal de CUALQUIER estudiante;
+  //   2. el propio student.code servía de contraseña;
+  //   3. una ficha sin clave esperaba 'SJ-2026' (patrón público).
+  // Ahora la verificación pasa por el MISMO punto único que LoginScreen
+  // (verifyStudentCredential): clave en claro local o verificador HMAC del snapshot,
+  // con mensajes accionables y CERO fallbacks (Regla 6).
+  const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoginError(null);
 
     const student = AttendanceStorageService.getStudentByCodeOrDoc(studentCodeInput.trim());
     if (!student) {
-      setLoginError('Código de estudiante no encontrado.');
+      setLoginError('Código de estudiante no encontrado. Verifica el código del carné.');
       return;
     }
 
-    const expectedPassword = student.tempPassword || 'SJ-2026';
-    if (passwordInput.trim() !== expectedPassword && passwordInput.trim() !== 'colegio2026' && passwordInput.trim() !== student.code) {
-      setLoginError('Contraseña o código de carné incorrecto.');
+    const cred = await AttendanceStorageService.verifyStudentCredential(student, passwordInput);
+    if (!cred.ok) {
+      setLoginError(cred.message || 'Contraseña incorrecta. Solicita una nueva clave en Rectoría.');
       return;
     }
 

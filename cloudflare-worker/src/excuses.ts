@@ -27,6 +27,11 @@
  */
 import type { Env } from './index';
 import { sendPushTo } from './push';
+// Ronda 58 (F-3): la autorización de este módulo ya NO sale de campos del propio
+// request (body.role / ?role= / reviewedByRole autodeclarados). Se resuelve con
+// la MISMA primitiva que el resto del Worker: resolveAuthz (identidad verificada
+// o token de dispositivo). Ver ./authz.ts.
+import { resolveAuthz, type Authz } from './authz';
 
 const EXCUSE_REASONS = ['CITA_MEDICA', 'INCAPACIDAD', 'CALAMIDAD', 'DEPORTIVA', 'OTRA'] as const;
 const EXCUSE_REASON_LABELS: Record<string, string> = {
@@ -37,27 +42,19 @@ const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 
 interface ExcuseRuleError { rule: string; message_es: string }
 
+// Ronda 58 (F-17): los headers CORS ya no se fijan aquí — el wrapper del fetch
+// handler (index.ts + cors.ts) los añade según la allowlist de orígenes.
 function jsonOk(data: any, status = 200): Response {
   return new Response(JSON.stringify(data), {
     status,
-    headers: {
-      'Content-Type': 'application/json',
-      'Access-Control-Allow-Origin': '*',
-      'Access-Control-Allow-Methods': 'GET, POST, PUT, PATCH, DELETE, OPTIONS',
-      'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-School-Code, X-Requested-With',
-    },
+    headers: { 'Content-Type': 'application/json' },
   });
 }
 
 function jsonErr(message: string, status = 400, errors?: ExcuseRuleError[]): Response {
   return new Response(JSON.stringify({ success: false, error: message, ...(errors ? { errors } : {}) }), {
     status,
-    headers: {
-      'Content-Type': 'application/json',
-      'Access-Control-Allow-Origin': '*',
-      'Access-Control-Allow-Methods': 'GET, POST, PUT, PATCH, DELETE, OPTIONS',
-      'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-School-Code, X-Requested-With',
-    },
+    headers: { 'Content-Type': 'application/json' },
   });
 }
 
@@ -224,6 +221,22 @@ function b64decode(s: string): Uint8Array {
 export async function handleExcusesRoutes(request: Request, env: Env, url: URL, path: string, ctx?: { waitUntil(promise: Promise<any>): void }): Promise<Response | null> {
   if (!path.startsWith('/api/excuses')) return null;
   if (!env.DB) return jsonErr('Base de datos D1 no configurada en el Worker.', 503);
+
+  // ---------------------------------------------------------------------------
+  // Ronda 58 (F-3) — AUTORIZACIÓN REAL, resuelta UNA vez por request.
+  //   isAdmin        → identidad con rol ADMIN (con token ADMIN si la instalación
+  //                    tiene tokens — ver authz.ts F-5a) o token de dispositivo ADMIN.
+  //   ownStudentCode → código del estudiante VINCULADO a la identidad verificada
+  //                    (source 'identity'); null para tokens de dispositivo.
+  // Los campos autodeclarados (body.role, ?role=, reviewedByRole, body.studentCode
+  // como prueba de identidad) DEJAN DE SER autorización. El contrato viejo que los
+  // enviaba sigue funcionando: el servidor simplemente ya no los consulta.
+  // ---------------------------------------------------------------------------
+  const authz: Authz | null = await resolveAuthz(request, env);
+  if (!authz) return jsonErr('No autorizado. Credencial inválida o ausente.', 401);
+  const isAdmin = authz.role === 'ADMIN';
+  const ownStudentCode =
+    authz.source === 'identity' && authz.linkedStudentCode ? String(authz.linkedStudentCode) : null;
 
   try {
     // ---------- GET /api/excuses/verify-chain (antes que :id) ----------
@@ -423,7 +436,28 @@ export async function handleExcusesRoutes(request: Request, env: Env, url: URL, 
     if (path === '/api/excuses' && request.method === 'GET') {
       const autoApproved = await sweepAutoApprovals(env); // R8 lazy
       const purged = await sweepRetention(env); // P4 lazy (retención término+1 año)
-      const studentCode = url.searchParams.get('studentCode');
+      let studentCode = url.searchParams.get('studentCode');
+      // -----------------------------------------------------------------------
+      // Ronda 58 (F-3) — mínimo privilegio en el listado:
+      //   - ADMIN: filtros libres como hoy (buzón de Rectoría).
+      //   - Identidad ESTUDIANTE_ACUDIENTE: SIEMPRE su propio código (los demás
+      //     filtros se conservan); jamás el expediente completo del colegio.
+      //   - Token de dispositivo (terminal, retrocompat): SOLO consulta de UN
+      //     estudiante concreto (studentCode obligatorio). Antes, cualquier
+      //     poseedor del token de operador recibía hasta 200 expedientes con
+      //     razones y notas de salud ajenas (Ley 1581, dato especial).
+      // -----------------------------------------------------------------------
+      if (isAdmin) {
+        // sin cambios: filtros del request
+      } else if (ownStudentCode) {
+        studentCode = ownStudentCode;
+      } else if (authz.source === 'token') {
+        if (!studentCode) {
+          return jsonErr('Sin permiso para listar todas las excusas del colegio. Consulta un estudiante concreto (studentCode) o inicia sesión con tu cuenta (Ronda 58).', 403);
+        }
+      } else {
+        return jsonErr('Sin permiso para listar excusas (Ronda 58).', 403);
+      }
       const status = url.searchParams.get('status');
       const grade = url.searchParams.get('grade');
       const from = url.searchParams.get('from');
@@ -457,14 +491,17 @@ export async function handleExcusesRoutes(request: Request, env: Env, url: URL, 
         let body: any;
         try { body = await request.json(); } catch { return jsonErr('JSON inválido en el cuerpo de la petición.'); }
         const dataBase64 = String(body.dataBase64 || '').trim();
-        const requestBy = String(body.studentCode || '').trim();
         const mime = String(body.mime || 'image/jpeg').toLowerCase();
         if (!/^image\/(jpeg|png|webp)$/.test(mime)) return jsonErr('El soporte debe ser una imagen JPEG, PNG o WebP.', 400);
         if (!dataBase64) return jsonErr('Falta el contenido del soporte (dataBase64).', 400);
         if (dataBase64.length > ATTACHMENT_MAX_B64) return jsonErr(`El soporte pesa demasiado (${Math.round(dataBase64.length / 1.37 / 1024)} KB). Comprime la foto e intenta de nuevo (máx. ~290 KB).`, 413);
-        // Dueño o Rectoría: solo el estudiante de la excusa (o Rectoría) puede adjuntar su soporte
-        if (requestBy !== excuse.student_code && String(body.role || '') !== 'RECTORIA') {
-          return jsonErr('Solo el estudiante dueño de la excusa (o Rectoría) puede adjuntar el soporte.', 403);
+        // Ronda 58 (F-3): dueño por IDENTIDAD verificada o Rectoría por token/rol
+        // resuelto en servidor. El `body.studentCode` autodeclarado y el viejo
+        // `body.role === 'RECTORIA'` DEJAN DE SER autorización: antes, cualquier
+        // poseedor del token de operador podía SOBRESCRIBIR el soporte de otro
+        // estudiante declarando su código.
+        if (!isAdmin && ownStudentCode !== excuse.student_code) {
+          return jsonErr('Solo el estudiante dueño de la excusa (o Rectoría) puede adjuntar el soporte. La autorización se resuelve de la sesión, no de campos del request (Ronda 58).', 403);
         }
         const key = await importAttachmentKey(env);
         if (!key) return jsonErr('Secret de cifrado no disponible.', 503);
@@ -481,9 +518,11 @@ export async function handleExcusesRoutes(request: Request, env: Env, url: URL, 
         if (!excuse.attachment_path.startsWith(ATTACHMENT_FORMAT)) {
           return jsonErr('El soporte registrado no está cifrado en el formato interno (instalación legacy/R2).', 501);
         }
-        const role = url.searchParams.get('role') || '';
-        const requestBy = url.searchParams.get('requestBy') || '';
-        if (role !== 'RECTORIA' && requestBy !== excuse.student_code) {
+        // Ronda 58 (F-3): el rol NO se autodeclara con ?role=RECTORIA (antes: cualquiera
+        // con token de operador leía el soporte de salud de cualquier estudiante —
+        // dato especial, art. 3(o) Ley 1581). Rectoría = token/identidad ADMIN resuelto
+        // en servidor; estudiante dueño = identidad con linkedStudentCode verificado.
+        if (!isAdmin && ownStudentCode !== excuse.student_code) {
           return jsonErr('El soporte solo puede ser visto por Rectoría o el estudiante dueño de la excusa (Ley 1581, dato especial).', 403);
         }
         const key = await importAttachmentKey(env);
@@ -511,12 +550,13 @@ export async function handleExcusesRoutes(request: Request, env: Env, url: URL, 
         try { body = await request.json(); } catch { return jsonErr('JSON inválido en el cuerpo de la petición.'); }
         const newStatus = String(body.status || '').trim();
         const reviewedBy = String(body.reviewedBy || '').trim();
-        const reviewedByRole = String(body.reviewedByRole || '').trim();
 
-        // R5: solo Rectoría decide (verificación en servidor del rol declarado;
-        // el gate de transporte lo da AUTH_TOKEN cuando el propietario lo active)
-        if (reviewedByRole !== 'RECTORIA') {
-          return jsonErr('Solo el rol Rectoría puede aprobar o rechazar excusas (R5).', 403);
+        // R5: solo Rectoría decide. Ronda 58 (F-3): el rol YA NO se autodeclara con
+        // `reviewedByRole` del body — se resuelve del token/identidad verificados
+        // (resolveAuthz). Antes, cualquier poseedor del token de OPERADOR podía
+        // aprobar/rechazar cualquier excusa declarándose 'RECTORIA'.
+        if (!isAdmin) {
+          return jsonErr('Solo el rol Rectoría puede aprobar o rechazar excusas (R5). El rol se resuelve de la sesión verificada, no del cuerpo del request (Ronda 58).', 403);
         }
         if (!reviewedBy) return jsonErr('Indica el usuario de Rectoría que decide (reviewedBy).', 400);
         if (newStatus !== 'APROBADA' && newStatus !== 'RECHAZADA') {

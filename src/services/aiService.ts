@@ -116,9 +116,10 @@ export class AiService {
         }
       } else if (p === 'gemini') {
         const targetModel = model || 'gemini-2.5-flash';
-        const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${targetModel}:generateContent?key=${trimmedKey}`, {
+        const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${targetModel}:generateContent`, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          // Ronda 58 (F-15): clave en el header oficial, no en la query string.
+          headers: { 'Content-Type': 'application/json', 'x-goog-api-key': trimmedKey },
           body: JSON.stringify({
             contents: [{ parts: [{ text: 'ping' }] }],
             generationConfig: { maxOutputTokens: 5 }
@@ -356,7 +357,10 @@ export class AiService {
         }
       }
     } else if (provider === 'gemini') {
-      const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${apiKey}`);
+      // Ronda 58 (F-15): clave en el header oficial, no en la query string.
+      const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models`, {
+        headers: { 'x-goog-api-key': apiKey }
+      });
       if (res.ok) {
         const data = await res.json();
         if (Array.isArray(data.models)) {
@@ -645,10 +649,11 @@ Responde SIEMPRE en formato JSON con la siguiente estructura exacta:
       const candidateModels = [params.model || 'gemini-2.5-flash', 'gemini-2.0-flash'];
       for (const modelName of candidateModels) {
         try {
-          const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${apiKey}`;
+          const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent`;
           const resp = await fetch(geminiUrl, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            // Ronda 58 (F-15): clave en el header oficial, no en la query string.
+            headers: { 'Content-Type': 'application/json', 'x-goog-api-key': apiKey },
             body: JSON.stringify({
               system_instruction: { parts: [{ text: systemPrompt }] },
               contents: [{ role: 'user', parts: [{ text: userPrompt }] }],
@@ -766,10 +771,11 @@ Si la imagen no contiene datos de estudiantes, devuelve {"students": []}. No inc
     // Gemini REST con inlineData (multimodal)
     if (provider === 'gemini') {
       const visionModel = (settings.aiVisionModel || '').trim() || 'gemini-2.5-flash';
-      const url = `https://generativelanguage.googleapis.com/v1beta/models/${visionModel}:generateContent?key=${apiKey}`;
+      const url = `https://generativelanguage.googleapis.com/v1beta/models/${visionModel}:generateContent`;
       const resp = await fetch(url, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        // Ronda 58 (F-15): clave en el header oficial, no en la query string.
+        headers: { 'Content-Type': 'application/json', 'x-goog-api-key': apiKey },
         body: JSON.stringify({
           contents: [{
             role: 'user',

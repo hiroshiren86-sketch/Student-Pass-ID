@@ -2,6 +2,7 @@ import { Student, Teacher, AttendanceRecord, ClassScheduleAssignment, SchoolSett
 import { AttendanceStorageService } from './attendanceStorage';
 import { FirebaseService } from './firebase';
 import { compressDataUrl, PHOTO_DATAURL_SOFT_LIMIT } from '../utils/imageCompressor';
+import { generateHmacSignature } from '../utils/crypto';
 
 export interface CloudflareSyncResult {
   success: boolean;
@@ -62,6 +63,26 @@ export class CloudflareSyncService {
     if (settings.cloudflareAutoSync !== false && settings.cloudflareWorkerUrl) {
       const intervalMs = (settings.cloudflareSyncIntervalMinutes || 5) * 60 * 1000;
       this.autoSyncTimer = setInterval(() => {
+        // Ronda 58 (F-11): el PUSH automático SOLO corre si hay ediciones locales sin
+        // subir (sello dirty de Ronda 57) o es sesión ADMIN (que además baja). Antes,
+        // CADA terminal reescribía el snapshot completo cada 5 min aunque NADA hubiera
+        // cambiado: 20 terminales × 288 ciclos/día ≈ 2.9M rows written/día contra un
+        // cupo de 100 000/día de D1 (límite DURO desde el 01/09/2026) y 1 000
+        // escrituras/día de KV. Un dispositivo idle ahora consume CUOTA CERO de
+        // escritura. El push MANUAL (botón Sincronizar) siempre corre.
+        const dirty = AttendanceStorageService.getLocalSyncDirty();
+        const sessionNow = AttendanceStorageService.getCurrentSession();
+        if (!dirty) {
+          // Nada que publicar. Rectoría (ADMIN) mantiene la convergencia hacia ABAJO
+          // con un Pull (lecturas baratas, CERO escrituras en la nube); el resto de
+          // perfiles no hace nada en este ciclo — un dispositivo idle consume cuota 0.
+          if (sessionNow?.role === 'ADMIN') {
+            this.pullFromCloudflare().catch(() => {
+              /* sin red: el próximo ciclo reintenta */
+            });
+          }
+          return;
+        }
         this.performCloudflareSync().then(async (pushResult) => {
           // Ronda 56 — CONVERGENCIA COMPLETA PARA RECTORÍA: tras el push (que ya subió
           // TODO el estado local — sin ventana de pérdida), se hace un Pull COMPLETO.
@@ -118,20 +139,29 @@ export class CloudflareSyncService {
   }
 
   /**
-   * Ronda 54 (hueco #2) — opId determinista: hash FNV-1a de un string de identidad de
-   * operación. No criptográfico (no es un secreto): solo garantiza que el mismo push
-   * produce el mismo opId para deduplicar reintentos. Estable entre recargas y llamadas.
+   * Ronda 54 (hueco #2) → Ronda 58 (F-12): opId determinista por CONTENIDO.
+   *
+   * ANTES: FNV-1a de 32 bits sobre CONTEOS (colegio + students.length + records.length
+   * + catalogVersion + device + force). Dos pushes del mismo dispositivo con los MISMOS
+   * conteos pero contenido DISTINTO (borrar un registro y crear otro, editar sin cambiar
+   * conteos) colisionaban → el segundo se descartaba EN SILENCIO en el Worker
+   * (`deduplicated:true`) — pérdida de datos por diseño.
+   *
+   * AHORA: SHA-256 (WebCrypto, ya en el repo) del payload canónico: los mismos datos
+   * → mismo opId (reintento idempotente); cualquier cambio real → opId distinto.
+   * Estable entre recargas y llamadas.
    */
-  private static makeOpId(seed: string): string {
-    let h = 0x811c9dc5;
-    for (let i = 0; i < seed.length; i++) {
-      h ^= seed.charCodeAt(i);
-      h = Math.imul(h, 0x01000193);
+  private static async makeOpId(payload: unknown): Promise<string> {
+    const enc = new TextEncoder();
+    let canonical: string;
+    try {
+      canonical = JSON.stringify(payload);
+    } catch {
+      canonical = String(Date.now()); // payload no serializable: opId único (jamás dedup)
     }
-    const hex = (h >>> 0).toString(16).padStart(8, '0');
-    // Añadir un sufijo de longitud de seed para reducir colisiones triviales entre
-    // estados con los mismos conteos pero contenido distinto (el push es snapshot).
-    return `op-${hex}-${seed.length.toString(16)}`;
+    const digest = await window.crypto.subtle.digest('SHA-256', enc.encode(canonical));
+    const hex = Array.from(new Uint8Array(digest)).map(b => b.toString(16).padStart(2, '0')).join('');
+    return `op-${hex.substring(0, 32)}`;
   }
 
   /**
@@ -246,27 +276,65 @@ export class CloudflareSyncService {
   private static async sanitizeStudentsForSync(students: Student[]): Promise<{ clean: Student[]; omitted: string[] }> {
     const omitted: string[] = [];
     const clean: Student[] = [];
+    // Ronda 58 (F-23): el secret institucional con el que se calcula el verificador
+    // de credenciales. ANTES: el push subía la ficha COMPLETA con tempPassword en
+    // claro → cualquier poseedor del snapshot (docente, token de operador) tenía la
+    // clave impresa de TODOS los estudiantes. AHORA: la clave viaja SOLO como
+    // tempPasswordVerifier = HMAC-SHA256(qrSecret, "code|password") (32 hex) y los
+    // docentes viajan despojados de password/passwordHash/tempPassword (ningún flujo
+    // del cliente los compara: el login docente es Firebase Auth).
+    // Límite honesto documentado: no es un KDF y no resiste ataque offline de quien
+    // tenga el snapshot Y el qrSecret (que viaja en el mismo snapshot por decisión del
+    // propietario). La verificación FUERTE sigue siendo Firebase Auth (R50).
+    const settings = AttendanceStorageService.getSettings();
+    const secretForVerifier = settings.qrSecret || '';
 
     for (const st of students) {
+      let entry: Student = st;
       const photo = st.photoUrl || '';
-      if (!photo || photo.length <= PHOTO_DATAURL_SOFT_LIMIT) {
-        clean.push(st);
-        continue;
+      if (photo && photo.length > PHOTO_DATAURL_SOFT_LIMIT) {
+        // Foto heredada sin comprimir: comprimir, persistir y usar la versión liviana
+        const compressed = await compressDataUrl(photo);
+        if (compressed) {
+          entry = { ...st, photoUrl: compressed };
+          AttendanceStorageService.updateStudent(st.code, { photoUrl: compressed });
+        } else {
+          const { photoUrl: _drop, ...rest } = st;
+          entry = rest as Student;
+          omitted.push(`${st.firstName} ${st.lastName} (${st.code})`);
+        }
       }
-      // Foto heredada sin comprimir: comprimir, persistir y usar la versión liviana
-      const compressed = await compressDataUrl(photo);
-      if (compressed) {
-        const fixed = { ...st, photoUrl: compressed };
-        AttendanceStorageService.updateStudent(st.code, { photoUrl: compressed });
-        clean.push(fixed);
-      } else {
-        const { photoUrl: _drop, ...rest } = st;
-        clean.push(rest as Student);
-        omitted.push(`${st.firstName} ${st.lastName} (${st.code})`);
+      // F-23: egreso de credenciales — verificador en lugar de la clave en claro.
+      if (entry.tempPassword && secretForVerifier) {
+        const verifier = await generateHmacSignature(`${entry.code}|${entry.tempPassword}`, secretForVerifier);
+        const { tempPassword: _tp, password: _pw, passwordHash: _ph, ...rest } = entry as any;
+        void _tp; void _pw; void _ph;
+        entry = { ...rest, tempPasswordVerifier: verifier } as Student;
+      } else if (entry.tempPassword) {
+        // Sin secret local no se puede calcular el verificador: JAMÁS se sube la clave
+        // en claro como fallback (Regla 6). La ficha sube sin credencial; los otros
+        // terminales ven "sin clave asignada" hasta que Rectoría sincronice con secret.
+        const { tempPassword: _tp, password: _pw, passwordHash: _ph, ...rest } = entry as any;
+        void _tp; void _pw; void _ph;
+        entry = rest as Student;
       }
+      clean.push(entry);
     }
 
     return { clean, omitted };
+  }
+
+  /**
+   * Ronda 58 (F-23): los docentes viajan DESPOJADOS de credenciales en el push.
+   * Ningún flujo del cliente compara password/passwordHash/tempPassword del docente
+   * (el login docente es Firebase Auth desde R33) — eran solo superficie de fuga.
+   */
+  private static sanitizeTeachersForSync(teachers: Teacher[]): Teacher[] {
+    return teachers.map((t: any) => {
+      const { password: _pw, passwordHash: _ph, tempPassword: _tp, ...rest } = t;
+      void _pw; void _ph; void _tp;
+      return rest as Teacher;
+    });
   }
 
   /** Copia de settings SIN secretos para el snapshot (deuda de seguridad de Ronda 4 cerrada) */
@@ -324,11 +392,21 @@ export class CloudflareSyncService {
       const records = AttendanceStorageService.getAllAttendance();
       const { clean: safeStudents, omitted } = await this.sanitizeStudentsForSync(students);
 
-      // Ronda 54 (hueco #2): opId ESTABLE por push — hash determinista de la identidad de
-      // la operación (colegio + conteos + versión de catálogo + device + force). Un reitero
-      // del MISMO push produce el mismo opId → el Worker lo deduce y no duplica. Si el estado
-      // cambia (nuevo escaneo), el opId cambia y se aplica como operación nueva.
-      const opId = this.makeOpId(`${settings.schoolCode}|${safeStudents.length}|${records.length}|${settings.cloudflareCatalogVersion ?? 0}|${this.getDeviceId()}|${force}`);
+      // Ronda 54 (hueco #2) + Ronda 58 (F-12): opId ESTABLE por push — SHA-256 del
+      // CONTENIDO (catálogo + hechos + device + force). Un reitero del MISMO estado
+      // produce el mismo opId → el Worker lo deduce y no duplica. Cualquier cambio
+      // REAL del contenido cambia el opId y se aplica como operación nueva (antes:
+      // hash de 32 bits sobre CONTEOS → colisiones que perdían pushes en silencio).
+      const pushTeachers = this.sanitizeTeachersForSync(AttendanceStorageService.getTeachers());
+      const opId = await this.makeOpId({
+        schoolCode: settings.schoolCode || 'INAS_2026',
+        deviceId: this.getDeviceId(),
+        force,
+        catalogVersion: settings.cloudflareCatalogVersion ?? 0,
+        students: safeStudents.map((s: any) => `${s.code}@${s.updatedAt || s.createdAt || ''}`),
+        teachers: pushTeachers.map((t: any) => `${t.id}@${t.updatedAt || ''}`),
+        records: records.map((r: any) => `${r.id}@${r.updatedAt || r.timestamp}`)
+      });
 
       const payload = {
         schoolCode: settings.schoolCode || 'INAS_2026',
@@ -345,8 +423,13 @@ export class CloudflareSyncService {
         data: {
           settings: this.safeSettingsCopy(settings),
           students: safeStudents,
-          teachers: AttendanceStorageService.getTeachers(),
-          records: records.slice(0, 500), // Últimos 500 registros
+          teachers: pushTeachers,
+          // Ronda 58 (F-11): RETIRADO el slice(0,500). El cap cortaba registros del
+          // push (y el Worker ya fusiona por id+updatedAt desde R53, así que subir el
+          // histórico completo es seguro y aditivo). El límite real pasa a ser el
+          // almacenamiento local del navegador; cuando la escala lo exija, la ruta
+          // correcta es el push de hechos por fila (/api/attendance con opId).
+          records: records,
           assignments: AttendanceStorageService.getScheduleAssignments(),
           slots: AttendanceStorageService.getScheduleSlots(),
           // Ronda 4 (F1/F5): plantillas CUSTOM de Rectoría + horarios personales opcionales.
@@ -528,6 +611,14 @@ export class CloudflareSyncService {
       if (value === undefined || value === null || value === '') continue; // vacío no pisa
       if (key === 'qrSecret' && typeof value !== 'string') continue;
       if (JSON.stringify((current as any)[key]) !== JSON.stringify(value)) {
+        // Ronda 58 (F-23): al rotar el qrSecret institucional, el anterior pasa a
+        // legacyQrSecret — los tempPasswordVerifier firmados con el secret viejo
+        // siguen verificando durante la transición (verifyStudentCredential prueba
+        // ambos). Sin esto, una rotación dejaba a todos los estudiantes sin login
+        // local hasta que Rectoría re-emitiera claves.
+        if (key === 'qrSecret' && typeof current.qrSecret === 'string' && current.qrSecret) {
+          (merged as any).legacyQrSecret = current.qrSecret;
+        }
         merged[key] = value;
         changed++;
       }

@@ -27,7 +27,11 @@
     (globalThis as any).window = globalThis;
   }
 })();
-setTimeout(() => { console.log('⏱ TIMEOUT GLOBAL DE LA SUITE LOCAL'); process.exit(2); }, 90000);
+// Ronda 58 (F-19): el watchdog se GUARDA y se limpia al terminar. Antes quedaba
+// vivo 90 s tras el último check → la suite imprimía "TIMEOUT GLOBAL" y terminaba
+// con exit code 2 AUNQUE los 51 checks estuvieran en verde (CI siempre rojo).
+const SUITE_WATCHDOG = setTimeout(() => { console.log('⏱ TIMEOUT GLOBAL DE LA SUITE LOCAL'); process.exit(2); }, 90000);
+if (typeof SUITE_WATCHDOG.unref === 'function') SUITE_WATCHDOG.unref();
 
 let passed = 0, failed = 0;
 const failures: string[] = [];
@@ -42,7 +46,7 @@ async function section(title: string, fn: () => Promise<void> | void) {
 }
 
 const crypto = await import('../src/utils/crypto');
-const { AttendanceStorageService, schoolYearEndEpochMs, getCurrentTimeString } = await import('../src/services/attendanceStorage');
+const { AttendanceStorageService, schoolYearEndEpochMs, getCurrentTimeString, getTodayDateString } = await import('../src/services/attendanceStorage');
 const svc = AttendanceStorageService;
 
 function timePlus(minutes: number): string {
@@ -76,7 +80,9 @@ await section('B — protocolo CLASE:v2 (generador + parser)', async () => {
   const parts = payload.split(':');
   check('B1 formato: prefijo + 6 partes exactas', payload.startsWith('CLASE:v2:') && parts.length === 6);
   check('B2 teacherId y slug viajan en el token', parts[2] === 'prof-1788591549776' && parts[3] === 'lengua-castellana');
-  check('B3 firma 16 hex', !!parts[5] && /^[0-9a-f]{16}$/.test(parts[5]));
+  // Ronda 58 (F-13): la firma viaja a 32 hex (128 bits); el parser además acepta
+  // las legacy de 16 hex de carnés ya impresos (transición).
+  check('B3 firma 32 hex (128 bits)', !!parts[5] && /^[0-9a-f]{32}$/.test(parts[5]));
 
   const ok = await crypto.parseAndVerifyTeacherCard(payload, secret);
   check('B4 parse válido', ok.isTeacherCard && ok.isValidFormat && ok.isSignatureValid === true && !ok.isExpired);
@@ -211,6 +217,10 @@ await section('C — setActiveTeacherCard (orden de validación §2.2)', async (
 });
 
 await section('D — registerScan con clase v2 activa (sin gate de grado)', async () => {
+  // Ronda 58 (F-1): esta sección ejercita el flujo USB-HID de códigos 1D PLANOS →
+  // corre con la política de carné firmado DESACTIVADA (modo legado explícito, igual
+  // que un colegio que opera con lectores 1D). La política ACTIVADA se prueba en E.
+  svc.saveSettings({ ...svc.getSettings(), requireSignedCards: false }, false);
   const settings = svc.getSettings();
   const exp = schoolYearEndEpochMs();
   const secret = settings.qrSecret;
@@ -260,6 +270,100 @@ await section('D — registerScan con clase v2 activa (sin gate de grado)', asyn
   check('D9 clearActiveClass apaga el contexto', svc.getActiveClass() === null);
 });
 
+// =====================================================================
+// Ronda 58 (F-1) — POLÍTICA DE VERIFICACIÓN DEL CARNÉ EN EL PUNTO DE ESCANEO
+// Los 4 casos que la auditoría pidió explícitos: forjado → rechazado;
+// vencido → rechazado; plano con política ON → rechazado; plano con política
+// OFF → aceptado con verifiedHmac:false (honesto). Más: firma válida → aceptado
+// con verifiedHmac:true, y COL_ASIS legado → honesto (nunca auto-válido).
+// =====================================================================
+await section('E — Ronda 58 (F-1): política de carné firmado en el escaneo', async () => {
+  const settings = svc.getSettings();
+  const secret = settings.qrSecret;
+  svc.saveSettings({ ...settings, requireSignedCards: true }, false);
+  (svc as any).getSchoolDayWindow = () => ({ start: '00:00', end: '23:59', startMin: 0, endMin: 1439 });
+
+  const std = { code: '3000000003', documentId: '3000000003', firstName: 'Prueba', lastName: 'Firma', grade: '10°3', section: '3', active: true, createdAt: new Date().toISOString() };
+  svc.saveStudents([std] as any);
+  svc.saveScheduleSlots([
+    { id: 'slot-r58-e', order: 1, type: 'CLASS', name: '1ª Hora', startTime: timePlus(-10), endTime: timePlus(+40), durationMinutes: 50 }
+  ] as any);
+
+  // E1: carné FIRMADO CON SECRET AJENO (forjado) → rechazado, NO se registra
+  const forged = await crypto.generateStudentQrPayload(std as any, 'secret-de-otra-institucion');
+  const rForged = await svc.registerScan({ scanInput: forged, method: 'CAMERA' });
+  check('E1 carné forjado (secret ajeno) → RECHAZADO', rForged.type === 'invalid_signature', JSON.stringify(rForged).slice(0, 120));
+  check('E1b el forjado NO quedó registrado ni marcado verificado', !rForged.record);
+
+  // E2: carné VENCIDO firmado correctamente → rechazado
+  const expiredData = `IEDSJ:v1:${std.code}:${std.documentId}:${std.grade}:${std.section}:${Date.now() - 1000}:`;
+  const expiredSig = await crypto.generateHmacSignature(`${std.code}|${std.documentId}|${std.grade}|${std.section}|${Date.now() - 1000}`, secret);
+  const expiredCard = expiredData + expiredSig;
+  const rExpired = await svc.registerScan({ scanInput: expiredCard, method: 'CAMERA' });
+  check('E2 carné vencido → RECHAZADO', rExpired.type === 'invalid_signature');
+
+  // E3: código PLANO (1D/tecleado) con política ON → rechazado
+  const rPlainOn = await svc.registerScan({ scanInput: std.code, method: 'USB' });
+  check('E3 código plano con política ON → RECHAZADO', rPlainOn.type === 'invalid_signature');
+
+  // E4: COL_ASIS legado → parser honesto (jamás isSignatureValid:true)
+  const colAsis = await crypto.parseAndVerifyScan('COL_ASIS:v1:3000000003:extra', secret);
+  check('E4 COL_ASIS legado → isSignatureValid FALSE (fin del formato que se auto-validaba)', colAsis.isSigned === true && colAsis.isSignatureValid === false && colAsis.reason === 'LEGACY_COL_ASIS');
+
+  // E5: carné VÁLIDO firmado con el secret institucional → aceptado + verifiedHmac TRUE
+  const valid = await crypto.generateStudentQrPayload(std as any, secret);
+  const rValid = await svc.registerScan({ scanInput: valid, method: 'CAMERA' });
+  check('E5 carné válido → registrado con verifiedHmac TRUE', (rValid.type === 'success_punctual' || rValid.type === 'success_tardy') && rValid.record?.verifiedHmac === true, JSON.stringify(rValid).slice(0, 140));
+
+  // E6: firma legacy de 16 hex (carnés impresos pre-R58) sigue verificando
+  const legacyParts = valid.split(':');
+  const legacyCard = [...legacyParts.slice(0, 7), legacyParts[7].slice(0, 16)].join(':');
+  const legacyParse = await crypto.parseAndVerifyScan(legacyCard, secret);
+  check('E6 firma legacy 16 hex → verifica (transición)', legacyParse.isSignatureValid === true && legacyParse.reason === 'OK');
+
+  // E7: política OFF → el código plano se acepta PERO con verifiedHmac FALSE (honesto)
+  svc.saveSettings({ ...svc.getSettings(), requireSignedCards: false }, false);
+  // limpiar unicidad del E5: nuevo estudiante/bloque para el caso plano
+  const std2 = { code: '4000000004', documentId: '4000000004', firstName: 'Plano', lastName: 'Legado', grade: '10°3', section: '3', active: true, createdAt: new Date().toISOString() };
+  svc.saveStudents([std, std2] as any);
+  const rPlainOff = await svc.registerScan({ scanInput: std2.code, method: 'USB' });
+  check('E7 código plano con política OFF → aceptado y verifiedHmac FALSE', (rPlainOff.type === 'success_punctual' || rPlainOff.type === 'success_tardy') && rPlainOff.record?.verifiedHmac === false);
+
+  // E8: forjado con política OFF → registrado PERO verifiedHmac FALSE (nunca "VÁLIDO")
+  const forged2 = await crypto.generateStudentQrPayload({ ...std, code: '5000000005', documentId: '5000000005' } as any, 'secret-ajeno');
+  svc.saveStudents([std, std2, { code: '5000000005', documentId: '5000000005', firstName: 'Forjado', lastName: 'Legado', grade: '10°3', section: '3', active: true, createdAt: new Date().toISOString() }] as any);
+  const rForgedOff = await svc.registerScan({ scanInput: forged2, method: 'CAMERA' });
+  check('E8 forjado con política OFF → aceptado PERO verifiedHmac FALSE (evidencia honesta)', (rForgedOff.type === 'success_punctual' || rForgedOff.type === 'success_tardy') && rForgedOff.record?.verifiedHmac === false);
+
+  // E9 (F-9): auto-cierre con ID DETERMINISTA — dos dispositivos que cierran el
+  // MISMO bloque producen registros con IDs IDÉNTICOS → el merge de la nube los
+  // deduplica por id en vez de SUMAR dos series de AUSENTE (planillas infladas).
+  // El estudiante 6000000006 NO tiene ningún escaneo: es quien recibirá el AUSENTE.
+  svc.saveStudents([std, std2, { code: '5000000005', documentId: '5000000005', firstName: 'Forjado', lastName: 'Legado', grade: '10°3', section: '3', active: true, createdAt: new Date().toISOString() }, { code: '6000000006', documentId: '6000000006', firstName: 'Ausente', lastName: 'Prueba', grade: '10°3', section: '3', active: true, createdAt: new Date().toISOString() }] as any);
+  const todayE9 = getTodayDateString();
+  await svc.closeBlockAttendance({ grade: '10°3', slotId: 'slot-r58-e', subject: 'Prueba', dateStr: todayE9, forceClose: true });
+  const idsClose1 = svc.getAllAttendance()
+    .filter(r => r.slotId === 'slot-r58-e' && r.method === 'AUTO_CIERRE')
+    .map(r => r.id).sort();
+  // Simula el SEGUNDO dispositivo: no conoce los AUSENTEs del primero, cierra igual
+  svc.saveAttendance(svc.getAllAttendance().filter(r => !(r.slotId === 'slot-r58-e' && r.method === 'AUTO_CIERRE')));
+  await svc.closeBlockAttendance({ grade: '10°3', slotId: 'slot-r58-e', subject: 'Prueba', dateStr: todayE9, forceClose: true });
+  const idsClose2 = svc.getAllAttendance()
+    .filter(r => r.slotId === 'slot-r58-e' && r.method === 'AUTO_CIERRE')
+    .map(r => r.id).sort();
+  check('E9 dos cierres del mismo bloque → IDs IDÉNTICOS (merge deduplica, no suma)', idsClose1.length > 0 && JSON.stringify(idsClose1) === JSON.stringify(idsClose2), `n=${idsClose1.length}`);
+  check('E9b formato determinista rec-autoclose-<fecha>-<bloque>-<estudiante>', idsClose2.every(id => id.startsWith(`rec-autoclose-${todayE9}-slot-r58-e-`)));
+  check('E9c registros de auto-cierre SIN verifiedHmac falso', svc.getAllAttendance().filter(r => r.method === 'AUTO_CIERRE').every(r => r.verifiedHmac === false));
+
+  // E10 (F-22): getCurrentTimeString jamás devuelve hora "24:xx"
+  const nowStr = getCurrentTimeString();
+  check('E10 reloj h23: la hora jamás empieza por "24"', !nowStr.startsWith('24'), nowStr);
+
+  // restaurar política para no contaminar a otras suites que compartan storage
+  svc.saveSettings({ ...svc.getSettings(), requireSignedCards: true }, false);
+});
+
+clearTimeout(SUITE_WATCHDOG);
 console.log(`\n══════════════════════════════════════`);
 console.log(`  RESULTADO: ${passed} OK · ${failed} FALLO`);
 if (failures.length) {
@@ -268,3 +372,4 @@ if (failures.length) {
   process.exit(1);
 }
 console.log('  SUITE RONDA 43 EN VERDE');
+process.exit(0);

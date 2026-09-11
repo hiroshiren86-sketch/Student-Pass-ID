@@ -35,7 +35,7 @@ import {
   INITIAL_SCHEDULE_ASSIGNMENTS,
   DAY_TEMPLATES_DEFINITIONS
 } from './mockData';
-import { parseAndVerifyScan, parseAndVerifyClassScan, parseAndVerifyTeacherCard, slugifySubject, prettifySubjectSlug } from '../utils/crypto';
+import { parseAndVerifyScan, parseAndVerifyClassScan, parseAndVerifyTeacherCard, slugifySubject, prettifySubjectSlug, generateHmacSignature } from '../utils/crypto';
 import { isValidGrade } from '../utils/documentParser';
 import { FirebaseService } from './firebase';
 import { SEED_DEMO_ON_FIRST_LAUNCH } from './demoConfig';
@@ -59,6 +59,7 @@ const STUDENT_SCHEDULES_KEY = 'inas_student_schedules_v1'; // Ronda 4 (F4): hora
 const ACTIVE_CLASS_KEY = 'inas_active_class_v1'; // Ronda 19: QR de Clase — contexto de clase activa POR DISPOSITIVO
 const TOMBSTONES_KEY = 'inas_tombstones_v1'; // Ronda 54 (hueco #5): marca de borrado que se PROPAGA (soft-delete)
 const LOCAL_SYNC_DIRTY_KEY = 'inas_local_sync_dirty_v1'; // Ronda 57: sello de "hay ediciones locales SIN SUBIR a la nube"
+const QRSECRET_MIRROR_KEY = 'inas_qrsecret_mirror_v1'; // Ronda 58 (F-10): espejo anti-corrupción del secret institucional
 
 /**
  * Ronda 19 — QR de Clase: helper de tiempo Bogotá. Convierte "HH:mm" de hoy a epoch ms
@@ -89,12 +90,17 @@ export function getTodayDateString(): string {
 
 export function getCurrentTimeString(): string {
   const d = new Date();
-  const options: Intl.DateTimeFormatOptions = { 
-    timeZone: 'America/Bogota', 
-    hour: '2-digit', 
-    minute: '2-digit', 
+  // Ronda 58 (F-22): hourCycle:'h23' EXPLÍCITO. Con `hour12: false` algunos runtimes
+  // usan el ciclo h24 heredado de ICU/CLDR y entre las 00:00 y las 00:59 formatean
+  // "24:37:19" — con eso maybeAutoCloseDay cerraba el día RECÉN estrenado (todo el
+  // curso AUSENTE con sello de cierre) y getCurrentActiveSlot respondía "no hay
+  // clase en curso". 'h23' es la única forma 0–23 en TODOS los runtimes.
+  const options: Intl.DateTimeFormatOptions = {
+    timeZone: 'America/Bogota',
+    hour: '2-digit',
+    minute: '2-digit',
     second: '2-digit',
-    hour12: false 
+    hourCycle: 'h23'
   };
   const formatter = new Intl.DateTimeFormat('es-CO', options);
   return formatter.format(d);
@@ -139,8 +145,45 @@ export class AttendanceStorageService {
     };
   }
 
-  private static notify() {
+  private static notify(invalidateReads = true) {
+    // Ronda 58 (F-10): por defecto toda notificación invalida los caches de lectura
+    // (la próxima lectura reconstruye desde localStorage) — es el único punto de
+    // invalidación necesario porque TODA escritura de colecciones pasa por los save*
+    // del servicio o por un setItem directo seguido de notify() (verificado por grep:
+    // cero setItem directos a las llaves de colección fuera de este archivo). Los
+    // save* pasan invalidateReads=false porque ya hicieron WRITE-THROUGH (el array
+    // persistido ES el cache válido — evitar re-parsear ~3 MB en el próximo escaneo).
+    if (invalidateReads) this.invalidateReadCaches();
     this.listeners.forEach(cb => cb());
+  }
+
+  // ==================== RONDA 58 (F-10) — CACHE DE LECTURA ====================
+  // Medición de la auditoría (perf-probe, 1 500 estudiantes / 15 000 registros):
+  // UN escaneo hacía 9 lecturas + 3 escrituras y 6.9 MB de JSON serializado
+  // (61.5 ms en Node; más lento en un teléfono real) porque CADA getter re-parseaba
+  // la colección completa. Este cache en memoria elimina el parseo repetido: la
+  // primera lectura de cada colección parsea y las demás (el mismo tick de escaneo
+  // llama getSettings/getStudents/getAllAttendance/getScheduleSlots varias veces)
+  // cuestan O(1). Invariantes:
+  //   - Se invalida en notify() → toda escritura del servicio limpia el cache.
+  //   - Los arrays devueltos son EL cache vivo (mutarlos sin pasar por el save*
+  //     correspondiente es un bug del llamador — exactamente igual que hoy con el
+  //     array recién parseado).
+  //   - La recuperación de corruptos sigue siendo la de R27 (respaldo + vacío o
+  //     demo según SEED_DEMO_ON_FIRST_LAUNCH): el cache nunca "esconde" un fallo
+  //     de lectura porque el fallo se maneja dentro del propio getter ANTES de
+  //     cachear el resultado.
+  private static readCache: {
+    students: Student[] | null;
+    teachers: Teacher[] | null;
+    attendance: AttendanceRecord[] | null;
+    slots: ScheduleSlot[] | null;
+    assignments: ClassScheduleAssignment[] | null;
+    settings: SchoolSettings | null;
+  } = { students: null, teachers: null, attendance: null, slots: null, assignments: null, settings: null };
+
+  private static invalidateReadCaches(): void {
+    this.readCache = { students: null, teachers: null, attendance: null, slots: null, assignments: null, settings: null };
   }
 
   // ==================== USER SESSION (GUARD & PERSISTENCE) ====================
@@ -215,23 +258,54 @@ export class AttendanceStorageService {
   }
 
   static getSettings(): SchoolSettings {
+    // Ronda 58 (F-10): cache de lectura — getSettings se llama varias veces por
+    // render y por escaneo; el parseo repetido era parte de los 6.9 MB/escaneo.
+    if (this.readCache.settings !== null) return this.readCache.settings;
     try {
       const stored = localStorage.getItem(SETTINGS_KEY);
       if (stored) {
         const parsed = JSON.parse(stored);
         if (parsed && parsed.schoolName) {
           // Merge with defaults for any newly introduced keys
-          return {
+          const merged: SchoolSettings = {
             ...DEFAULT_SCHOOL_SETTINGS,
             ...parsed,
             cloudflareWorkerUrl: parsed.cloudflareWorkerUrl || DEFAULT_SCHOOL_SETTINGS.cloudflareWorkerUrl
           };
+          // Ronda 58 (F-2): un ajuste persistido SIN qrSecret (o con el default viejo
+          // hardcodeado del repo, conocido por cualquiera) se re-genera ALEATORIO aquí.
+          // Antes: el merge podía dejar el qrSecret del repo → carnés firmados con un
+          // secret público, verificables por cualquiera que leyera el código.
+          if (!merged.qrSecret || merged.qrSecret === 'INAS-HMAC-QR-SECRET-COL-2026' || merged.qrSecret === 'PROTOTYPE-HMAC-QR-SECRET-COL-2026') {
+            merged.qrSecret = this.generateRandomSecret();
+          }
+          this.readCache.settings = merged;
+          return merged;
         }
       }
-    } catch {}
+    } catch {
+      // Ronda 58 (F-10): JSON de ajustes CORRUPTO — antes este camino regeneraba el
+      // qrSecret EN SILENCIO y el dispositivo dejaba de verificar TODAS las firmas
+      // sin un solo error visible. Ahora se restaura del ESPEJO (llave diminuta,
+      // escrita en cada saveSettings, sobrevive a que el JSON grande se corrompa)
+      // y el fallo se registra alto; solo sin espejo se genera uno nuevo.
+      try {
+        const mirror = localStorage.getItem(QRSECRET_MIRROR_KEY);
+        if (mirror) {
+          console.error('[Settings] JSON corrupto — qrSecret restaurado del espejo (las firmas NO se pierden).');
+          const rescued: SchoolSettings = { ...DEFAULT_SCHOOL_SETTINGS, schoolName: 'Institución Educativa Antonia Santos (I.N.A.S)', qrSecret: mirror };
+          try { localStorage.setItem(SETTINGS_KEY, JSON.stringify(rescued)); } catch {}
+          this.readCache.settings = rescued;
+          return rescued;
+        }
+      } catch {}
+      console.error('[Settings] JSON corrupto y sin espejo de qrSecret — se genera un secret nuevo (Rectoría debe re-sincronizar con Pull).');
+    }
     // Primer arranque real (sin ajustes persistidos): qrSecret aleatorio, no el del repo
     const fresh: SchoolSettings = { ...DEFAULT_SCHOOL_SETTINGS, qrSecret: this.generateRandomSecret() };
     try { localStorage.setItem(SETTINGS_KEY, JSON.stringify(fresh)); } catch {}
+    try { localStorage.setItem(QRSECRET_MIRROR_KEY, fresh.qrSecret); } catch {}
+    this.readCache.settings = fresh;
     return fresh;
   }
 
@@ -254,7 +328,11 @@ export class AttendanceStorageService {
 
   static saveSettings(settings: SchoolSettings, syncToCloud = true): void {
     localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
-    this.notify();
+    // Ronda 58 (F-10): espejo del qrSecret en llave diminuta — sobrevive a la
+    // corrupción del JSON grande de settings (y a truncamientos de cuota parciales).
+    try { if (settings.qrSecret) localStorage.setItem(QRSECRET_MIRROR_KEY, settings.qrSecret); } catch {}
+    this.readCache.settings = settings; // R58 (F-10): write-through
+    this.notify(false);
 
     // Ronda 57 (INV-1): un guardado de ORIGEN LOCAL (con respaldo a la nube pendiente)
     // sella "edición sin subir" — los pulls no pueden pisar estos ajustes hasta que el
@@ -335,11 +413,14 @@ export class AttendanceStorageService {
 
   // ==================== STUDENTS ====================
   static getStudents(): Student[] {
+    // Ronda 58 (F-10): cache de lectura (invalidado por notify → toda escritura).
+    if (this.readCache.students !== null) return this.readCache.students;
     try {
       const stored = localStorage.getItem(STUDENTS_KEY);
       if (stored) {
         const parsed = JSON.parse(stored);
         if (Array.isArray(parsed) && parsed.length > 0) {
+          this.readCache.students = parsed;
           return parsed;
         }
       }
@@ -400,7 +481,8 @@ export class AttendanceStorageService {
       }
     } catch { /* la cuota o un JSON corrupto nunca deben impedir un guardado */ }
     localStorage.setItem(STUDENTS_KEY, JSON.stringify(students));
-    this.notify();
+    this.readCache.students = students; // R58 (F-10): write-through
+    this.notify(false);
   }
 
   static getUniqueGrades(): string[] {
@@ -455,7 +537,54 @@ export class AttendanceStorageService {
     }
     students.push(student);
     this.saveStudents(students);
+    // Ronda 58 (F-8): una RE-MATRÍCULA con el mismo código desactiva el tombstone
+    // local de ese código. Antes el comentario de Ronda 54 decía "se descarta el
+    // tombstone al re-crear" pero NADIE llamaba a clearTombstones → el código
+    // re-matriculado quedaba muerto para siempre en la nube (el Worker filtraba
+    // por id sin comparar fechas y la unión de tombstones lo re-añadía).
+    this.clearTombstones([student.code], 'student');
     return { success: true };
+  }
+
+  // ==================== RONDA 58 (F-23/F-18) — VERIFICACIÓN DE CREDENCIAL ====================
+  // Punto ÚNICO de verificación de la clave de acceso del estudiante, usado por
+  // LoginScreen y el Portal del Estudiante. Acepta:
+  //   1. La clave en claro SI este dispositivo la tiene (ficha local de Rectoría o
+  //      fichas creadas aquí) — comparación directa.
+  //   2. El VERIFICADOR HMAC (tempPasswordVerifier = HMAC(qrSecret, "code|password"))
+  //      que viaja en el snapshot desde R58 EN LUGAR de la clave en claro — es lo
+  //      único que tienen los terminales que recibieron la ficha por sync.
+  // Tolerancia a rotación: prueba qrSecret Y legacyQrSecret (el secret anterior).
+  // SIN fallback: una ficha sin clave ni verificador NO deja pasar a nadie
+  // (antes: el portal aceptaba 'SJ-2026'/'colegio2026'/el propio código — F-24).
+  static async verifyStudentCredential(student: { code: string; tempPassword?: string; tempPasswordVerifier?: string }, password: string): Promise<{ ok: boolean; reason: 'OK' | 'no_credential' | 'no_key' | 'mismatch'; message?: string }> {
+    const pass = String(password || '').trim();
+    if (!pass) {
+      return { ok: false, reason: 'no_credential', message: 'Ingresa la clave de acceso impresa en el reverso del carné.' };
+    }
+    // 1) Clave en claro local (si existe). Una clave personalizada en OTRO dispositivo
+    //    puede hacer que la local esté desactualizada → se sigue con el verificador.
+    if (student.tempPassword && pass === student.tempPassword) {
+      return { ok: true, reason: 'OK' };
+    }
+    // 2) Verificador HMAC institucional.
+    if (student.tempPasswordVerifier) {
+      const settings = this.getSettings();
+      const secrets = [settings.qrSecret, settings.legacyQrSecret].filter((s): s is string => !!s);
+      if (secrets.length === 0) {
+        return { ok: false, reason: 'no_key', message: 'Este dispositivo no tiene la clave institucional configurada. Sincroniza (Ajustes → Sync y Seguridad → Descargar Pull) e inténtalo de nuevo.' };
+      }
+      for (const secret of secrets) {
+        const expected = await generateHmacSignature(`${student.code}|${pass}`, secret);
+        if (expected === student.tempPasswordVerifier) {
+          return { ok: true, reason: 'OK' };
+        }
+      }
+    }
+    if (!student.tempPassword && !student.tempPasswordVerifier) {
+      return { ok: false, reason: 'no_credential', message: 'Este estudiante no tiene clave de acceso asignada. Solicítala en Rectoría (Carnés → Emitir/Reimprimir clave).' };
+    }
+    return { ok: false, reason: 'mismatch', message: 'Credenciales incorrectas. Verifica el código y la clave, o solicita una nueva clave en Rectoría.' };
   }
 
   static updateStudent(code: string, updates: Partial<Student>): boolean {
@@ -758,10 +887,15 @@ export class AttendanceStorageService {
 
   // ==================== TEACHERS (DOCENTES) ====================
   static getTeachers(): Teacher[] {
+    if (this.readCache.teachers !== null) return this.readCache.teachers; // R58 (F-10)
     try {
       const stored = localStorage.getItem(TEACHERS_KEY);
       if (stored) {
-        return JSON.parse(stored);
+        const parsed = JSON.parse(stored);
+        if (Array.isArray(parsed)) {
+          this.readCache.teachers = parsed;
+          return parsed;
+        }
       }
     } catch {
       // Ronda 27: respaldo del JSON corrupto antes de recuperar (jamás borrar sin copia).
@@ -782,7 +916,8 @@ export class AttendanceStorageService {
   static saveTeachers(teachers: Teacher[], origin: 'local' | 'cloud' | 'system' = 'local'): void {
     if (origin === 'local') this.markLocalSyncDirty(); // Ronda 57
     localStorage.setItem(TEACHERS_KEY, JSON.stringify(teachers));
-    this.notify();
+    this.readCache.teachers = teachers; // R58 (F-10): write-through
+    this.notify(false);
   }
 
   static getTeacherById(id: string): Teacher | undefined {
@@ -801,6 +936,8 @@ export class AttendanceStorageService {
     }
     teachers.push(teacher);
     this.saveTeachers(teachers);
+    // Ronda 58 (F-8): re-crear la ficha desactiva el tombstone local (re-contratación).
+    this.clearTombstones([teacher.id], 'teacher');
     return { success: true };
   }
 
@@ -1295,10 +1432,15 @@ export class AttendanceStorageService {
   }
 
   static getScheduleSlots(): ScheduleSlot[] {
+    if (this.readCache.slots !== null) return this.readCache.slots; // R58 (F-10)
     try {
       const stored = localStorage.getItem(SCHEDULE_SLOTS_KEY);
       if (stored) {
-        return JSON.parse(stored);
+        const parsed = JSON.parse(stored);
+        if (Array.isArray(parsed)) {
+          this.readCache.slots = parsed;
+          return parsed;
+        }
       }
     } catch {}
     this.saveScheduleSlots(DEFAULT_SCHEDULE_SLOTS, 'system'); // Ronda 57 (fix hueco #7): lazy-init NO sella
@@ -1308,10 +1450,12 @@ export class AttendanceStorageService {
   static saveScheduleSlots(slots: ScheduleSlot[], origin: 'local' | 'cloud' | 'system' = 'local'): void {
     if (origin === 'local') this.markLocalSyncDirty(); // Ronda 57
     localStorage.setItem(SCHEDULE_SLOTS_KEY, JSON.stringify(slots));
-    this.notify();
+    this.readCache.slots = slots; // R58 (F-10): write-through
+    this.notify(false);
   }
 
   static getScheduleAssignments(): ClassScheduleAssignment[] {
+    if (this.readCache.assignments !== null) return this.readCache.assignments; // R58 (F-10)
     try {
       const stored = localStorage.getItem(SCHEDULE_ASSIGNMENTS_KEY);
       if (stored) {
@@ -1324,6 +1468,7 @@ export class AttendanceStorageService {
           if (clean.length !== parsed.length) {
             try { localStorage.setItem(SCHEDULE_ASSIGNMENTS_KEY, JSON.stringify(clean)); } catch {}
           }
+          this.readCache.assignments = clean; // R58 (F-10): persistido == cache
           return clean;
         }
       }
@@ -1346,7 +1491,8 @@ export class AttendanceStorageService {
   static saveScheduleAssignments(assignments: ClassScheduleAssignment[], origin: 'local' | 'cloud' | 'system' = 'local'): void {
     if (origin === 'local') this.markLocalSyncDirty(); // Ronda 57
     localStorage.setItem(SCHEDULE_ASSIGNMENTS_KEY, JSON.stringify(assignments));
-    this.notify();
+    this.readCache.assignments = assignments; // R58 (F-10): write-through
+    this.notify(false);
   }
 
   static getScheduleForGrade(grade: string, dayOfWeek: number = 1): (ScheduleSlot & { assignment?: ClassScheduleAssignment })[] {
@@ -1802,10 +1948,15 @@ export class AttendanceStorageService {
 
   // ==================== ATTENDANCE RECORDS (CLASS BASED) ====================
   static getAllAttendance(): AttendanceRecord[] {
+    if (this.readCache.attendance !== null) return this.readCache.attendance; // R58 (F-10)
     try {
       const stored = localStorage.getItem(ATTENDANCE_KEY);
       if (stored) {
-        return JSON.parse(stored);
+        const parsed = JSON.parse(stored);
+        if (Array.isArray(parsed)) {
+          this.readCache.attendance = parsed;
+          return parsed;
+        }
       }
     } catch {
       // Ronda 27: respaldo del JSON corrupto antes de recuperar (jamás borrar sin copia).
@@ -1827,7 +1978,11 @@ export class AttendanceStorageService {
 
   static saveAttendance(records: AttendanceRecord[]): void {
     localStorage.setItem(ATTENDANCE_KEY, JSON.stringify(records));
-    this.notify();
+    // Ronda 58 (F-10): WRITE-THROUGH — el array recién persistido ES el cache
+    // válido (mismo contenido que storage). Sin esto, notify() invalidaba y el
+    // SIGUIENTE escaneo re-parseaba los ~3 MB de hechos (el costo que F-10 elimina).
+    this.readCache.attendance = records;
+    this.notify(false);
   }
 
   static getAttendanceByDate(dateStr: string = getTodayDateString()): AttendanceRecord[] {
@@ -2216,6 +2371,46 @@ export class AttendanceStorageService {
       };
     }
 
+    // =========================================================================
+    // Ronda 58 (F-1) — VERIFICACIÓN DE LA FIRMA DEL CARNÉ EN EL PUNTO ÚNICO DE
+    // REGISTRO. Antes: parseAndVerifyScan calculaba isSignatureValid/isExpired y
+    // NADIE los consultaba — un carné forjado (firma de otro secret) o VENCIDO se
+    // registraba como asistencia y quedaba en planilla/CSV como "Token QR Firmado
+    // (VÁLIDO)" (evidencia forense falsa). Ahora la política del dispositivo decide:
+    //
+    //   requireSignedCards !== false (DEFAULT):
+    //     - UNSIGNED        (código 1D plano / tecleado)     → RECHAZADO
+    //     - BAD_SIGNATURE   (firma de otro secret/alterada)  → RECHAZADO
+    //     - EXPIRED         (carné vencido)                  → RECHAZADO
+    //     - LEGACY_COL_ASIS (formato viejo sin criptografía) → RECHAZADO
+    //   requireSignedCards === false (modo legado explícito):
+    //     todo se acepta, pero verifiedHmac queda en false salvo firma VÁLIDA —
+    //     la planilla/CSV deja de afirmar verificaciones que no ocurrieron.
+    //
+    // Exención: presenceCapture === 'CLASS_UNLOCK_AUTO' (auto-registro del
+    // representante). Su autenticidad NO viene del carné sino del desbloqueo de la
+    // TARJETA DE DOCENTE firmada (CLASE:v2); el registro ya documenta honestamente
+    // verifiedHmac:false + presenceCapture (Ronda 46) — no es un bypass, es una
+    // captura con otra prueba de presencia.
+    // =========================================================================
+    if (settings.requireSignedCards !== false && params.presenceCapture !== 'CLASS_UNLOCK_AUTO') {
+      if (!parsed.isSigned || parsed.isSignatureValid !== true) {
+        const motivo = parsed.reason === 'EXPIRED'
+          ? 'El carné está VENCIDO. El estudiante debe solicitar reposición en Rectoría.'
+          : parsed.reason === 'BAD_SIGNATURE'
+            ? 'La firma HMAC no coincide: carné alterado o emitido por otra institución. Si es un error de configuración, verifica que el qrSecret de este terminal sea el institucional (Ajustes → Sync y Seguridad → Descargar Pull).'
+            : parsed.reason === 'LEGACY_COL_ASIS'
+              ? 'El carné usa el formato legado COL_ASIS (sin criptografía). Pide el carné digital firmado (QR) en Rectoría.'
+              : 'El código escaneado no es un carné firmado (código 1D plano o tecleo manual). Si tu colegio opera con lectores USB de código de barras 1D, desactiva "Exigir carné firmado" en Ajustes → Sync y Seguridad (queda registrado como verificación no criptográfica).';
+        return {
+          type: 'invalid_signature' as any,
+          title: 'Carné no verificado',
+          message: motivo,
+          timestamp: new Date().toISOString()
+        };
+      }
+    }
+
     const student = this.getStudentByCodeOrDoc(parsed.studentCode);
     if (!student) {
       return {
@@ -2347,8 +2542,18 @@ export class AttendanceStorageService {
       scannedBy: params.scannedBy || 'DOCENTE',
       scannedByName: params.scannedByName,
       scannedByCode: params.scannedByCode,
-      notes: params.notes || (parsed.isSigned ? 'Verificado vía Carné Digital HMAC-SHA256' : 'Escaneado en Aula de Clase'),
-      verifiedHmac: parsed.isSigned,
+      // Ronda 58 (F-1): HONESTIDAD FORENSE — verifiedHmac solo es true si la firma
+      // criptográfica se verificó de verdad. Antes: `parsed.isSigned` significaba
+      // "el texto empieza con IEDSJ:v1:" y un carné FORJADO quedaba en planilla y
+      // CSV como "Token QR Firmado (VÁLIDO)".
+      notes: params.notes || (
+        parsed.isSigned && parsed.isSignatureValid === true
+          ? 'Verificado vía Carné Digital HMAC-SHA256'
+          : parsed.isSigned
+            ? 'Carné firmado SIN verificación válida (política legada: requireSignedCards=false)'
+            : 'Escaneado en Aula de Clase (sin firma criptográfica)'
+      ),
+      verifiedHmac: parsed.isSigned && parsed.isSignatureValid === true,
       synced: true,
       // Ronda 19 — QR de Clase: transparencia de vinculación (planilla + CSV)
       contextSource: params.contextSource || 'HORA',
@@ -2569,7 +2774,11 @@ export class AttendanceStorageService {
         if (excuse) {
           excusedCount++;
           allRecords.push({
-            id: `rec-abs-${Date.now()}-${student.code}`,
+            // Ronda 58 (F-9): ID DETERMINISTA por (fecha, bloque, estudiante, auto-cierre):
+            // N dispositivos que cierran el mismo bloque generan EL MISMO id → el merge
+            // de la nube los deduplica en vez de SUMAR N series de AUSENTE (planillas
+            // infladas). Antes: rec-abs-<Date.now()>-<code> era distinto en cada terminal.
+            id: `rec-autoclose-${today}-${slot.id}-${student.code}`,
             studentCode: student.code,
             studentDocument: student.documentId,
             studentName: `${student.firstName} ${student.lastName}`,
@@ -2591,14 +2800,18 @@ export class AttendanceStorageService {
             notes: `Inasistencia automática protegida por excusa (${excuse.status === 'APROBADA' ? 'verificada' : 'bajo revisión'})`,
             excuseId: excuse.id,
             excuseStatus: excuse.status,
-            verifiedHmac: true,
+            // Ronda 58 (F-1/herencia): JAMÁS verifiedHmac:true en un registro que no
+            // pasó por un escaneo de carné — el CSV/reportes no deben afirmar
+            // verificación criptográfica que no ocurrió (evidencia probatoria falsa).
+            verifiedHmac: false,
             synced: true
           });
           return;
         }
         markedAbsentCount++;
         allRecords.push({
-          id: `rec-abs-${Date.now()}-${student.code}`,
+          // Ronda 58 (F-9): id determinista — ver comentario de la rama protegida.
+          id: `rec-autoclose-${today}-${slot.id}-${student.code}`,
           studentCode: student.code,
           studentDocument: student.documentId,
           studentName: `${student.firstName} ${student.lastName}`,
@@ -2618,7 +2831,7 @@ export class AttendanceStorageService {
           method: 'AUTO_CIERRE',
           scannedBy: 'AUTO_CIERRE',
           notes: 'Inasistencia marcada automáticamente por auto-cierre de bloque horario',
-          verifiedHmac: true,
+          verifiedHmac: false, // Ronda 58: sin carné escaneado no hay verificación HMAC
           synced: true
         });
       }
@@ -2854,7 +3067,10 @@ export class AttendanceStorageService {
       else queue.unshift(item);                        // orden de captura
       // Conservar solo los últimos 2000 (la cola no debe crecer sin límite).
       localStorage.setItem(OFFLINE_QUEUE_KEY, JSON.stringify(queue.slice(0, 2000)));
-      this.notify();
+      // R58 (F-10): la cola offline NO toca las colecciones cacheadas → notifica sin
+      // invalidar (antes, cada escaneo invalidaba el cache de asistencia y el
+      // SIGUIENTE escaneo re-parseaba ~3 MB).
+      this.notify(false);
     } catch { /* la cola jamás debe romper la captura del escaneo */ }
   }
 
@@ -3062,7 +3278,7 @@ export class AttendanceStorageService {
             method: sIdx % 2 === 0 ? 'CAMERA' : 'USB',
             scannedBy: sIdx % 4 === 0 ? 'REPRESENTANTE' : 'DOCENTE',
             scannedByName: sIdx % 4 === 0 ? 'Valentina Gómez (Representante)' : teacher,
-            verifiedHmac: true,
+            verifiedHmac: false, // Ronda 58: datos demo sembrados — no pasaron por escaneo firmado
             synced: true,
             notes: isAbsent ? 'Inasistencia no justificada' : (isLate ? 'Ingreso tardío al aula' : 'Asistencia en aula verificada')
           });

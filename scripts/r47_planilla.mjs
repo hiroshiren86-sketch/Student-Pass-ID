@@ -38,8 +38,13 @@ if (await page.locator('button[title*="Menú de Usuario"]').first().isVisible({ 
 }
 const btn = page.locator('button:has-text("Rectoría / Admin")').first();
 if (await btn.isVisible({ timeout: 10000 }).catch(() => false)) await btn.click();
-await page.locator('input[type="email"]').fill('rectoria@inas.edu.co');
-await page.locator('input[type="password"]').fill('INAS-Rectoria#2026');
+// Ronda 58 (F-25): credenciales desde el entorno (ver r47_fases.mjs — nunca en el repo).
+if (!process.env.INAS_REC_EMAIL || !process.env.INAS_REC_PASS) {
+  console.error('Falta INAS_REC_EMAIL / INAS_REC_PASS (exporta o crea ~/.inas-qa.env, chmod 600).');
+  process.exit(2);
+}
+await page.locator('input[type="email"]').fill(process.env.INAS_REC_EMAIL);
+await page.locator('input[type="password"]').fill(process.env.INAS_REC_PASS);
 await page.locator('button[type="submit"]:has-text("Ingresar")').click();
 await page.waitForSelector('button[title*="Menú de Usuario"]', { timeout: 90000 });
 await ensureNoOverlay();

@@ -9,8 +9,14 @@ export const DEFAULT_SCHOOL_SETTINGS: SchoolSettings = {
   activeDayTemplate: 'NORMAL',
   trimMinutes: 0,
   tardyGracePeriodMinutes: 10, // 06:40 AM
-  qrSecret: 'INAS-HMAC-QR-SECRET-COL-2026',
-  sessionSecret: 'INAS-SESSION-SECRET-2026',
+  // Ronda 58 (F-2): JAMÁS un secret conocido en los defaults del repo. El qrSecret
+  // real se genera ALEATORIO en el primer arranque (getSettings) y llega a los demás
+  // terminales por Pull (R56). Este valor vacío es solo el tipo; getSettings lo
+  // reemplaza si algún ajuste persistido llegara sin secret.
+  qrSecret: '',
+  sessionSecret: '',
+  // Ronda 58 (F-1): verificación criptográfica del carné EXIGIDA por defecto.
+  requireSignedCards: true,
   soundFeedback: true,
   autoFocusUsb: true,
   rateLimitMaxPerMin: 30,

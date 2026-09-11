@@ -892,6 +892,24 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ onClose }) => {
             </span>
           </div>
 
+          {/* Ronda 58 (F-1): política de verificación criptográfica en los puntos de escaneo */}
+          <div className="p-3.5 rounded-2xl bg-rose-50/60 dark:bg-rose-950/30 border border-rose-200 dark:border-rose-900/60 space-y-2">
+            <label className="flex items-start gap-3 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={settings.requireSignedCards !== false}
+                onChange={(e) => handleChange('requireSignedCards', e.target.checked)}
+                className="mt-0.5 w-4 h-4 accent-rose-600 cursor-pointer"
+              />
+              <span className="text-xs font-black text-rose-900 dark:text-rose-200">
+                Exigir carné firmado (verificación HMAC en el escaneo)
+                <span className="block font-medium text-[10px] text-rose-700/80 dark:text-rose-300/80 mt-1">
+                  RECOMENDADO. Los escaneos sin firma válida (código de barras 1D plano, tecleo manual, QR forjado o carné vencido) se RECHAZAN. Desactívalo SOLO si tu colegio opera con lectores USB de códigos 1D planos: esos escaneos quedarán registrados como "sin verificación criptográfica" (honesto en planilla y CSV), nunca como verificados.
+                </span>
+              </span>
+            </label>
+          </div>
+
           {/* Firebase Cloud Firestore Backup Button */}
           <div className="p-3.5 rounded-2xl bg-indigo-50/60 dark:bg-indigo-950/40 border border-indigo-100 dark:border-indigo-900/60 space-y-2">
             <div className="flex items-center justify-between">
