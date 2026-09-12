@@ -67,6 +67,17 @@ jobs:
       - name: Build de producción (vite)
         run: npx vite build
 
+      # ── Worker: dependencias y typecheck ──
+      # ANTES de las suites: qa-r47-guard y qa-r58-hardening importan el módulo del
+      # worker (usa `jose`); sin este install previo el CI fresco no lo resuelve
+      # (run 34675345813: "Cannot find module 'jose'" — local pasaba por un
+      # node_modules padre ajeno al repo).
+      - name: Instalar y typecheck Worker (cloudflare-worker)
+        run: |
+          cd cloudflare-worker
+          npm install --no-audit --no-fund
+          npx tsc --noEmit
+
       - name: Suite R43/44 — protocolo de tarjetas + política de carné (R58 §E)
         run: npx tsx scripts/verify_ronda43.ts
 
@@ -84,13 +95,6 @@ jobs:
       # trabajo de la máquina de QA, no del CI público.
       - name: Suite R49 — identidad (SKIP automático sin SA)
         run: npx tsx scripts/qa-r49-identity.ts
-
-      # ── Worker: dependencias y typecheck ──
-      - name: Typecheck Worker (cloudflare-worker)
-        run: |
-          cd cloudflare-worker
-          npm install --no-audit --no-fund
-          npx tsc --noEmit
 
       # ── Contrato de producción: marcadores del bundle servido ──
       # (automatiza la verificación manual `curl … | rg marcador` de cada ronda:
