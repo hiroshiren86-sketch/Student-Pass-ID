@@ -164,8 +164,10 @@ export function generateSeedStudents(): Student[] {
     const grade = SCHOOL_GRADES_LIST[gradeIdx];
     const section = grade.includes('1') ? '1' : (grade.includes('2') ? '2' : 'A');
 
-    // Contraseña de credencial temporal para carné
-    const tempPassword = `SJ-${(1000 + (i * 137) % 9000)}`;
+    // Ronda 60-g: el PIN / Clave de Acceso Portal NO se deriva del documento. Los datos
+    // mock generan un PIN aleatorio de 4 dígitos (no 'SJ-' + algo) para los estudiantes
+    // de demostración. Vacío también es válido (el carné muestra "Solicitar en Rectoría").
+    const tempPassword = String(1000 + (i * 137) % 9000);
 
     // Representantes titulares y suplentes para jerarquía de 3 niveles
     const isTitularRep = code === '1000000002' || code === '1000000001'; // Valentina Gómez (6°1), Santiago Gómez (10°1)

@@ -213,8 +213,11 @@ export const DocumentUploadModal: React.FC<DocumentUploadModalProps> = ({
         section: grade.includes('-') ? grade.split('-')[1] : (grade.includes('°') ? grade.split('°')[1] : '1'),
         photoUrl: draft.photoUrl,
         active: true,
-        createdAt: new Date().toISOString(),
-        tempPassword: `SJ-${cleanDoc.slice(-4) || '2026'}`
+        createdAt: new Date().toISOString()
+        // Ronda 60-g: el PIN / Clave de Acceso Portal NO se deriva automáticamente del
+        // documento (eliminado el patrón 'SJ-' + últimos 4 que vulneraba F-18). La carga
+        // masiva crea estudiantes SIN PIN — Rectoría los asigna luego desde "Editar ficha".
+        // El carné impreso mostrará "Solicitar en Rectoría" hasta que se asigne.
       };
 
       const res = AttendanceStorageService.addStudent(newStudent);

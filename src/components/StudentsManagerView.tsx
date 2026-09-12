@@ -87,6 +87,11 @@ export const StudentsManagerView: React.FC<StudentsManagerViewProps> = ({ onGene
   }, [inspectStudent, showDrawer]);
 
   // Form State con soporte para Tipo de Doc y Foto Opcional
+  // Ronda 60-g: el PIN / Clave de Acceso Portal es un campo EXPLÍCITO del formulario.
+  // Antes se derivaba automáticamente del documento ('SJ-' + últimos 4), patrón
+  // público que permitía entrar al portal de cualquier estudiante (F-18). Ahora
+  // Rectoría asigna el PIN manualmente o deja vacío (el carné muestra
+  // 'Solicitar en Rectoría' como estado vacío claro).
   const [formData, setFormData] = useState({
     firstName: '',
     lastName: '',
@@ -94,6 +99,7 @@ export const StudentsManagerView: React.FC<StudentsManagerViewProps> = ({ onGene
     documentType: 'TI' as DocumentType,
     documentId: '',
     photoUrl: '',
+    accessPin: '', // Ronda 60-g: PIN / Clave de Acceso Portal (opcional, asignado por Rectoría)
     excuseDataConsent: false // Ronda 22 (P4): cláusula Ley 1581 art. 7 — consentimiento del representante legal
   });
   const [formError, setFormError] = useState<string | null>(null);
@@ -126,6 +132,7 @@ export const StudentsManagerView: React.FC<StudentsManagerViewProps> = ({ onGene
       documentType: 'TI',
       documentId: '',
       photoUrl: '',
+      accessPin: '', // Ronda 60-g: nuevo estudiante sin PIN asignado
       excuseDataConsent: false
     });
     setFormError(null);
@@ -141,6 +148,7 @@ export const StudentsManagerView: React.FC<StudentsManagerViewProps> = ({ onGene
       documentType: student.documentType || 'TI',
       documentId: student.documentId,
       photoUrl: student.photoUrl || '',
+      accessPin: student.tempPassword || '', // Ronda 60-g: precargar PIN existente para edición
       excuseDataConsent: !!student.excuseDataConsent
     });
     setFormError(null);
@@ -189,6 +197,9 @@ export const StudentsManagerView: React.FC<StudentsManagerViewProps> = ({ onGene
         documentType: formData.documentType,
         grade,
         photoUrl: formData.photoUrl || undefined,
+        // Ronda 60-g: el PIN se actualiza si Rectoría lo modificó. Vacío = sin PIN
+        // asignado (el carné muestra 'Solicitar en Rectoría').
+        tempPassword: formData.accessPin.trim() || undefined,
         // Ronda 22 (P4): el consentimiento art. 7 también se actualiza en la ficha
         excuseDataConsent: formData.excuseDataConsent,
         excuseDataConsentAt: formData.excuseDataConsent
@@ -211,7 +222,10 @@ export const StudentsManagerView: React.FC<StudentsManagerViewProps> = ({ onGene
         photoUrl: formData.photoUrl || undefined,
         active: true,
         createdAt: new Date().toISOString(),
-        tempPassword: `SJ-${cleanDocumentId.slice(-4) || '2026'}`,
+        // Ronda 60-g: el PIN / Clave de Acceso Portal es asignado EXPLÍCITAMENTE por
+        // Rectoría. Si se deja vacío, el carné impreso mostrará 'Solicitar en Rectoría'.
+        // Se elimina la derivación automática 'SJ-' + últimos 4 del documento (F-18).
+        tempPassword: formData.accessPin.trim() || undefined,
         // Ronda 22 (P4): consentimiento específico del representante legal (Ley 1581 arts. 7 y 9)
         excuseDataConsent: formData.excuseDataConsent,
         excuseDataConsentAt: formData.excuseDataConsent ? new Date().toISOString() : undefined
@@ -244,8 +258,15 @@ export const StudentsManagerView: React.FC<StudentsManagerViewProps> = ({ onGene
   // Ronda 50 (M3): provee la cuenta REAL de Firebase Auth del estudiante (acceso por
   // identidad desde cualquier teléfono). Usa la clave temporal del carné como contraseña
   // inicial y el rol ESTUDIANTE_ACUDIENTE. Si ya hay cuenta, se informa que existe.
+  // Ronda 60-g: si el estudiante no tiene PIN asignado, se le pide a Rectoría que lo asigne
+  // antes de crear la cuenta de acceso (sin PIN no hay credencial que usar como contraseña).
   const handleCreateStudentAccount = async (student: Student) => {
-    const accessKey = student.tempPassword || `SJ-${(student.documentId || student.code).replace(/\D/g, '').slice(-4) || '2026'}`;
+    const accessKey = student.tempPassword;
+    if (!accessKey) {
+      setToastMessage(`${student.firstName} ${student.lastName} no tiene PIN / Clave de Acceso Portal asignado. Asígnele uno desde "Editar ficha" antes de crear la cuenta de acceso.`);
+      setTimeout(() => setToastMessage(null), 5000);
+      return;
+    }
     try {
       if (student.hasFirebaseAccount) {
         setToastMessage(`Este estudiante ya tiene cuenta de acceso (${student.authEmail || 'identidad'}). Use "Restablecer" desde Gestión Docentes si olvidó la clave.`);
@@ -709,12 +730,39 @@ export const StudentsManagerView: React.FC<StudentsManagerViewProps> = ({ onGene
                   </datalist>
                 </div>
 
-                {/* 5. Fotografía del Carné (Exclusiva del Formulario Individual) */}
+                {/* Ronda 60-g: PIN / Clave de Acceso Portal — campo explícito, opcional.
+                    Antes se derivaba automáticamente del documento ('SJ-' + últimos 4),
+                    patrón público que vulneraba F-18. Ahora Rectoría lo asigna manualmente
+                    o lo deja vacío (el carné muestra 'Solicitar en Rectoría'). */}
+                <div className="space-y-1">
+                  <div className="flex items-center justify-between">
+                    <label className="text-xs font-bold text-slate-700 dark:text-slate-300 flex items-center gap-1.5">
+                      <KeyRound className="w-3.5 h-3.5 text-indigo-500" />
+                      <span>5. PIN / Clave de Acceso Portal</span>
+                    </label>
+                    <span className="text-[10px] text-slate-400 font-medium">
+                      Opcional — vacío muestra "Solicitar en Rectoría" en el carné
+                    </span>
+                  </div>
+                  <input
+                    type="text"
+                    value={formData.accessPin}
+                    onChange={(e) => setFormData({ ...formData, accessPin: e.target.value })}
+                    placeholder="Ej: 8392 (déjalo vacío si el estudiante no tiene PIN)"
+                    className="w-full px-3.5 py-2.5 bg-slate-50 dark:bg-black border border-slate-200 dark:border-zinc-800/50 rounded-2xl text-xs font-mono font-bold text-indigo-600 dark:text-indigo-400 focus:ring-2 focus:ring-indigo-500 focus:outline-none"
+                    autoComplete="off"
+                  />
+                  <p className="text-[10px] text-slate-400 leading-tight">
+                    El PIN es la clave que el estudiante usa para entrar a su portal. Si lo dejas vacío, el carné impreso mostrará "Solicitar en Rectoría" como estado vacío claro. Nunca se deriva automáticamente del documento.
+                  </p>
+                </div>
+
+                {/* 6. Fotografía del Carné (Exclusiva del Formulario Individual) */}
                 <div className="space-y-1.5 p-3 rounded-2xl bg-slate-50 dark:bg-black border border-slate-200 dark:border-zinc-800/50">
                   <div className="flex items-center justify-between">
                     <label className="text-xs font-bold text-slate-700 dark:text-slate-300 flex items-center gap-1.5">
                       <Camera className="w-3.5 h-3.5 text-indigo-500" />
-                      <span>5. Foto del Carné (Individual)</span>
+                      <span>6. Foto del Carné (Individual)</span>
                     </label>
                     {formData.photoUrl && (
                       <button
@@ -907,45 +955,51 @@ export const StudentsManagerView: React.FC<StudentsManagerViewProps> = ({ onGene
 
             {/* Ronda 34 (H-34-2): la clave de acceso ANTES solo existía en el PDF impreso —
                 Rectoría no podía verla en pantalla y el estudiante quedaba sin credencial
-                utilizable. Ahora se muestra junto al código, con copia al portapapeles. */}
-            {justSavedStudent.tempPassword && (
-              <div className="p-3.5 rounded-2xl bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-800 text-left space-y-2">
-                <div className="flex items-center gap-2">
-                  <KeyRound className="w-4 h-4 text-amber-600 dark:text-amber-400 shrink-0" />
-                  <span className="text-[10px] font-black uppercase tracking-wider text-amber-700 dark:text-amber-300">Credenciales de ingreso al portal</span>
+                utilizable. Ahora se muestra junto al código, con copia al portapapeles.
+                Ronda 60-g: si el estudiante se creó SIN PIN, se muestra "Solicitar en
+                Rectoría" y un enlace rápido a Editar ficha para asignarlo. */}
+            <div className="p-3.5 rounded-2xl bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-800 text-left space-y-2">
+              <div className="flex items-center gap-2">
+                <KeyRound className="w-4 h-4 text-amber-600 dark:text-amber-400 shrink-0" />
+                <span className="text-[10px] font-black uppercase tracking-wider text-amber-700 dark:text-amber-300">PIN / Clave de Acceso Portal</span>
+              </div>
+              <div className="flex items-center justify-between gap-2">
+                <div className="min-w-0">
+                  <span className="block text-[10px] font-bold uppercase text-slate-400">Código</span>
+                  <span className="font-mono text-sm font-black text-slate-900 dark:text-white truncate block">{justSavedStudent.code}</span>
                 </div>
-                <div className="flex items-center justify-between gap-2">
-                  <div className="min-w-0">
-                    <span className="block text-[10px] font-bold uppercase text-slate-400">Código</span>
-                    <span className="font-mono text-sm font-black text-slate-900 dark:text-white truncate block">{justSavedStudent.code}</span>
-                  </div>
-                  <div className="min-w-0 text-right">
-                    <span className="block text-[10px] font-bold uppercase text-slate-400">Clave de acceso</span>
+                <div className="min-w-0 text-right">
+                  <span className="block text-[10px] font-bold uppercase text-slate-400">PIN / Clave</span>
+                  {justSavedStudent.tempPassword ? (
                     <span className="font-mono text-sm font-black text-amber-700 dark:text-amber-300 truncate block">{justSavedStudent.tempPassword}</span>
-                  </div>
+                  ) : (
+                    <span className="text-xs font-bold text-amber-600 dark:text-amber-400 truncate block">Solicitar en Rectoría</span>
+                  )}
+                </div>
+                {justSavedStudent.tempPassword && (
                   <button
                     type="button"
                     onClick={() => {
-                      const texto = `Código: ${justSavedStudent.code} · Clave: ${justSavedStudent.tempPassword}`;
+                      const texto = `Código: ${justSavedStudent.code} · PIN: ${justSavedStudent.tempPassword}`;
                       navigator.clipboard?.writeText(texto).then(() => {
                         setToastMessage('Credenciales copiadas al portapapeles.');
                         setTimeout(() => setToastMessage(null), 2500);
                       }).catch(() => {});
                     }}
                     className="p-2 rounded-xl bg-white dark:bg-black border border-amber-300 dark:border-amber-700 text-amber-700 dark:text-amber-300 hover:bg-amber-100 dark:hover:bg-amber-900/50 transition-colors shrink-0"
-                    title="Copiar código y clave"
-                    aria-label="Copiar código y clave de acceso"
+                    title="Copiar código y PIN"
+                    aria-label="Copiar código y PIN de acceso"
                   >
                     <Copy className="w-4 h-4" />
                   </button>
-                </div>
-                <p className="text-[10px] text-slate-500 dark:text-slate-400 leading-relaxed">
-                  Entréguelas impresas al estudiante/acudiente: con ellas ingresa al portal
-                  (pestaña Estudiante / Representante) desde cualquier dispositivo donde esté
-                  registrada la matrícula. La clave también va en el reverso del carné PDF.
-                </p>
+                )}
               </div>
-            )}
+              <p className="text-[10px] text-slate-500 dark:text-slate-400 leading-relaxed">
+                Entréguelas impresas al estudiante/acudiente: con ellas ingresa al portal
+                (pestaña Estudiante / Representante) desde cualquier dispositivo donde esté
+                registrada la matrícula. El PIN también va en el reverso del carné PDF.
+              </p>
+            </div>
 
             <div className="flex items-center justify-center gap-2 pt-2">
               <button
@@ -1059,32 +1113,39 @@ export const StudentsManagerView: React.FC<StudentsManagerViewProps> = ({ onGene
             </div>
 
             {/* Ronda 34 (H-34-2): clave de acceso consultable — antes solo el PDF la llevaba.
-                Bloque discreto (solo para ojos de Rectoría ya autenticada) con copia rápida. */}
-            {inspectStudent.tempPassword && (
-              <div className="p-3 rounded-2xl bg-slate-50 dark:bg-black border border-slate-200 dark:border-zinc-800 flex items-center justify-between gap-3">
-                <div className="flex items-center gap-2 min-w-0">
-                  <KeyRound className="w-4 h-4 text-indigo-500 shrink-0" />
-                  <div className="min-w-0">
-                    <span className="block text-[9px] font-bold uppercase text-slate-400">Clave de acceso al portal (reverso del carné)</span>
+                Bloque discreto (solo para ojos de Rectoría ya autenticada) con copia rápida.
+                Ronda 60-g: ahora muestra SIEMPRE el bloque (con "Solicitar en Rectoría" si
+                el estudiante no tiene PIN asignado — antes se ocultaba y Rectoría no veía
+                que faltaba asignar). */}
+            <div className="p-3 rounded-2xl bg-slate-50 dark:bg-black border border-slate-200 dark:border-zinc-800 flex items-center justify-between gap-3">
+              <div className="flex items-center gap-2 min-w-0">
+                <KeyRound className="w-4 h-4 text-indigo-500 shrink-0" />
+                <div className="min-w-0">
+                  <span className="block text-[9px] font-bold uppercase text-slate-400">PIN / Clave de Acceso Portal</span>
+                  {inspectStudent.tempPassword ? (
                     <span className="font-mono text-xs font-black text-slate-900 dark:text-white truncate block">{inspectStudent.tempPassword}</span>
-                  </div>
+                  ) : (
+                    <span className="text-xs font-bold text-amber-600 dark:text-amber-400 truncate block">Solicitar en Rectoría (sin PIN asignado)</span>
+                  )}
                 </div>
+              </div>
+              {inspectStudent.tempPassword && (
                 <button
                   type="button"
                   onClick={() => {
                     navigator.clipboard?.writeText(inspectStudent.tempPassword || '').then(() => {
-                      setToastMessage('Clave de acceso copiada.');
+                      setToastMessage('PIN / Clave de Acceso copiada al portapapeles.');
                       setTimeout(() => setToastMessage(null), 2500);
                     }).catch(() => {});
                   }}
                   className="p-2 rounded-xl bg-white dark:bg-zinc-950 border border-slate-200 dark:border-zinc-800 text-slate-500 hover:text-indigo-600 dark:hover:text-indigo-400 transition-colors shrink-0"
-                  title="Copiar clave de acceso"
-                  aria-label="Copiar clave de acceso"
+                  title="Copiar PIN / Clave de Acceso"
+                  aria-label="Copiar PIN / Clave de Acceso"
                 >
                   <Copy className="w-4 h-4" />
                 </button>
-              </div>
-            )}
+              )}
+            </div>
 
             {/* Ronda 50 (M3): acceso a la nube por identidad — crear cuenta real de Firebase
                 para que el estudiante/acudiente entre desde CUALQUIER teléfono (escaneos,

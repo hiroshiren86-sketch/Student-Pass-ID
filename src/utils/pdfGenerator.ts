@@ -21,8 +21,12 @@ export async function generateStudentCardPdf(student: Student, settings: SchoolS
   const fontRegular = await pdfDoc.embedFont(StandardFonts.Helvetica);
   const fontMono = await pdfDoc.embedFont(StandardFonts.CourierBold);
 
-  // Clave permanente de acceso al portal de consulta (No expira, siempre válida)
-  const permanentPin = student.tempPassword || `SJ-${student.documentId.slice(-4) || '2026'}`;
+  // Ronda 60-g (F-18 final): se ELIMINA el fallback 'SJ-${documentId.slice(-4)}' (patrón
+  // derivable que permitía entrar al portal de cualquier estudiante leyendo solo su
+  // documento). Si el estudiante no tiene PIN asignado por Rectoría, el carné lo dice
+  // con claridad. Esto se llama "estado vacío claro" y es consistente con el formulario
+  // de StudentPortalView.tsx que también muestra 'Solicitar en Rectoría' cuando no hay PIN.
+  const permanentPin = student.tempPassword || 'Solicitar en Rectoría';
 
   // ==================== 1. ANVERSO (Estilo Cédula Digital Colombia) ====================
   const pageFront = pdfDoc.addPage([width, height]);
@@ -91,10 +95,14 @@ export async function generateStudentCardPdf(student: Student, settings: SchoolS
   // se imprime ESE — así el carné impreso y el QR del portal del estudiante son el
   // MISMO token (y el portal no necesita el secret institucional para coincidir).
   const qrPayload = student.signedCardToken || await generateStudentQrPayload(student, settings.qrSecret);
+  // Ronda 60-g (nitidez): QR generado a 500x500 px (alta densidad) para que al incrustarlo
+  // en el recuadro de 54x54 pt del PDF no se vea pixelado. Antes era 250x250 y en
+  // impresiones reales lucía borroso. ErrorCorrectionLevel 'H' (alto) para mayor
+  // tolerancia a artefactos de impresión.
   const qrDataUrl = await QRCode.toDataURL(qrPayload, {
     margin: 1,
-    width: 250,
-    errorCorrectionLevel: 'M'
+    width: 500,
+    errorCorrectionLevel: 'H'
   });
   const qrImage = await pdfDoc.embedPng(qrDataUrl);
 
@@ -284,10 +292,13 @@ export async function generateStudentCardPdf(student: Student, settings: SchoolS
     color: rgb(0.1, 0.15, 0.25)
   });
 
+  // Ronda 60-g: el PIN puede ser el valor real (4-6 dígitos) o el mensaje
+  // "Solicitar en Rectoría" (más largo). Ajusta el tamaño de fuente para que siempre quepa.
+  const pinFontSize = permanentPin.length > 12 ? 5.5 : 6.8;
   pageBack.drawText(`CLAVE DE ACCESO:    ${permanentPin}`, {
     x: 18,
     y: 78,
-    size: 6.8,
+    size: pinFontSize,
     font: fontMono,
     color: rgb(0.25, 0.1, 0.6)
   });

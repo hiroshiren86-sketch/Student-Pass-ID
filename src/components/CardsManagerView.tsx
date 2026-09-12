@@ -454,7 +454,9 @@ export const CardsManagerView: React.FC = () => {
                       </div>
                       <div className="flex justify-between items-center">
                         <span className="text-slate-500 font-sans text-[7px] font-bold">CLAVE ACCESO:</span>
-                        <strong className="text-indigo-600 font-black text-[8.5px]">{previewStudent.tempPassword || `SJ-${previewStudent.documentId.slice(-4)}`}</strong>
+                        {/* Ronda 60-g: si no hay PIN asignado, mostrar "Solicitar en Rectoría"
+                            en vez de derivar 'SJ-' + últimos 4 del documento (F-18 cerrado). */}
+                        <strong className="text-indigo-600 font-black text-[8.5px]">{previewStudent.tempPassword || 'Solicitar en Rectoría'}</strong>
                       </div>
                     </div>
                   </div>
