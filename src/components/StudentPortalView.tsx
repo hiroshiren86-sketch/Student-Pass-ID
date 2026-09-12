@@ -74,6 +74,9 @@ export const StudentPortalView: React.FC<StudentPortalViewProps> = ({ onLogout, 
   useEffect(() => {
     const unsubscribe = AttendanceStorageService.subscribe(() => {
       setSettings(AttendanceStorageService.getSettings());
+      // Ronda 60-h (reactividad UI): si el estudiante activo cambió (p.ej. Rectoría le
+      // asignó PIN o cambió foto), el portal debe reflejarlo sin recargar la página.
+      setActiveStudent(prev => prev ? (AttendanceStorageService.getStudentByCodeOrDoc(prev.code) || prev) : prev);
     });
     return unsubscribe;
   }, []);

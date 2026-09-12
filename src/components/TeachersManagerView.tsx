@@ -79,6 +79,10 @@ export const TeachersManagerView: React.FC = () => {
   useEffect(() => {
     const unsubscribe = AttendanceStorageService.subscribe(() => {
       setTeachers(AttendanceStorageService.getTeachers());
+      // Ronda 60-h (reactividad UI): mantener frescos los snapshots locales del docente
+      // que se está inspeccionando/resetando. editingTeacher NO se toca para no pisar
+      // lo que el usuario escribe en el formulario.
+      setResetModalTeacher(prev => prev ? (AttendanceStorageService.getTeacherById(prev.id) || prev) : prev);
     });
     return unsubscribe;
   }, []);

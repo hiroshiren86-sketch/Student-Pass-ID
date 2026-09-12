@@ -353,7 +353,9 @@ export class AttendanceStorageService {
     // Ronda 58 (F-10): espejo del qrSecret en llave diminuta — sobrevive a la
     // corrupción del JSON grande de settings (y a truncamientos de cuota parciales).
     try { if (settings.qrSecret) localStorage.setItem(QRSECRET_MIRROR_KEY, settings.qrSecret); } catch {}
-    this.readCache.settings = settings; // R58 (F-10): write-through
+    // Ronda 60-h (reactividad UI): shallow-copy (ver nota en saveStudents).
+    // Settings es un objeto (no array) → usamos { ...settings } para crear ref nueva.
+    this.readCache.settings = { ...settings };
     this.notify(false);
 
     // Ronda 57 (INV-1): un guardado de ORIGEN LOCAL (con respaldo a la nube pendiente)
@@ -507,7 +509,12 @@ export class AttendanceStorageService {
       }
     } catch { /* la cuota o un JSON corrupto nunca deben impedir un guardado */ }
     localStorage.setItem(STUDENTS_KEY, JSON.stringify(students));
-    this.readCache.students = students; // R58 (F-10): write-through
+    // Ronda 60-h (reactividad UI): shallow-copy para que la referencia del cache sea
+    // DISTINTA de la que el componente llamador aún tiene. Antes (R58 F-10 write-through)
+    // se guardaba la MISMA referencia → React hacía Object.is(prev,next) === true y bail
+    // out del re-render → la UI no se actualizaba hasta recargar la página. El shallow-copy
+    // es O(n) barato y cierra el bug raíz sin invalidar el cache completo.
+    this.readCache.students = students.slice();
     this.notify(false);
   }
 
@@ -955,7 +962,8 @@ export class AttendanceStorageService {
   static saveTeachers(teachers: Teacher[], origin: 'local' | 'cloud' | 'system' = 'local'): void {
     if (origin === 'local') this.markLocalSyncDirty(); // Ronda 57
     localStorage.setItem(TEACHERS_KEY, JSON.stringify(teachers));
-    this.readCache.teachers = teachers; // R58 (F-10): write-through
+    // Ronda 60-h (reactividad UI): shallow-copy (ver nota en saveStudents).
+    this.readCache.teachers = teachers.slice();
     this.notify(false);
   }
 
@@ -1477,7 +1485,7 @@ export class AttendanceStorageService {
       if (stored) {
         const parsed = JSON.parse(stored);
         if (Array.isArray(parsed)) {
-          this.readCache.slots = parsed;
+          this.readCache.slots = parsed.slice();
           return parsed;
         }
       }
@@ -1489,7 +1497,7 @@ export class AttendanceStorageService {
   static saveScheduleSlots(slots: ScheduleSlot[], origin: 'local' | 'cloud' | 'system' = 'local'): void {
     if (origin === 'local') this.markLocalSyncDirty(); // Ronda 57
     localStorage.setItem(SCHEDULE_SLOTS_KEY, JSON.stringify(slots));
-    this.readCache.slots = slots; // R58 (F-10): write-through
+    this.readCache.slots = slots.slice(); // R60-h: shallow-copy para reactividad UI
     this.notify(false);
   }
 
@@ -1507,7 +1515,7 @@ export class AttendanceStorageService {
           if (clean.length !== parsed.length) {
             try { localStorage.setItem(SCHEDULE_ASSIGNMENTS_KEY, JSON.stringify(clean)); } catch {}
           }
-          this.readCache.assignments = clean; // R58 (F-10): persistido == cache
+          this.readCache.assignments = clean.slice(); // R60-h: shallow-copy para reactividad UI
           return clean;
         }
       }
@@ -1530,7 +1538,7 @@ export class AttendanceStorageService {
   static saveScheduleAssignments(assignments: ClassScheduleAssignment[], origin: 'local' | 'cloud' | 'system' = 'local'): void {
     if (origin === 'local') this.markLocalSyncDirty(); // Ronda 57
     localStorage.setItem(SCHEDULE_ASSIGNMENTS_KEY, JSON.stringify(assignments));
-    this.readCache.assignments = assignments; // R58 (F-10): write-through
+    this.readCache.assignments = assignments.slice(); // R60-h: shallow-copy
     this.notify(false);
   }
 
@@ -1993,7 +2001,7 @@ export class AttendanceStorageService {
       if (stored) {
         const parsed = JSON.parse(stored);
         if (Array.isArray(parsed)) {
-          this.readCache.attendance = parsed;
+          this.readCache.attendance = parsed.slice();
           return parsed;
         }
       }
@@ -2020,7 +2028,7 @@ export class AttendanceStorageService {
     // Ronda 58 (F-10): WRITE-THROUGH — el array recién persistido ES el cache
     // válido (mismo contenido que storage). Sin esto, notify() invalidaba y el
     // SIGUIENTE escaneo re-parseaba los ~3 MB de hechos (el costo que F-10 elimina).
-    this.readCache.attendance = records;
+    this.readCache.attendance = records.slice(); // R60-h: shallow-copy
     this.notify(false);
   }
 

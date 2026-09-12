@@ -68,8 +68,18 @@ export const StudentsManagerView: React.FC<StudentsManagerViewProps> = ({ onGene
 
   useEffect(() => {
     const unsubscribe = AttendanceStorageService.subscribe(() => {
+      // Ronda 60-h (reactividad UI): el listener debe actualizar también los snapshots
+      // locales (inspectStudent, justSavedStudent, editingStudent) porque si un cambio
+      // externo (p.ej. edición desde otro componente) los deja stale, el visor no se
+      // entera hasta recargar la página. Ahora re-buscamos el estudiante por código
+      // para mantener los snapshots frescos sin perder el modal abierto.
       setStudents(AttendanceStorageService.getStudents());
       setSettings(AttendanceStorageService.getSettings());
+      // Re-buscar el estudiante activo en el visor por su código (si sigue existiendo)
+      setInspectStudent(prev => prev ? (AttendanceStorageService.getStudentByCodeOrDoc(prev.code) || prev) : prev);
+      setJustSavedStudent(prev => prev ? (AttendanceStorageService.getStudentByCodeOrDoc(prev.code) || prev) : prev);
+      // No tocamos editingStudent: el formulario de edición es editado por el usuario,
+      // no queremos pisar lo que está escribiendo con datos del storage.
     });
     return unsubscribe;
   }, []);
