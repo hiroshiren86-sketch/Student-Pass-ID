@@ -356,7 +356,13 @@ export async function casWriteSnapshot(
     recordsCount: number;
     schoolName: string;
   }
-): Promise<boolean> {
+): Promise<string | null> {
+  // Ronda 60-b (H-5): devuelve el `updated_at` REAL que quedó escrito en D1 (leído
+  // tras la escritura exitosa — 1 SELECT extra por push, y los pushes son raros:
+  // gate de dirty + manuales) o null si la contención agotó los intentos sin
+  // escribir. Así la reflexión a KV lleva el meta guard con EL MISMO timestamp
+  // que la fila de sync_snapshots. Los INSERT/UPDATE mantienen el SQL histórico
+  // byte-idéntico (strftime con precisión ms — M-1).
   const snapshotId = `snapshot_${schoolCode}`;
   for (let attempt = 0; attempt < SNAPSHOT_MAX_CAS_ATTEMPTS; attempt++) {
     const row = await env.DB.prepare(
@@ -374,7 +380,7 @@ export async function casWriteSnapshot(
          VALUES (?, ?, ?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ','now'))`
       ).bind(snapshotId, schoolCode, out.schoolName, JSON.stringify(out.data), out.studentsCount, out.recordsCount).run();
       const changes = (r as any)?.meta?.changes;
-      if (changes === undefined || changes > 0) return true;
+      if (changes === undefined || changes > 0) return await readSnapshotUpdatedAt(env, snapshotId);
       continue; // alguien creó el snapshot entre el SELECT y el INSERT → reintentar como update
     }
 
@@ -383,11 +389,52 @@ export async function casWriteSnapshot(
        WHERE id = ? AND updated_at = ?`
     ).bind(out.schoolName, JSON.stringify(out.data), out.studentsCount, out.recordsCount, snapshotId, row.updated_at).run();
     const changes = (r as any)?.meta?.changes;
-    if (changes === undefined || changes > 0) return true;
+    if (changes === undefined || changes > 0) return await readSnapshotUpdatedAt(env, snapshotId);
     // changes === 0 → otro push escribió entre nuestro SELECT y nuestro UPDATE → reintentar.
   }
-  console.warn(`[sync/push] CAS: ${SNAPSHOT_MAX_CAS_ATTEMPTS} intentos con contención; última escritura gana (degradación honesta, se registra).`);
-  return false;
+  console.warn(`[sync/push] CAS: ${SNAPSHOT_MAX_CAS_ATTEMPTS} intentos con contención; SIN escritura este ciclo — se re-lee el estado vigente (D1 manda) y el siguiente push reintenta.`);
+  return null;
+}
+
+// H-5: lee el `updated_at` real de la fila recién escrita (guard de versión de la
+// reflexión KV). Fallo/ausencia → null: el llamador cae a su fallback honesto.
+async function readSnapshotUpdatedAt(env: Env, snapshotId: string): Promise<string | null> {
+  try {
+    const r = await env.DB.prepare(`SELECT updated_at FROM sync_snapshots WHERE id = ?`).bind(snapshotId).first<{ updated_at: string }>();
+    return r?.updated_at || null;
+  } catch { return null; }
+}
+
+// ==============================================================================
+// Ronda 60-b (H-5) — REFLEXIÓN KV QUE JAMÁS RETROCEDE.
+//
+// Carrera original: la reflexión del snapshot recién escrito en D1 hacia la KV
+// (`latest_snapshot_*`) escribía con `syncedAt` de reloj local y SIN comparar
+// contra lo ya publicado — un desfase de reloj o la llegada desordenada de dos
+// writers podía dejar la KV sirviendo un snapshot MÁS VIEJO que el que ya tenía
+// (el pull lee KV primero → los terminales retrocedían). Ahora el payload lleva
+// el `updated_at` REAL de D1 (retornado por casWriteSnapshot / re-leído en el
+// camino ADMIN) y la escritura solo ocurre si es igual o más nueva que la caché.
+// ==============================================================================
+async function reflectSnapshotToKV(
+  env: Env,
+  schoolCode: string,
+  payload: { syncedAt: string; studentsCount: number; recordsCount: number; data: any }
+): Promise<void> {
+  if (!env.ATTENDANCE_KV) return;
+  const key = `latest_snapshot_${schoolCode}`;
+  let cachedAt: number | null = null;
+  try {
+    const cached = await env.ATTENDANCE_KV.get(key, 'json') as any;
+    const t = Date.parse(cached?.syncedAt || '');
+    if (Number.isFinite(t)) cachedAt = t;
+  } catch { /* lectura no crítica: sin dato de comparación, D1 (recién escrito) manda */ }
+  const newAt = Date.parse(payload.syncedAt || '');
+  if (cachedAt !== null && Number.isFinite(newAt) && newAt < cachedAt) {
+    console.warn(`[sync/push] H-5: reflexión KV OMITIDA — caché (${new Date(cachedAt).toISOString()}) más nueva que D1 (${payload.syncedAt}); jamás retrocede.`);
+    return;
+  }
+  await env.ATTENDANCE_KV.put(key, JSON.stringify(payload));
 }
 
 function safeJsonParse(s: string): any {
@@ -782,6 +829,7 @@ async function handleRoute(request: Request, env: Env, ctx: ExecutionContext): P
         //    del camino operador), preservando el histórico acumulado. Es ADITIVO: jamás
         //    borra un registro que ya estaba en el snapshot.
         let adminSnapshotData: any = data;
+        let adminSnapshotUpdatedAt: string | null = null; // H-5: updated_at REAL de D1 para el meta de la reflexión KV
         let adminRecordsCount = records.length;
         if (isAdmin && env.DB) {
           // =========================================================================
@@ -811,7 +859,7 @@ async function handleRoute(request: Request, env: Env, ctx: ExecutionContext): P
             // distingue un ganador entrante de un registro heredado del snapshot.
             const incomingSet = new Set<any>((records || []).filter((r: any) => r && r.id));
             const stampWinner = (r: any) => (incomingSet.has(r) ? stampServerVersion([r])[0] : r);
-            const written = await casWriteSnapshot(env, schoolCode, (prev, row) => {
+            await casWriteSnapshot(env, schoolCode, (prev, row) => {
               let mergedRecords: any[];
               let mergedTombstones: any[];
               if (prev) {
@@ -846,10 +894,13 @@ async function handleRoute(request: Request, env: Env, ctx: ExecutionContext): P
                 schoolName: body.schoolName || row?.school_name || env.SCHOOL_NAME || ''
               };
             });
-            void written; // el CAS degrada honestamente y lo registra casWriteSnapshot
-            adminSnapshotData = safeJsonParse((await env.DB.prepare(
-              `SELECT data_json FROM sync_snapshots WHERE id = ?`
-            ).bind(`snapshot_${schoolCode}`).first<{ data_json: string }>())?.data_json || 'null') || data;
+            // El CAS degrada honestamente y lo registra casWriteSnapshot; el estado
+            // vigente se RE-LEE de D1 (ahora incluido su updated_at — H-5).
+            const snapRow = await env.DB.prepare(
+              `SELECT data_json, updated_at FROM sync_snapshots WHERE id = ?`
+            ).bind(`snapshot_${schoolCode}`).first<{ data_json: string; updated_at: string }>();
+            adminSnapshotData = safeJsonParse(snapRow?.data_json || 'null') || data;
+            adminSnapshotUpdatedAt = snapRow?.updated_at || null; // H-5: versión D1 real para el meta KV
             adminRecordsCount = Array.isArray(adminSnapshotData.records) ? adminSnapshotData.records.length : records.length;
           } catch (e: any) {
             /* snapshot corrupto o escritura fallida: usar el payload entrante tal cual (comportamiento previo) */
@@ -927,7 +978,7 @@ async function handleRoute(request: Request, env: Env, ctx: ExecutionContext): P
             let mergedData: any;
             let mergedRecords: any[] = [];
             let catalogCount = 0;
-            const written = await casWriteSnapshot(env, schoolCode, (prev, row) => {
+            const writtenAt = await casWriteSnapshot(env, schoolCode, (prev, row) => {
               if (prev) {
                 const prevRecords = Array.isArray(prev.records) ? prev.records : [];
                 const prevById = new Map<string, any>(prevRecords.map((r: any) => [String(r.id), r]));
@@ -949,22 +1000,24 @@ async function handleRoute(request: Request, env: Env, ctx: ExecutionContext): P
                 schoolName: body.schoolName || row?.school_name || env.SCHOOL_NAME || ''
               };
             });
-            if (!written) {
-              // Contención extrema tras 3 intentos: degradación honesta (última escritura
-              // gana), documentada en el log. El KV de abajo no se actualiza con datos
-              // posiblemente pisados: se omite para no servir una fusión perdida.
+            if (!writtenAt) {
+              // Contención extrema tras 3 intentos: SIN escritura este ciclo, documentada
+              // en el log. El KV de abajo no se actualiza: se omite para no servir una
+              // fusión perdida; el próximo push reintenta sobre el estado vigente.
               console.warn('[sync/push] operador: CAS sin éxito tras reintentos; KV no refrescado este ciclo.');
             }
 
             // Reflejar el snapshot fusionado en KV para que /api/sync/pull lo sirva fresco
-            // (el pull lee KV primero). El catálogo conservado es el vigente, no el del operador.
-            if (env.ATTENDANCE_KV && written) {
-              await env.ATTENDANCE_KV.put(`latest_snapshot_${schoolCode}`, JSON.stringify({
-                syncedAt: new Date().toISOString(),
+            // (el pull lee KV primero). El catálogo conservado es el vigente, no el del
+            // operador. Ronda 60-b (H-5): meta con el updated_at REAL de D1 y reflexión
+            // que jamás retrocede la caché (reflectSnapshotToKV).
+            if (env.ATTENDANCE_KV && writtenAt) {
+              await reflectSnapshotToKV(env, schoolCode, {
+                syncedAt: writtenAt,
                 studentsCount: catalogCount,
                 recordsCount: mergedRecords.length,
                 data: mergedData
-              }));
+              });
             }
           } catch (e: any) {
             console.warn('[sync/push] merge de operador no crítico:', e?.message || e);
@@ -1020,12 +1073,14 @@ async function handleRoute(request: Request, env: Env, ctx: ExecutionContext): P
         //    SOLO en push de catálogo (ADMIN). Un operador no debe refrescar el snapshot
         //    KV con su catálogo (posiblemente obsoleto) ni el índice de estudiantes.
         if (isAdmin && env.ATTENDANCE_KV) {
-          await env.ATTENDANCE_KV.put(`latest_snapshot_${schoolCode}`, JSON.stringify({
-            syncedAt: new Date().toISOString(),
+          // Ronda 60-b (H-5): el meta lleva el updated_at REAL de D1 (mismo timestamp
+          // que la fila sync_snapshots) y la reflexión jamás retrocede la caché.
+          await reflectSnapshotToKV(env, schoolCode, {
+            syncedAt: adminSnapshotUpdatedAt || new Date().toISOString(),
             studentsCount: students.length,
             recordsCount: adminRecordsCount,
             data: adminSnapshotData
-          }));
+          });
           // Guardar índice de estudiantes para validación rápida de QR en portería
           const studentIndex: Record<string, any> = {};
           students.forEach((s: any) => {

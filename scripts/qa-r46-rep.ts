@@ -68,10 +68,15 @@ const svc = AttendanceStorageService;
 // corra en cualquier día/hora real, igual que verify_ronda43.
 (svc as any).getSchoolDayWindow = () => ({ start: '00:00', end: '23:59', startMin: 0, endMin: 1439 });
 
-function timePlus(minutes: number): string {
+// Ronda 60-c — bloque de prueba HORA-SEGURO: timePlus(±) generaba 23:58→00:38
+// (cruce de medianoche) cuando la suite corre entre ~23:20-00:10 y el localizador
+// de bloques del producto no soporta cruce → falsas fallas de precondición
+// reproducidas idénticas en baseline (stash). Aserciones intactas.
+function safeBlock(backMin: number, fwdMin: number): { start: string; end: string } {
   const [h, m] = getCurrentTimeString().split(':').map(Number);
-  const total = h * 60 + m + minutes;
-  return `${String(Math.floor(total / 60) % 24).padStart(2, '0')}:${String(total % 60).padStart(2, '0')}`;
+  const nowMin = h * 60 + m;
+  const fmt = (t: number) => `${String(Math.floor(t / 60)).padStart(2, '0')}:${String(t % 60).padStart(2, '0')}`;
+  return { start: fmt(Math.max(0, nowMin - backMin)), end: fmt(Math.min(1439, nowMin + fwdMin)) };
 }
 
 // Ronda 58 (F-1): esta suite ejercita el flujo del representante con códigos 1D
@@ -86,8 +91,9 @@ const EXP = Date.parse(`${new Date().getFullYear()}-12-19T23:59:59`);
 // Slot único de prueba que cubre AHORA (para activar v2 y registrar PUNTUAL dentro de la gracia).
 const SLOT = 'slot-r46';
 function seedSlot() {
+  const blk = safeBlock(2, 40); // hora-seguro: cubre AHORA, jamás cruza medianoche
   svc.saveScheduleSlots([
-    { id: SLOT, order: 1, type: 'CLASS', name: '1ª Hora', startTime: timePlus(-2), endTime: timePlus(40), durationMinutes: 42 }
+    { id: SLOT, order: 1, type: 'CLASS', name: '1ª Hora', startTime: blk.start, endTime: blk.end, durationMinutes: 42 }
   ] as any);
 }
 

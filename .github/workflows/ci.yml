@@ -53,7 +53,9 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 20
-          cache: npm
+          # Sin `cache: npm`: el repo NO commitea package-lock.json (convención
+          # R58) y setup-node exige un lockfile para la caché — su ausencia
+          # mató los runs 34672518725 y 34673585241 antes de tocar código.
 
       # ── Cliente: dependencias, typecheck, build, suites locales ──
       - name: Instalar dependencias (raíz)

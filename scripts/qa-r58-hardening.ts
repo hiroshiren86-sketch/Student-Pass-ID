@@ -40,6 +40,15 @@
 })();
 
 let passed = 0, failed = 0;
+// Ronda 60-c — bloque de prueba HORA-SEGURO: contiene "ahora" y jamás cruza
+// medianoche. El fin fijo '23:59' (exclusivo) producía el falso "Bloque ya
+// finalizado" en el minuto 23:59 (J2) — reproducido en baseline. Fixture only.
+function safeBlock(backMin: number, fwdMin: number): { start: string; end: string } {
+  const [h, m] = getCurrentTimeString().split(':').map(Number);
+  const nowMin = h * 60 + m;
+  const fmt = (t: number) => `${String(Math.floor(t / 60)).padStart(2, '0')}:${String(t % 60).padStart(2, '0')}`;
+  return { start: fmt(Math.max(0, nowMin - backMin)), end: fmt(Math.min(1439, nowMin + fwdMin)) };
+}
 const failures: string[] = [];
 function check(name: string, cond: boolean, extra?: string) {
   if (cond) { passed++; console.log(`  ✓ ${name}`); }
@@ -332,8 +341,8 @@ await section('J — R60: el representante activa la clase aunque su portal NO t
   svc.saveSettings({ ...svc.getSettings() }, false);
   const secret = svc.getSettings().qrSecret;
   (svc as any).getSchoolDayWindow = () => ({ start: '00:00', end: '23:59', startMin: 0, endMin: 1439 });
-  const [hNow, mNow] = getCurrentTimeString().split(':').map(Number);
-  svc.saveScheduleSlots([{ id: 'slot-r60', order: 1, type: 'CLASS', name: '1ª Hora', startTime: `${String(Math.max(hNow - 1, 0)).padStart(2, '0')}:${mNow}`, endTime: '23:59', durationMinutes: 60 } as any]);
+  const blkR60 = safeBlock(60, 10); // hora-seguro: cubre AHORA (antes: fin fijo 23:59 → falso "ya finalizado" en el minuto 23:59)
+  svc.saveScheduleSlots([{ id: 'slot-r60', order: 1, type: 'CLASS', name: '1ª Hora', startTime: blkR60.start, endTime: blkR60.end, durationMinutes: 60 } as any]);
 
   // Tarjeta VÁLIDA firmada por la institución y tarjeta FIRMADA CON OTRO SECRET
   // (lo que ve el portal si el docente generó su tarjeta con un secret divergente).

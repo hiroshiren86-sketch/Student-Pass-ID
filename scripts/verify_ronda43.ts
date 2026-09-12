@@ -49,10 +49,28 @@ const crypto = await import('../src/utils/crypto');
 const { AttendanceStorageService, schoolYearEndEpochMs, getCurrentTimeString, getTodayDateString } = await import('../src/services/attendanceStorage');
 const svc = AttendanceStorageService;
 
-function timePlus(minutes: number): string {
+// Ronda 60-c — bloques de prueba HORA-SEGUROS. timePlus(±) generaba bloques tipo
+// 23:53→00:43 que CRUZAN la medianoche cuando la suite corre entre ~23:20-00:10;
+// el localizador de bloques por reloj del producto (correctamente para el dominio
+// escolar) no soporta cruce de medianoche → falsas fallas C2/C6/D0 reproducidas
+// idénticas en baseline (stash, evidencia qa_logs/r43_baseline.txt). Aserciones
+// intactas: solo el fixture es seguro por construcción.
+function currentMinuteOfDay(): number {
   const [h, m] = getCurrentTimeString().split(':').map(Number);
-  const total = h * 60 + m + minutes;
-  return `${String(Math.floor(total / 60) % 24).padStart(2, '0')}:${String(total % 60).padStart(2, '0')}`;
+  return h * 60 + m;
+}
+function fmtMinuteOfDay(t: number): string {
+  return `${String(Math.floor(t / 60)).padStart(2, '0')}:${String(t % 60).padStart(2, '0')}`;
+}
+// Bloque ACTIVO por construcción: contiene "ahora", jamás cruza medianoche.
+function safeBlock(backMin: number, fwdMin: number): { start: string; end: string } {
+  const nowMin = currentMinuteOfDay();
+  return { start: fmtMinuteOfDay(Math.max(0, nowMin - backMin)), end: fmtMinuteOfDay(Math.min(1439, nowMin + fwdMin)) };
+}
+// Bloque YA FINALIZADO por construcción: termina antes de ahora, mismo día.
+function safePastBlock(): { start: string; end: string } {
+  const nowMin = currentMinuteOfDay();
+  return { start: fmtMinuteOfDay(Math.max(0, nowMin - 30)), end: fmtMinuteOfDay(Math.max(0, nowMin - 20)) };
 }
 
 /** Ejecuta fn y captura su mensaje de error (para probar los guards que lanzan). */
@@ -141,15 +159,17 @@ await section('C — setActiveTeacherCard (orden de validación §2.2)', async (
   const cardMatematicas = await crypto.generateTeacherCardPayload('prof-r43-1', crypto.slugifySubject('Matemáticas'), exp, secret);
 
   // (7) Bloque por RELOJ: fuera de bloque → no_active_slot (capa anti-abuso de v2)
+  const pastBlk = safePastBlock(); // ya finalizado a cualquier hora (antes: 00:00-00:05 fijo era landmine 00:00-00:05)
   svc.saveScheduleSlots([
-    { id: 'slot-r43-past', order: 1, type: 'CLASS', name: '1ª Hora', startTime: '00:00', endTime: '00:05', durationMinutes: 5 }
+    { id: 'slot-r43-past', order: 1, type: 'CLASS', name: '1ª Hora', startTime: pastBlk.start, endTime: pastBlk.end, durationMinutes: 5 }
   ]);
   const outOfBlock = await svc.setActiveTeacherCard(cardMatematicas);
   check('C1 fuera de bloque CLASE → no_active_slot', outOfBlock.type === 'no_active_slot');
 
-  // Bloque vigente que cubre AHORA
+  // Bloque vigente que cubre AHORA (hora-seguro)
+  const blkNow = safeBlock(10, 40);
   svc.saveScheduleSlots([
-    { id: 'slot-r43-now', order: 1, type: 'CLASS', name: '1ª Hora', startTime: timePlus(-10), endTime: timePlus(+40), durationMinutes: 50 }
+    { id: 'slot-r43-now', order: 1, type: 'CLASS', name: '1ª Hora', startTime: blkNow.start, endTime: blkNow.end, durationMinutes: 50 }
   ]);
   const activated = await svc.setActiveTeacherCard(cardMatematicas);
   check('C2 tarjeta válida dentro de bloque → class_activated', activated.type === 'class_activated', JSON.stringify(activated).slice(0, 160));
@@ -252,8 +272,9 @@ await section('D — registerScan con clase v2 activa (sin gate de grado)', asyn
 
   // —— PARTE 2: regresión v1 (bloque NUEVO slot-r43-v1, sin registros previos) ——
   svc.clearActiveClass();
+  const blkV1 = safeBlock(10, 40);
   svc.saveScheduleSlots([
-    { id: 'slot-r43-v1', order: 1, type: 'CLASS', name: '2ª Hora', startTime: timePlus(-10), endTime: timePlus(+40), durationMinutes: 50 }
+    { id: 'slot-r43-v1', order: 1, type: 'CLASS', name: '2ª Hora', startTime: blkV1.start, endTime: blkV1.end, durationMinutes: 50 }
   ]);
   const dowToday = new Date().getDay(); // el check real de v1 compara contra esto SIN fallback
   const v1Token = await crypto.generateClassQrPayload('10°3', 'slot-r43-v1', dowToday, Date.now() + 3600_000, secret);
@@ -285,8 +306,9 @@ await section('E — Ronda 58 (F-1): política de carné firmado en el escaneo',
 
   const std = { code: '3000000003', documentId: '3000000003', firstName: 'Prueba', lastName: 'Firma', grade: '10°3', section: '3', active: true, createdAt: new Date().toISOString() };
   svc.saveStudents([std] as any);
+  const blkE = safeBlock(10, 40);
   svc.saveScheduleSlots([
-    { id: 'slot-r58-e', order: 1, type: 'CLASS', name: '1ª Hora', startTime: timePlus(-10), endTime: timePlus(+40), durationMinutes: 50 }
+    { id: 'slot-r58-e', order: 1, type: 'CLASS', name: '1ª Hora', startTime: blkE.start, endTime: blkE.end, durationMinutes: 50 }
   ] as any);
 
   // E1: carné FIRMADO CON SECRET AJENO (forjado) → rechazado, NO se registra
