@@ -17,3 +17,5 @@ coverage/
 cloudflare-worker/backups/
 cloudflare-worker/bun.lock
 cloudflare-worker/package-lock.json
+# Ronda 60-d: lockfile raíz tampoco se commitea (convención R58: npm install, no npm ci)
+package-lock.json
