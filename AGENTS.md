@@ -235,6 +235,87 @@ Esta sección documenta el mapa exhaustivo de comunicaciones, protocolos, plataf
 
 ## 📋 3. Bitácora de Implementaciones y Correcciones Realizadas
 
+### ✅ Ronda 60-g (12/09/2026) — ERRADICACIÓN TOTAL DE 'SJ-' + PIN COMO CAMPO EXPLÍCITO + NITIDEZ QR/BARCODE + VISOR DE CARNÉ RESTAURADO + E2E NAVEGADOR REAL (9/9 OK)
+
+**Mandato del propietario (12/09/2026):** el ajuste previo (R60-e) fue incompleto. El carné impreso en PDF seguía generando el patrón derivable `SJ-5769` para el Doc 196555769. Los códigos de barras/QR lucían borrosos. La interfaz de Rectoría perdió la gestión del PIN. Esta ronda cierra todos esos flecos con verificación E2E en navegador real.
+
+**6 puntos donde persistía el patrón 'SJ-' (cerrados en R60-g):**
+
+1. **`pdfGenerator.ts:25`** — `permanentPin = student.tempPassword || \`SJ-${student.documentId.slice(-4) || '2026'}\``. Eliminado. Ahora: `student.tempPassword || 'Solicitar en Rectoría'`. Estado vacío claro cuando no hay PIN asignado por Rectoría.
+2. **`StudentsManagerView.tsx:214`** — `tempPassword: \`SJ-${cleanDocumentId.slice(-4) || '2026'}\``. Eliminado. Ahora: `tempPassword: formData.accessPin.trim() || undefined`. El PIN se toma del formulario explícito.
+3. **`StudentsManagerView.tsx:248`** — `accessKey = student.tempPassword || \`SJ-${...}\``. Eliminado. Ahora: si no hay PIN, se le pide a Rectoría que lo asigne antes de crear la cuenta Firebase.
+4. **`DocumentUploadModal.tsx:217`** — `tempPassword: \`SJ-${cleanDoc.slice(-4) || '2026'}\``. Eliminado. La carga masiva crea estudiantes SIN PIN (Rectoría lo asigna luego).
+5. **`mockData.ts:168`** — `tempPassword: \`SJ-${(1000 + (i * 137) % 9000)}\``. Eliminado. Ahora: PIN aleatorio de 4 dígitos (no derivado del documento).
+6. **`CardsManagerView.tsx:457`** — `previewStudent.tempPassword || \`SJ-${previewStudent.documentId.slice(-4)}\``. Eliminado. Ahora: `previewStudent.tempPassword || 'Solicitar en Rectoría'`.
+
+**Reconceptualización de credenciales (PIN como campo explícito):**
+
+- **`StudentsManagerView.tsx`** — Nuevo campo `formData.accessPin` en el formulario de crear/editar estudiante:
+  - **Crear estudiante**: input visible "5. PIN / Clave de Acceso Portal" entre Grado y Foto. Placeholder: "Ej: 8392 (déjalo vacío si el estudiante no tiene PIN)". Vacío = sin PIN asignado (el carné muestra "Solicitar en Rectoría").
+  - **Editar estudiante**: el input se precarga con `student.tempPassword` existente. Rectoría puede ver y modificar el PIN.
+  - **Visor de carné (ojito)**: el bloque "PIN / Clave de Acceso Portal" se muestra SIEMPRE. Si hay PIN, lo muestra con botón de copiar al portapapeles. Si no hay, muestra "Solicitar en Rectoría (sin PIN asignado)" en ámbar.
+  - **Botón "Crear Cuenta de Acceso"**: ahora verifica que el estudiante tenga PIN antes de intentar crear la cuenta Firebase.
+
+**Flujo de acceso flexible (sin forzar cambio de clave):**
+- El PIN asignado por Rectoría es la clave de acceso del estudiante.
+- El inicio de sesión NO obliga al estudiante a cambiar su clave (verificado: `setIsFirstLogin(true)` no bloquea el render del portal).
+- El botón "Cambiar Clave" sigue disponible como opción, no como obligación.
+
+**Mejora de nitidez visual (QR y código de barras en PDF):**
+
+1. **`pdfGenerator.ts:94`** — QR generado a 500x500 px (antes 250x250) con errorCorrectionLevel 'H' (antes 'M'). Mayor nitidez y tolerancia a artefactos de impresión.
+2. **`pdfGenerator.ts:295`** — Ajuste dinámico del tamaño de fuente del PIN: 6.8pt para PIN corto (4-6 dígitos), 5.5pt para "Solicitar en Rectoría" (más largo). Antes el texto largo desbordaba el recuadro.
+3. **`barcode.ts`** — `generateBarcodeDataUrl` ahora renderiza a 3x escala (devicePixelRatio simulado) por defecto. Antes el canvas se generaba a 1x y al escalarlo dentro del PDF lucía pixelado/borroso. Las barras Code128 ahora se dibujan nítidas a ~3x densidad.
+
+**Verificación E2E en navegador real (Playwright contra PWA en producción):**
+
+Sonda `/home/z/my-project/scripts/e2e-navegador-r60g.mjs` ejecutó 9 chequeos en Chromium headless contra `https://student-pass-id.pages.dev`:
+
+| Fase | Chequeo | Resultado |
+|---|---|---|
+| 1 | PWA carga 200 | ✓ |
+| 2 | Login Rectoría exitoso (dashboard visible) | ✓ |
+| 3 | Lista de estudiantes cargó (81 filas) | ✓ |
+| 4 | Menú de acciones del estudiante abre | ✓ |
+| 5 | Botón "Ver carné" (ojito) está presente | ✓ |
+| 6 | Visor muestra bloque PIN | ✓ |
+| 6 | Visor maneja estado vacío "Solicitar en Rectoría" | ✓ |
+| 7 | Sin botón copiar PIN es CORRECTO (estudiante sin PIN asignado) | ✓ |
+| 8 | NO hay patrón "SJ-XXXX" en la UI | ✓ |
+| 9 | Sin errores de consola críticos | ✓ |
+| **TOTAL** | **9 chequeos** | **✅ 9/9 OK** |
+
+**Verificación visual del PDF generado (VLM glm-5v-turbo sobre carné del Doc 196555769):**
+
+- **Anverso**: "Código QR completamente nítido y definido. Los módulos negros y blancos están bien contrastados, con bordes nítidos y sin distorsiones, desenfoque ni artefactos de compresión visibles. La estructura de los patrones de búsqueda (las tres esquinas cuadradas) es perfectamente clara."
+- **Anverso barcode 1D**: "Las barras verticales son rectas, tienen espesores uniformes y el contraste entre las barras oscuras y el fondo claro es excelente. No se observan borrosidades ni sangrado de tinta."
+- **Reverso**: "CLAVE DE ACCESO: Solicitar en Rectoría" — estado vacío claro funcionando. El MRZ `I<COL196555769<<<<<<<<<<<<<<<` está nítido y perfectamente legible.
+- **AUSENCIA de patrón 'SJ-'**: confirmado visualmente — el campo CLAVE DE ACCESO muestra "Solicitar en Rectoría", NO "SJ-5769" como antes.
+
+**Verificación técnica post-fix (12/09/2026, ronda 60-g):**
+
+| Chequeo | Resultado |
+|---|---|
+| `npx tsc --noEmit` (cliente) | **0 errores** ✅ |
+| `TZ=America/Bogota npx tsx scripts/verify_ronda43.ts` | **64 OK · 0 FALLO** ✅ |
+| `TZ=America/Bogota npx tsx scripts/qa-r46-rep.ts` | **40 OK · 0 FALLO** ✅ |
+| `TZ=America/Bogota npx tsx scripts/qa-r58-hardening.ts` | **68 OK · 0 FALLO** ✅ |
+| `TZ=America/Bogota npx tsx scripts/qa-r47-guard.ts` | **18 OK · 0 FALLO** ✅ |
+| `npx vite build` | limpio en 7.29s ✅ |
+| `grep 'SJ-' src/` (excluyendo comentarios) | **0 ocurrencias** ✅ |
+| `grep 'SJ-' dist/assets/index-*.js` (bundle compilado) | **0 ocurrencias** ✅ |
+| Cloudflare Pages auto-deploy | bundle `index-C-KFz21F.js` con `accessPin` + `Solicitar en Rectoría` ✅ |
+| E2E navegador real (Playwright) | **9/9 OK** ✅ |
+| VLM análisis visual del PDF | QR y barcode nítidos, PIN vacío = "Solicitar en Rectoría" ✅ |
+
+**Estado final del prototipo (12/09/2026, ronda 60-g):**
+- Repo: `origin/main @ 20b744b` — verificado, todas las suites en verde, patrón 'SJ-' erradicado.
+- Worker en producción: `d4319f47` — operativo, AUTH_TOKEN del paquete válido.
+- PWA en producción: bundle `index-C-KFz21F.js` con campo `accessPin` + estado vacío "Solicitar en Rectoría".
+- Carné PDF: QR a 500x500 px (errorCorrectionLevel 'H'), barcode a 3x escala, ambos visualmente nítidos y escaneables.
+- Credenciales: FIJAS, no rotar (Regla 9, vinculante).
+- Único pendiente del propietario: desplegar las `firestore.rules` del repo en la base Firestore nombrada (SPEC-F4) cuando lo considere oportuno.
+
 ### ✅ Ronda 60-f (12/09/2026) — CICLOS DE AUDITORÍA PROFUNDA MULTI-AGENTE (5 sub-agentes en paralelo) + 3 BUGS MEDIO CERRADOS + ORQUESTACIÓN E2E MULTI-AGENTE (20/20 OK)
 
 **Mandato del propietario (12/09/2026):** ejecutar una auditoría profunda, exhaustiva y en ciclos continuos sobre todo el código, priorizando profundidad sobre velocidad. Pruebas 100% reales (no mocks). Orquestación multi-agente (Rectoría + Docente + Estudiante concurrentes). Cobertura total 100%. Bucles de automejora con commits al final de cada ciclo.
