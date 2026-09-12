@@ -46,7 +46,17 @@ export interface BackupFile {
   counts: Record<string, number>;
 }
 
-const SECRET_FIELDS = ['qrSecret', 'cloudflareApiToken', 'cloudflareOperatorToken', 'sessionSecret'] as const;
+// Ronda 60-f (A-1 propagado): lista UNIFICADA de secretos — se añaden legacyQrSecret
+// y customAiApiKey (R60-b los añadió en firebase.ts:saveSchoolSettings pero NO se
+// propagaron aquí; un respaldo LOCAL con includeSecrets:false filtraba ambos en el JSON).
+const SECRET_FIELDS = [
+  'qrSecret',
+  'legacyQrSecret',         // R60-f: rotación tolerada en verifyClassToken
+  'sessionSecret',
+  'cloudflareApiToken',
+  'cloudflareOperatorToken',
+  'customAiApiKey'           // R60-f: BYOK personal del admin
+] as const;
 
 /** Serializa el snapshot local actual al formato INAS_BACKUP. */
 export function buildBackup(scope: BackupScope, includeSecrets: boolean): BackupFile {

@@ -616,11 +616,22 @@ export class FirebaseService {
       let count = 0;
 
       // 1. Settings (sin secretos — ver saveSchoolSettings)
+      // Ronda 60-f (A-1 propagado): lista UNIFICADA de secretos — se añade legacyQrSecret
+      // (R60-b lo añadió en saveSchoolSettings pero NO se propagó aquí; un respaldo a
+      // Firestore filtraba legacyQrSecret activo y re-publicaba metadatos de protocolo).
+      // La lista ahora coincide 1:1 con saveSchoolSettings + PROTOCOL_KEYS (M-4).
+      // Nota: lastCloudSync NO se destructura aquí porque NO es campo del tipo SchoolSettings
+      // (es un timestamp que se añade al hacer setDoc merge — ver línea siguiente).
       const {
         qrSecret: _qrSecret,
         sessionSecret: _sessionSecret,
         cloudflareApiToken: _cfToken,
         customAiApiKey: _aiKey,
+        legacyQrSecret: _legacyQr,
+        cloudflareCatalogVersion: _cv,
+        cloudflareLastSyncedAt: _lsAt,
+        lastCloudflareSync: _lcSync,
+        cloudflareOperatorToken: _opToken,
         ...safeSettings
       } = data.settings;
       await setDoc(doc(db, 'school_settings', 'main'), {
