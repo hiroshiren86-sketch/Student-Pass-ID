@@ -8,9 +8,20 @@ coverage/
 !.env.example
 .wrangler/
 
-# Credenciales (NO versionar)
+# Credenciales (NO versionar) — Regla 9 de AGENTS.md: nunca subir al repo público
 .firebase-sa.json
 .env
+Paquete_Credenciales_INAS*.md
+Paquete_Credenciales_INAS*.json
+firebase-adminsdk-sa_INAS*.json
+credenciales/
+Credenciales_INAS/
+**/credenciales/
+**/Credenciales_INAS/
+# Cualquier archivo que contenga un PAT de GitHub (defensa en profundidad)
+*github_pat_*
+*GH_TOKEN*
+*GITHUB_TOKEN*
 
 # Ronda 51: backups D1 (contienen datos personales — Ley 1581) y lockfiles del worker
 # (el propietario los retiró en d4e79e8 para limpiar la estructura del repo)
@@ -19,3 +30,4 @@ cloudflare-worker/bun.lock
 cloudflare-worker/package-lock.json
 # Ronda 60-d: lockfile raíz tampoco se commitea (convención R58: npm install, no npm ci)
 package-lock.json
+

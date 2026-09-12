@@ -50,8 +50,12 @@ interface StudentPortalViewProps {
 
 export const StudentPortalView: React.FC<StudentPortalViewProps> = ({ onLogout, activeStudentCode }) => {
   const initialStudent = AttendanceStorageService.getStudents().find(s => s.code === (activeStudentCode || '1000000002')) || AttendanceStorageService.getStudents()[0];
-  const [studentCodeInput, setStudentCodeInput] = useState(initialStudent?.code || '1000000002');
-  const [passwordInput, setPasswordInput] = useState(initialStudent?.tempPassword || 'SJ-1274');
+  // Ronda 60-e (F-25/H-30-2): el formulario del portal nace VACÍO — sin precarga de credenciales
+  // (consistent con LoginScreen.tsx:45). Antes: precargaba code+tempPassword del primer estudiante
+  // del catálogo y dejaba el literal 'SJ-1274' como fallback duro → llegaba al bundle público y
+  // cualquier visitante vea credenciales en pantalla antes de escribir una sola tecla.
+  const [studentCodeInput, setStudentCodeInput] = useState(activeStudentCode || '');
+  const [passwordInput, setPasswordInput] = useState('');
   const [activeStudent, setActiveStudent] = useState<Student | null>(activeStudentCode ? (AttendanceStorageService.getStudentByCodeOrDoc(activeStudentCode) || initialStudent) : null);
   const [loginError, setLoginError] = useState<string | null>(null);
   const [isFirstLogin, setIsFirstLogin] = useState(false);
@@ -896,7 +900,13 @@ export const StudentPortalView: React.FC<StudentPortalViewProps> = ({ onLogout, 
                       </div>
                       <div className="flex justify-between">
                         <span className="text-slate-400">PIN PORTAL:</span>
-                        <span className="font-bold text-indigo-700">{activeStudent.tempPassword || `SJ-${activeStudent.documentId.slice(-4)}`}</span>
+                        {/* Ronda 60-e (F-18): el carné NUNCA muestra un PIN derivable del documento.
+                            Antes: si la ficha no tenía tempPassword, el carné mostraba
+                            'SJ-' + últimos 4 del documento → patrón público que permitía entrar
+                            al portal de cualquier estudiante leyendo solo su código.
+                            Ahora: si la ficha no tiene tempPassword emitido por Rectoría,
+                            el carné lo dice con claridad y no deriva nada. */}
+                        <span className="font-bold text-indigo-700">{activeStudent.tempPassword || '— solicitar a Rectoría'}</span>
                       </div>
                     </div>
 
