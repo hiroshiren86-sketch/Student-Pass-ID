@@ -216,7 +216,17 @@ export interface Authz {
 
 export async function resolveAuthz(request: Request, env: Env): Promise<Authz | null> {
   const tokenRole = resolveTokenScope(request, env);
-  const identity = await verifyFirebaseIdentity(request, env);
+  // Ronda 60-b (M-2) — FAIL-CLOSED: un fallo de INFRAESTRUCTURA en la verificación
+  // (JWKS de Google inalcanzable, SA mal configurada, red) jamás abre la puerta ni
+  // se convierte en un 500 con detalles internos: se degrada a "sin identidad" y la
+  // ruta responde 401. El detalle técnico queda únicamente en el log del Worker.
+  let identity: Awaited<ReturnType<typeof verifyFirebaseIdentity>> = null;
+  try {
+    identity = await verifyFirebaseIdentity(request, env);
+  } catch (e: any) {
+    console.warn('[authz] verificación de identidad falló (fail-closed):', e?.message || e);
+    identity = null;
+  }
 
   if (identity && identity.profile.role) {
     const r = identity.profile.role as IdentityRole;

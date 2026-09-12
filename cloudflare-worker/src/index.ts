@@ -294,6 +294,28 @@ export function mergeRecordsByUpdatedAt(existing: any[], incoming: any[]): any[]
   return Array.from(map.values());
 }
 
+// Ronda 60-b (H-3) — FUSIÓN DE TOMBSTONES por type+id conservando la baja MÁS
+// RECIENTE. Los tombstones no traen updatedAt/serverUpdatedAt (traen deletedAt),
+// así que mergeRecordsByUpdatedAt los trataba como "sin versión" y el ENTRANTE
+// ganaba siempre: un deletedAt viejo podía sobrevivir a una baja más nueva y el
+// filtro F-8 (entDate > deletedAt) resucitaba la entidad tras una re-escritura
+// posterior a la baja real. Esta fusión además deduplica por entidad.
+export function mergeTombstones(prev: any[], incoming: any[]): any[] {
+  const map = new Map<string, any>();
+  const tombKey = (t: any) => `${t?.type === 'teacher' ? 't' : 's'}:${String(t?.id)}`;
+  const tombTime = (t: any) => {
+    const p = Date.parse(String(t?.deletedAt || ''));
+    return Number.isFinite(p) ? p : 0;
+  };
+  for (const t of [...(prev || []), ...(incoming || [])]) {
+    if (!t || t.id === undefined || t.id === null) continue;
+    const k = tombKey(t);
+    const cur = map.get(k);
+    if (!cur || tombTime(t) >= tombTime(cur)) map.set(k, t);
+  }
+  return Array.from(map.values());
+}
+
 // Ronda 54 (hueco #4) — SELLO DE VERSIÓN DE SERVIDOR. Tras fusionar, el Worker asigna a
 // CADA registro la versión monotónica del servidor (`serverUpdatedAt = now`), sobrescribiendo
 // cualquier timestamp local. Así el LWW de cada registro queda DETERMINISTA: es "el que el
@@ -425,6 +447,31 @@ function purgeRateLimited(ip: string): boolean {
   }
   hits.push(now);
   PURGE_HITS.set(ip, hits);
+  return false;
+}
+
+// ==============================================================================
+// Ronda 60-b (B-1) — VERIFICACIÓN DE TARJETA con rate limit: /api/verify/
+// class-token es PÚBLICO (el portal del estudiante no porta token de
+// dispositivo). Ventana en-memoria del isolate (mismo patrón de la purga R28):
+// disuade el forceo masivo de tokens; la barrera estructural es que el token
+// firmado HMAC es infalsificable y la respuesta jamás revela el secret.
+// 60 verificaciones / 5 min / IP: holgado para un aula real escaneando en fila.
+// ==============================================================================
+const VERIFY_HITS = new Map<string, number[]>();
+const VERIFY_LIMIT_PER_WINDOW = 60;
+const VERIFY_WINDOW_MS = 5 * 60 * 1000;
+
+function verifyRateLimited(ip: string): boolean {
+  const now = Date.now();
+  const windowStart = now - VERIFY_WINDOW_MS;
+  const hits = (VERIFY_HITS.get(ip) || []).filter((t) => t > windowStart);
+  if (hits.length >= VERIFY_LIMIT_PER_WINDOW) {
+    VERIFY_HITS.set(ip, hits);
+    return true;
+  }
+  hits.push(now);
+  VERIFY_HITS.set(ip, hits);
   return false;
 }
 
@@ -756,16 +803,24 @@ async function handleRoute(request: Request, env: Env, ctx: ExecutionContext): P
           //        terminales viejos que aún las suban.
           // =========================================================================
           try {
-            const stampedIncoming = stampServerVersion(records); // F-7: SOLO lo entrante
+            // F-7 (refinado por Ronda 60-b, H-2): fusión PRIMERO con las versiones
+            // verdaderas y sello SOLO a los entrantes que GANARON el LWW. El sello
+            // ANTES del merge hacía ganar a CUALQUIER copia entrante (su
+            // serverUpdatedAt=now vencía siempre), incluso a una copia obsoleta que
+            // llegaba tarde y REGRESABA el dato fusionado. El set de referencias
+            // distingue un ganador entrante de un registro heredado del snapshot.
+            const incomingSet = new Set<any>((records || []).filter((r: any) => r && r.id));
+            const stampWinner = (r: any) => (incomingSet.has(r) ? stampServerVersion([r])[0] : r);
             const written = await casWriteSnapshot(env, schoolCode, (prev, row) => {
               let mergedRecords: any[];
               let mergedTombstones: any[];
               if (prev) {
                 const prevRecords = Array.isArray(prev.records) ? prev.records : [];
-                mergedRecords = mergeRecordsByUpdatedAt(prevRecords, stampedIncoming);
+                mergedRecords = mergeRecordsByUpdatedAt(prevRecords, records).map(stampWinner);
                 const prevTombs = Array.isArray(prev.tombstones) ? prev.tombstones : [];
                 const incomingTombs = Array.isArray(data.tombstones) ? data.tombstones : [];
-                mergedTombstones = mergeRecordsByUpdatedAt(prevTombs, incomingTombs);
+                // Ronda 60-b (H-3): fusión por type+id con la baja más reciente.
+                mergedTombstones = mergeTombstones(prevTombs, incomingTombs);
                 // F-8: retirar tombstones de entidades re-matriculadas en ESTE push.
                 const incomingStudentIds = new Set(students.map((s: any) => String(s?.code)));
                 const incomingTeacherIds = new Set(teachers.map((t: any) => String(t?.id)));
@@ -776,7 +831,7 @@ async function handleRoute(request: Request, env: Env, ctx: ExecutionContext): P
                   return true;
                 });
               } else {
-                mergedRecords = stampedIncoming;
+                mergedRecords = stampServerVersion(records); // sin previo: todos los entrantes son ganadores
                 mergedTombstones = Array.isArray(data.tombstones) ? data.tombstones : [];
               }
               const snapshotData = stripSnapshotCredentials({   // F-23
@@ -864,7 +919,11 @@ async function handleRoute(request: Request, env: Env, ctx: ExecutionContext): P
             //      aún sube tempPassword en claro.
             // El catálogo del snapshot vigente se conserva intacto (comportamiento R47).
             // =========================================================================
-            const stampedIncoming = stampServerVersion(records);
+            // Ronda 60-b (H-2, vía operador): mismo refinamiento que el camino ADMIN —
+            // fusión con versiones verdaderas y sello solo a los ganadores entrantes
+            // (el sello pre-merge hacía ganar a copias obsoletas que llegaban tarde).
+            const incomingSet = new Set<any>((records || []).filter((r: any) => r && r.id));
+            const stampWinner = (r: any) => (incomingSet.has(r) ? stampServerVersion([r])[0] : r);
             let mergedData: any;
             let mergedRecords: any[] = [];
             let catalogCount = 0;
@@ -874,12 +933,12 @@ async function handleRoute(request: Request, env: Env, ctx: ExecutionContext): P
                 const prevById = new Map<string, any>(prevRecords.map((r: any) => [String(r.id), r]));
                 // Ronda 54 (hueco #6): registros que YA existían y se resuelven por LWW (conflicto).
                 pushFusedCount = records.filter((r: any) => r && r.id && prevById.has(String(r.id))).length;
-                mergedRecords = mergeRecordsByUpdatedAt(prevRecords, stampedIncoming);
+                mergedRecords = mergeRecordsByUpdatedAt(prevRecords, records).map(stampWinner);
                 mergedData = stripSnapshotCredentials({ ...prev, records: mergedRecords });
                 catalogCount = Array.isArray(prev.students) ? prev.students.length : (row?.students_count ?? 0);
               } else {
                 // No hay snapshot previo: almacenar solo los hechos de este operador (sin catálogo).
-                mergedRecords = [...stampedIncoming];
+                mergedRecords = stampServerVersion(records); // sin previo: todos los entrantes son ganadores
                 mergedData = stripSnapshotCredentials({ ...data, records: mergedRecords });
                 catalogCount = Array.isArray(data.students) ? data.students.length : 0;
               }
@@ -1115,7 +1174,15 @@ async function handleRoute(request: Request, env: Env, ctx: ExecutionContext): P
       // es de solo-lectura (1 lectura KV/D1) y no expone nada sensible.
       // =========================================================================
       if (path === '/api/verify/class-token' && request.method === 'POST') {
-        const body = await request.json() as any;
+        if (verifyRateLimited(clientIp(request))) {
+          return errorResponse('Demasiadas verificaciones desde esta red. Espera unos minutos e intenta de nuevo.', 429);
+        }
+        let body: any;
+        try {
+          body = await request.json() as any;
+        } catch {
+          return errorResponse('Cuerpo de la petición inválido: se espera JSON con el campo "token".', 400);
+        }
         const token = String(body?.token || '').trim();
         const schoolCode = body?.schoolCode || env.SCHOOL_CODE || 'INAS-ANTONIA-SANTOS-2026';
         if (!token) {
@@ -1139,7 +1206,15 @@ async function handleRoute(request: Request, env: Env, ctx: ExecutionContext): P
         if (!settings || !(settings.qrSecret || settings.legacyQrSecret)) {
           return errorResponse('La institución no tiene clave de firma configurada en la nube. Rectoría debe sincronizar una vez (Push) para habilitar la verificación.', 409);
         }
-        const verdict = await verifyClassToken(token, [settings.qrSecret, settings.legacyQrSecret].filter(Boolean));
+        let verdict;
+        try {
+          verdict = await verifyClassToken(token, [settings.qrSecret, settings.legacyQrSecret].filter(Boolean));
+        } catch (e: any) {
+          // Ronda 60-b (B-1): los detalles internos (message de la excepción) quedan
+          // en el log del Worker; al cliente solo llega un genérico accionable.
+          console.error('[verify/class-token] fallo interno:', e?.message || e);
+          return errorResponse('No se pudo verificar el token en este momento. Intenta de nuevo.', 500);
+        }
         return jsonResponse({
           success: true,
           verified: verdict.verified,
@@ -1524,8 +1599,10 @@ async function handleRoute(request: Request, env: Env, ctx: ExecutionContext): P
 
       return errorResponse(`Ruta no encontrada: ${path}`, 404);
     } catch (err: any) {
+      // Ronda 60-b (B-1): el detalle (message/stack) queda SOLO en el log interno;
+      // al cliente jamás se le filtran detalles de infraestructura.
       console.error('Worker internal error:', err);
-      return errorResponse(err.message || 'Error interno en Cloudflare Worker', 500);
+      return errorResponse('Error interno en Cloudflare Worker. Reintenta y, si persiste, revisa el log del Worker.', 500);
     }
 }
 
@@ -1540,7 +1617,9 @@ export default {
       return withCorsHeaders(res, request, env);
     } catch (err: any) {
       // Error ANTES del try interno (p. ej. new URL malformada): respuesta honesta + CORS.
-      const fallback = new Response(JSON.stringify({ success: false, error: err?.message || 'Error interno' }), {
+      // Ronda 60-b (B-1): mensaje genérico al cliente; el detalle vive en el log.
+      console.error('Worker fetch error:', err);
+      const fallback = new Response(JSON.stringify({ success: false, error: 'Error interno en Cloudflare Worker.' }), {
         status: 500,
         headers: { 'Content-Type': 'application/json', ...corsHeaders }
       });

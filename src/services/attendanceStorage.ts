@@ -321,8 +321,30 @@ export class AttendanceStorageService {
    */
   private static stripSecretFields(source: Partial<SchoolSettings> | null): Partial<SchoolSettings> {
     if (!source) return {} as Partial<SchoolSettings>;
-    const { qrSecret, sessionSecret, cloudflareApiToken, customAiApiKey, ...safe } = source as Record<string, unknown>;
-    void qrSecret; void sessionSecret; void cloudflareApiToken; void customAiApiKey;
+    // Ronda 60-b (A-1): lista UNIFICADA de secretos (añade legacyQrSecret).
+    const { qrSecret, sessionSecret, cloudflareApiToken, customAiApiKey, legacyQrSecret, ...safe } = source as Record<string, unknown>;
+    void qrSecret; void sessionSecret; void cloudflareApiToken; void customAiApiKey; void legacyQrSecret;
+    return safe as Partial<SchoolSettings>;
+  }
+
+  // Ronda 60-b (M-4): metadatos de PROTOCOLO del Worker que jamás entran por el
+  // canal Firestore — los gestiona el CAS del snapshot en la nube (pull/push).
+  // Un cloudflareCatalogVersion obsoleto re-inyectado aquí por el listener era el
+  // bucle 409: el siguiente push se rechazaba hasta re-login. Doble strip:
+  // stripSecretFields (secretos) + stripProtocolFields (protocolo) en AMBOS
+  // consumidores del canal.
+  private static readonly PROTOCOL_FIELDS: ReadonlySet<string> = new Set([
+    'cloudflareCatalogVersion', // versión CAS — la lleva el snapshot del Worker
+    'cloudflareLastSyncedAt',   // cursor incremental local (R54) — nunca retrocede
+    'lastCloudflareSync',       // sello local del último ciclo
+    'lastCloudSync',            // sello de la última escritura del doc (metadata)
+    'updatedAt'                 // metadata del doc Firestore
+  ]);
+
+  private static stripProtocolFields(source: Partial<SchoolSettings> | null): Partial<SchoolSettings> {
+    if (!source) return {} as Partial<SchoolSettings>;
+    const safe: Record<string, unknown> = { ...(source as Record<string, unknown>) };
+    for (const k of AttendanceStorageService.PROTOCOL_FIELDS) delete safe[k];
     return safe as Partial<SchoolSettings>;
   }
 
@@ -385,7 +407,10 @@ export class AttendanceStorageService {
       FirebaseService.onSchoolSettingsChange((cloudSettings) => {
         if (cloudSettings && (cloudSettings.schoolName || cloudSettings.cloudflareWorkerUrl)) {
           const current = this.getSettings();
-          const updated = { ...current, ...this.stripSecretFields(cloudSettings) };
+          // Ronda 60-b (M-4): doble strip — secretos (A-1) + metadatos de protocolo
+          // del Worker (el cloudflareCatalogVersion obsoleto de este canal era el
+          // bucle 409 del push).
+          const updated = { ...current, ...this.stripProtocolFields(this.stripSecretFields(cloudSettings)) };
           this.saveSettings(updated as SchoolSettings, false);
         }
       });
@@ -401,7 +426,8 @@ export class AttendanceStorageService {
           if (cloudSettings) {
             const current = this.getSettings();
             // Ronda 29 (H-29-1): merge SIN secretos (mismo vector de envenenamiento)
-            const merged = { ...current, ...this.stripSecretFields(cloudSettings) };
+            // Ronda 60-b (M-4): tampoco metadatos de protocolo del Worker (doble strip).
+            const merged = { ...current, ...this.stripProtocolFields(this.stripSecretFields(cloudSettings)) };
             this.saveSettings(merged, false);
           }
         } catch (e) {

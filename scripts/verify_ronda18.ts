@@ -65,7 +65,9 @@ await section('B. Espera de sesión anónima + reglas endurecidas', () => {
   check('initCloudSettingsSync ESPERA la sesión anónima', storage.includes('ensureAnonymousAuth().then(() =>'));
   check('saveSchoolSettings espera sesión', fb.split('static async saveSchoolSettings')[1]?.split('\n  static ')[0].includes('await this.ensureAnonymousAuth()'));
   check('backupAllToFirestore espera sesión', fb.split('static async backupAllToFirestore')[1]?.split('\n  static ')[0].includes('await this.ensureAnonymousAuth()'));
-  check('syncAttendanceRecord espera sesión', fb.split('static async syncAttendanceRecord')[1]?.split('\n  static ')[0].includes('await this.ensureAnonymousAuth()'));
+  // Ronda 60-b: syncAttendanceRecord era código muerto (0 llamadores) y fue ELIMINADO
+  // — la aserción ahora verifica su ausencia (mandato del propietario: nada muerto).
+  check('syncAttendanceRecord eliminado (Ronda 60-b, código muerto)', !fb.includes('static async syncAttendanceRecord'));
   const cfg = JSON.parse(readFileSync('firebase-applet-config.json', 'utf8'));
   check('App Check preparado condicionalmente y NO activo hoy', fb.includes('initializeAppCheck') && (cfg.recaptchaSiteKey || '') === '');
   const rules = readFileSync('firestore.rules', 'utf8');

@@ -601,23 +601,6 @@ export class FirebaseService {
   }
 
   /**
-   * Sync an attendance record to Firestore
-   */
-  static async syncAttendanceRecord(record: AttendanceRecord): Promise<void> {
-    try {
-      await this.ensureAnonymousAuth(); // Ronda 18: las reglas exigen isAuthenticated()
-      const db = getFirebaseFirestore();
-      const docRef = doc(db, 'attendance_records', record.id);
-      await setDoc(docRef, {
-        ...record,
-        syncedAt: serverTimestamp()
-      }, { merge: true });
-    } catch (error) {
-      console.warn('Firestore sync failed (offline fallback active):', error);
-    }
-  }
-
-  /**
    * Sync all local data to Cloud Firestore (Backup / Migration)
    */
   static async backupAllToFirestore(data: {
@@ -718,13 +701,22 @@ export class FirebaseService {
       // qrSecret, sessionSecret, tokens de Cloudflare y la clave IA personal del admin.
       // La nube solo necesita valores de ruta/configuración; los secretos viven y
       // permanecen en el localStorage del dispositivo que los generó.
+      // Ronda 60-b (A-1): lista UNIFICADA de secretos — se añade legacyQrSecret
+      // (la clave histórica que la verificación de tarjetas aún acepta).
       const {
         qrSecret: _qrSecret,
         sessionSecret: _sessionSecret,
         cloudflareApiToken: _cfToken,
         customAiApiKey: _aiKey,
+        legacyQrSecret: _legacyQr,
         ...safeSettings
       } = settings;
+      // Ronda 60-b (M-4, lado escritura): el doc school_settings/main JAMÁS publica
+      // metadatos de protocolo del Worker — los gestiona el CAS del snapshot. Un
+      // valor obsoleto publicado aquí era re-inyectado por el listener de otro
+      // dispositivo y provocaba el bucle 409 en el siguiente push.
+      const PROTOCOL_KEYS = ['cloudflareCatalogVersion', 'cloudflareLastSyncedAt', 'lastCloudflareSync', 'lastCloudSync'] as const;
+      for (const k of PROTOCOL_KEYS) delete (safeSettings as Record<string, unknown>)[k];
       await setDoc(docRef, {
         ...safeSettings,
         updatedAt: serverTimestamp(),
