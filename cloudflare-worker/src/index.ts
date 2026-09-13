@@ -523,6 +523,64 @@ function verifyRateLimited(ip: string): boolean {
 }
 
 // ==============================================================================
+// R61 — RATE LIMIT GLOBAL (D1). El Map por-isolate (VERIFY_HITS/PURGE_HITS) se
+// pierde entre reciclajes de Cloudflare (R60-h lo midió: 345 requests → 0×429).
+// D1 es fuertemente consistente (una sola primaria SQLite): un contador upsert
+// atómico por clave sirve de ventana global REAL. Coste: 1 escritura D1 por
+// request a los endpoints limitados. Si D1 falla, el limitador degrada a
+// "permitir" (fail-open) — la barrera estructural sigue siendo la firma HMAC
+// infalsificable y el gate de credencial.
+// ==============================================================================
+let rateLimitsTableEnsured = false;
+
+async function ensureRateLimitsTable(env: Env): Promise<void> {
+  if (rateLimitsTableEnsured || !env.DB) return;
+  try {
+    await env.DB.prepare(
+      `CREATE TABLE IF NOT EXISTS rate_limits (
+         key TEXT PRIMARY KEY,
+         count INTEGER NOT NULL DEFAULT 1,
+         window_start INTEGER NOT NULL
+       )`
+    ).run();
+    rateLimitsTableEnsured = true;
+  } catch (e: any) {
+    console.warn('[rate_limits] ensure no crítico:', e?.message || e);
+  }
+}
+
+/**
+ * Ventana fija deslizante por clave (p. ej. `verify:<ip>`). Atómico: el contador
+ * se incrementa y se lee en UNA sola sentencia (RETURNING). Devuelve true si la
+ * petición EXCEDE el límite (rechazar). Ventana: si window_start es más viejo
+ * que (now - windowMs), el contador se REINICIA en 1.
+ */
+async function d1RateLimited(env: Env, key: string, limit: number, windowMs: number): Promise<boolean> {
+  if (!env.DB) return false;
+  try {
+    await ensureRateLimitsTable(env);
+    const now = Date.now();
+    const expiredBefore = now - windowMs;
+    const row = await env.DB.prepare(
+      `INSERT INTO rate_limits (key, count, window_start) VALUES (?, 1, ?)
+       ON CONFLICT(key) DO UPDATE SET
+         count = CASE WHEN rate_limits.window_start < ? THEN 1 ELSE rate_limits.count + 1 END,
+         window_start = CASE WHEN rate_limits.window_start < ? THEN ? ELSE rate_limits.window_start END
+       RETURNING count`
+    ).bind(key, now, expiredBefore, expiredBefore, now).first<{ count: number }>();
+    // Limpieza oportunista (~2%): filas de ventanas muertas hace más de 24 h.
+    if (Math.random() < 0.02) {
+      try {
+        await env.DB.prepare(`DELETE FROM rate_limits WHERE window_start < ?`).bind(now - 24 * 60 * 60 * 1000).run();
+      } catch { /* no crítico */ }
+    }
+    return (row?.count ?? 0) > limit;
+  } catch {
+    return false; // fail-open: el limitador no puede romper el endpoint
+  }
+}
+
+// ==============================================================================
 // Ronda 39 (H-39-1) — CONVERGENCIA DE ENLACES DE EXCUSAS EN /api/sync/pull.
 // El snapshot (KV o sync_snapshots) se escribe SOLO en /api/sync/push, pero las
 // radicaciones/aprobaciones de la API de excusas actualizan D1 en vivo
@@ -729,11 +787,22 @@ async function handleRoute(request: Request, env: Env, ctx: ExecutionContext): P
       // RUTA: SYNC PUSH (Subida masiva o actualización desde Terminal Local)
       // =========================================================================
       if (path === '/api/sync/push' && request.method === 'POST') {
-        const body = await request.json() as any;
+        // R61 (fix): un body auscente/roto (POST vacío, texto plano, JSON truncado)
+        // rebotaba como 500 del catch global. Ahora: 400 explícito con la forma
+        // esperada — el error es del cliente, no de la infraestructura.
+        let body: any;
+        try {
+          body = await request.json() as any;
+        } catch {
+          return errorResponse('Cuerpo de la petición inválido: se espera JSON { schoolCode, data: { students, records, teachers, ... } }.', 400);
+        }
+        if (!body || typeof body !== 'object' || Array.isArray(body)) {
+          return errorResponse('Cuerpo de la petición inválido: se espera un objeto JSON con schoolCode y data.', 400);
+        }
         const schoolCode = body.schoolCode || env.SCHOOL_CODE || 'INAS-ANTONIA-SANTOS-2026';
         const data = body.data || body;
         const students = Array.isArray(data.students) ? data.students : [];
-        const records = Array.isArray(data.records) ? data.records : [];
+        const rawRecords = Array.isArray(data.records) ? data.records : [];
         const teachers = Array.isArray(data.teachers) ? data.teachers : [];
 
         // =========================================================================
@@ -751,6 +820,56 @@ async function handleRoute(request: Request, env: Env, ctx: ExecutionContext): P
         const isAdmin = authz.canWriteCatalog; // solo ADMIN (token o identidad) escribe catálogo
         const isOperator = !isAdmin; // OPERATOR (token) o DOCENTE/ESTUDIANTE (identidad) → solo hechos
         const bodyCatalogVersion = (typeof body.catalogVersion === 'number') ? body.catalogVersion : null;
+
+        // =========================================================================
+        // R61 (transaccionalidad snapshot↔records): los records entrantes se
+        // VALIDAN ANTES de escribir nada. Antes, el snapshot se persistía PRIMERO
+        // y el batch de attendance_records después: un record con studentCode
+        // inexistente (fantasma) envenenaba el snapshot (todos los pulls lo
+        // repartían y todos los pushes rebotaban con FK 500 — incidente R61-H1) Y
+        // el propio push reventaba a mitad de operación.
+        // Ahora: los records fantasma o malformados se CUARENTENAN (se omiten con
+        // reporte en la respuesta) y los enlaces de excusa huérfanos se retiran
+        // (misma convergencia que injectExcuseLinks hace en el pull, regla 2).
+        // El snapshot y la tabla relacional quedan SIEMPRE consistentes entre sí.
+        // ValidCodes = estudiantes entrantes (el ADMIN los sube en este mismo
+        // push, ANTES del batch de records) ∪ estudiantes ya presentes en D1.
+        // =========================================================================
+        let records = rawRecords;
+        let recordsSkipped = 0;
+        let excuseLinksDropped = 0;
+        const skippedCodes: string[] = [];
+        if (env.DB && rawRecords.length > 0) {
+          try {
+            const d1Codes = new Set<string>(((await env.DB.prepare(`SELECT code FROM students`).all<{ code: string }>()).results || []).map((r: any) => String(r.code)));
+            const d1ExcuseIds = new Set<string>(((await env.DB.prepare(`SELECT id FROM student_excuses`).all<{ id: string }>()).results || []).map((r: any) => String(r.id)));
+            for (const s of students) if (s && s.code) d1Codes.add(String(s.code));
+            records = rawRecords
+              .filter((r: any) => {
+                if (!r || typeof r !== 'object') { recordsSkipped++; return false; }
+                const code = String(r.studentCode || '');
+                if (!code || !r.date || !r.time || !d1Codes.has(code)) {
+                  recordsSkipped++;
+                  if (code && skippedCodes.length < 20 && !skippedCodes.includes(code)) skippedCodes.push(code);
+                  return false;
+                }
+                return true;
+              })
+              .map((r: any) => {
+                if (r.excuseId && !d1ExcuseIds.has(String(r.excuseId))) {
+                  excuseLinksDropped++;
+                  return { ...r, excuseId: null };
+                }
+                return r;
+              });
+            if (recordsSkipped > 0 || excuseLinksDropped > 0) {
+              console.warn(`[sync/push] cuarentena: ${recordsSkipped} record(s) omitido(s) (studentCode inexistente o forma inválida)${excuseLinksDropped ? `, ${excuseLinksDropped} enlace(s) de excusa huérfano(s) retirado(s)` : ''}`, skippedCodes.length ? `códigos: ${skippedCodes.join(', ')}` : '');
+            }
+          } catch (e: any) {
+            console.warn('[sync/push] validación previa de records no crítica:', e?.message || e);
+            records = rawRecords; // sin verificación posible: comportamiento previo
+          }
+        }
 
         // Ronda 54 (hueco #2) — IDEMPOTENCIA POR `opId` (at-least-once sin duplicados).
         // El cliente envía un opId ESTABLE por push (hash del payload). Si el Worker ya
@@ -792,6 +911,29 @@ async function handleRoute(request: Request, env: Env, ctx: ExecutionContext): P
               { catalogVersion: currentVersion, sentVersion: bodyCatalogVersion }
             );
           }
+        }
+
+        // R61 (fix H-6): primer push de un terminal NUEVO contra una nube YA
+        // poblada → 409 con guía. El CAS Flanco 3 solo compara si el cliente
+        // DECLARA versión; un terminal recién instalado (nunca sincronizado, sin
+        // catalogVersion local) caía por fuera de ese guard y podía publicar su
+        // catálogo por defecto (p. ej. 7 slots de plantilla) aplastando los
+        // slots/docentes/ajustes publicados de la nube. Ahora el primer push
+        // EXIGE Pull primero (la versión llega en la respuesta del pull o del
+        // primer push válido). force:true sigue siendo el escape explícito.
+        if (isAdmin && bodyCatalogVersion === null && !body.force && env.DB) {
+          try {
+            const row = await env.DB.prepare(
+              `SELECT students_count FROM sync_snapshots WHERE id = ?`
+            ).bind(`snapshot_${schoolCode}`).first() as any;
+            if (row && (row.students_count || 0) > 0) {
+              return errorResponse(
+                `Push rechazado (terminal nuevo): tu dispositivo aún no ha descargado el catálogo de la nube (${row.students_count} estudiantes publicados). Haz primero "Descargar (Pull)" para ubicar tu terminal y reintenta. Si eres Rectoría y sabes lo que haces, envía force:true.`,
+                409,
+                { reason: 'NEVER_SYNCED', cloudStudents: row.students_count || 0 }
+              );
+            }
+          } catch { /* lectura no crítica: sin dato, el push sigue su curso previo */ }
         }
 
         // Ronda 38 (H-38-1b): PROTECCIÓN ANTI-APLASTADO server-side (defensa en profundidad
@@ -1025,6 +1167,12 @@ async function handleRoute(request: Request, env: Env, ctx: ExecutionContext): P
         }
 
         // 3. Guardar Registros de Asistencia en D1 en batches (ADMIN y OPERATOR)
+        // R61 (transaccionalidad): el batch de records es NO-FATAL. Con la
+        // cuarentena previa un fallo aquí es excepcional; si ocurre, el push NO
+        // revienta a mitad de operación (el snapshot ya está escrito): se reporta
+        // en la respuesta y el log, y el estado sigue siendo consistente para
+        // el pull (antes: 500 con el snapshot ya escrito — el incidente R61-H1).
+        let recordsD1Failed = 0;
         if (env.DB && records.length > 0) {
             // Ronda 21 (spec §1.2): upsert con PROTECCIÓN DEL OVERLAY. INSERT OR REPLACE
             // reemplazaba la fila completa: un dispositivo que aún no conocía una excusa
@@ -1064,8 +1212,13 @@ async function handleRoute(request: Request, env: Env, ctx: ExecutionContext): P
                 r.excuseId || null
               )
             );
-            for (let i = 0; i < recordBatch.length; i += 50) {
-              await env.DB.batch(recordBatch.slice(i, i + 50));
+            try {
+              for (let i = 0; i < recordBatch.length; i += 50) {
+                await env.DB.batch(recordBatch.slice(i, i + 50));
+              }
+            } catch (e: any) {
+              recordsD1Failed = records.length;
+              console.error('[sync/push] batch de attendance_records falló (no fatal; el snapshot quedó escrito y consistente):', e?.message || e);
             }
           }
 
@@ -1111,7 +1264,9 @@ async function handleRoute(request: Request, env: Env, ctx: ExecutionContext): P
             force: !!body.force,
             sentCatalogVersion: bodyCatalogVersion,
             opId: opId,
-            recordsMerged: pushFusedCount
+            recordsMerged: pushFusedCount,
+            recordsSkipped, // R61: records en cuarentena en este push
+            excuseLinksDropped // R61: enlaces de excusa huérfanos retirados
           }
         });
 
@@ -1140,14 +1295,25 @@ async function handleRoute(request: Request, env: Env, ctx: ExecutionContext): P
         // registros existentes y se resolvieron por versión (recordsMerged / pushFusedCount).
         const recordsMerged = pushFusedCount;
 
+        // R61 (transaccionalidad): si la cuarentena actuó, la respuesta lo dice
+        // explícitamente — el remitente sabe QUÉ se omitió y por qué (antes el
+        // 500 silencioso del FK no explicaba nada).
+        const quarantineNote = recordsSkipped > 0
+          ? ` ⚠ ${recordsSkipped} registro(s) de asistencia en cuarentena: studentCode inexistente o forma inválida (${skippedCodes.slice(0, 5).join(', ')}${skippedCodes.length > 5 ? '…' : ''}) — revisa el catálogo y vuelve a subirlos.`
+          : (excuseLinksDropped > 0 ? ` ⚠ ${excuseLinksDropped} enlace(s) de excusa huérfano(s) retirado(s).` : '');
+
         return jsonResponse({
           success: true,
           message: isAdmin
-            ? `Sincronización Cloudflare completada: ${students.length} estudiantes y ${records.length} asistencias guardadas en D1 y KV (catálogo v${newCatalogVersion ?? '?'}).`
-            : `Asistencias sincronizadas (vía operador): ${records.length} registros fusionados en la nube. El catálogo no fue modificado.`,
+            ? `Sincronización Cloudflare completada: ${students.length} estudiantes y ${records.length} asistencias guardadas en D1 y KV (catálogo v${newCatalogVersion ?? '?'}).${quarantineNote}`
+            : `Asistencias sincronizadas (vía operador): ${records.length} registros fusionados en la nube. El catálogo no fue modificado.${quarantineNote}`,
           timestamp: new Date().toISOString(),
           studentsSaved: isAdmin ? students.length : 0,
           recordsSaved: records.length,
+          recordsSkipped, // R61: 0 = nada en cuarentena
+          recordsSkippedCodes: skippedCodes,
+          excuseLinksDropped,
+          recordsD1Failed, // R61: 0 = batch relacional escrito íntegro
           recordsMerged,
           deduplicated: false,
           catalogVersion: newCatalogVersion,
@@ -1229,7 +1395,11 @@ async function handleRoute(request: Request, env: Env, ctx: ExecutionContext): P
       // es de solo-lectura (1 lectura KV/D1) y no expone nada sensible.
       // =========================================================================
       if (path === '/api/verify/class-token' && request.method === 'POST') {
-        if (verifyRateLimited(clientIp(request))) {
+        // R61: doble capa — per-isolate (rápido, sin coste) + D1 global (ventana
+        // REAL entre isolates; el Map por-isolate solo frenaba dentro del mismo
+        // reciclaje). Si D1 no está disponible, queda la capa por-isolate.
+        const vIp = clientIp(request);
+        if (verifyRateLimited(vIp) || await d1RateLimited(env, `verify:${vIp}`, VERIFY_LIMIT_PER_WINDOW, VERIFY_WINDOW_MS)) {
           return errorResponse('Demasiadas verificaciones desde esta red. Espera unos minutos e intenta de nuevo.', 429);
         }
         let body: any;
@@ -1477,7 +1647,8 @@ async function handleRoute(request: Request, env: Env, ctx: ExecutionContext): P
       // ORDEN FK-SEGURO (hijas antes que madres; attendance ↔ excuses cruzadas primero).
       // =========================================================================
       if (path === '/api/sync/purge' && request.method === 'POST') {
-        if (purgeRateLimited(clientIp(request))) {
+        const pIp = clientIp(request);
+        if (purgeRateLimited(pIp) || await d1RateLimited(env, `purge:${pIp}`, PURGE_LIMIT_PER_HOUR, 60 * 60 * 1000)) {
           return errorResponse('Límite de purgas alcanzado (3 por hora). Espera antes de reintentar.', 429);
         }
 
@@ -1575,9 +1746,15 @@ async function handleRoute(request: Request, env: Env, ctx: ExecutionContext): P
       // RUTA: REGISTRAR ASISTENCIA INDIVIDUAL EN VIVO (Escaneo instantáneo)
       // =========================================================================
       if (path === '/api/attendance' && request.method === 'POST') {
-        const r = await request.json() as any;
-        if (!r.studentCode || !r.date || !r.time) {
-          return errorResponse('studentCode, date y time son requeridos.');
+        // R61 (fix): body auscente/roto → 400 explícito (antes: 500 del catch global).
+        let r: any;
+        try {
+          r = await request.json() as any;
+        } catch {
+          return errorResponse('Cuerpo de la petición inválido: se espera JSON con studentCode, date y time.', 400);
+        }
+        if (!r || typeof r !== 'object' || !r.studentCode || !r.date || !r.time) {
+          return errorResponse('studentCode, date y time son requeridos.', 400);
         }
 
         // Ronda 54 (hueco #2): idempotencia del outbox — el cliente envía un `opId` estable
@@ -1595,6 +1772,20 @@ async function handleRoute(request: Request, env: Env, ctx: ExecutionContext): P
         }
 
         const id = r.id || `${r.studentCode}_${r.date}_${r.time}`;
+
+        // R61 (fix FK): studentCode inexistente → 404 claro y accionable (antes:
+        // FK violation del INSERT → 500 con mensaje interno). Un escaneo legítimo
+        // nunca pasa por aquí — el catálogo D1 contiene a los estudiantes reales.
+        // El guard va DESPUÉS del dedup de opId para que los reintentos de un
+        // escaneo ya aplicado sigan siendo idempotentes.
+        if (env.DB) {
+          try {
+            const known = await env.DB.prepare(`SELECT 1 AS x FROM students WHERE code = ?`).bind(String(r.studentCode)).first();
+            if (!known) {
+              return errorResponse(`El estudiante con código ${String(r.studentCode).slice(0, 40)} no existe en el catálogo de la nube. Sincroniza (Pull) o verifica el código con Rectoría.`, 404);
+            }
+          } catch { /* lectura no crítica: sin verificación, comportamiento previo */ }
+        }
 
         if (env.DB) {
           // Ronda 21: misma protección COALESCE del overlay que en /api/sync/push.
@@ -1652,6 +1843,17 @@ async function handleRoute(request: Request, env: Env, ctx: ExecutionContext): P
       const pushResponse = await handlePushRoutes(request, env, url, path);
       if (pushResponse) return pushResponse;
 
+      // R61 (fix): método incorrecto sobre una ruta EXISTENTE → 405 + Allow.
+      // Antes devolvía 404, que mentía sobre la existencia del recurso y
+      // confundía la depuración de clientes. Solo aplica a rutas exactas.
+      const allowed = KNOWN_ROUTE_METHODS[path];
+      if (allowed && !allowed.includes(request.method)) {
+        return new Response(
+          JSON.stringify({ success: false, error: `Método ${request.method} no permitido en ${path}. Permitidos: ${allowed.join(', ')}.` }),
+          { status: 405, headers: { 'Content-Type': 'application/json', Allow: allowed.join(', '), ...corsHeaders } }
+        );
+      }
+
       return errorResponse(`Ruta no encontrada: ${path}`, 404);
     } catch (err: any) {
       // Ronda 60-b (B-1): el detalle (message/stack) queda SOLO en el log interno;
@@ -1661,15 +1863,55 @@ async function handleRoute(request: Request, env: Env, ctx: ExecutionContext): P
     }
 }
 
+// ==============================================================================
+// R61 — Rutas conocidas con sus métodos permitidos (para 405 honesto en vez de
+// un 404 engañoso cuando el método no coincide).
+// ==============================================================================
+const KNOWN_ROUTE_METHODS: Record<string, string[]> = {
+  '/': ['GET'],
+  '/api/health': ['GET'],
+  '/api/sync/push': ['POST'],
+  '/api/sync/pull': ['GET'],
+  '/api/sync/log': ['GET'],
+  '/api/sync/metrics': ['GET'],
+  '/api/sync/export': ['GET'],
+  '/api/sync/purge': ['POST'],
+  '/api/verify/class-token': ['POST'],
+  '/api/attendance': ['POST'],
+  '/api/excuses': ['GET', 'POST'],
+  '/api/excuses/verify-chain': ['GET'],
+  '/api/push/public-key': ['GET'],
+  '/api/push/subscribe': ['POST'],
+  '/api/push/unsubscribe': ['POST'],
+  '/api/push/test': ['POST']
+};
+
+// ==============================================================================
+// R61 — HEADERS DE SEGURIDAD OWASP en TODAS las respuestas del Worker (API JSON,
+// no sirve HTML): evita que un navegador interprete una respuesta como otra cosa
+// (nosniff), la incruste en frames (DENY + frame-ancestors) o filtre contexto de
+// red (no-referrer). CORS queda intacto — estos headers son aditivos.
+// ==============================================================================
+function withSecurityHeaders(res: Response): Response {
+  const headers = new Headers(res.headers);
+  headers.set('X-Content-Type-Options', 'nosniff');
+  headers.set('X-Frame-Options', 'DENY');
+  headers.set('Referrer-Policy', 'no-referrer');
+  headers.set('Content-Security-Policy', "default-src 'none'; frame-ancestors 'none'");
+  headers.set('Permissions-Policy', 'camera=(), microphone=(), geolocation=(), payment=()');
+  headers.set('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
+  return new Response(res.body, { status: res.status, statusText: res.statusText, headers });
+}
+
 export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     // Ronda 58 (F-17): preflight con allowlist + envoltura CORS de TODAS las respuestas.
     if (request.method === 'OPTIONS') {
-      return corsPreflightResponse(request, env);
+      return withSecurityHeaders(corsPreflightResponse(request, env));
     }
     try {
       const res = await handleRoute(request, env, ctx);
-      return withCorsHeaders(res, request, env);
+      return withSecurityHeaders(withCorsHeaders(res, request, env));
     } catch (err: any) {
       // Error ANTES del try interno (p. ej. new URL malformada): respuesta honesta + CORS.
       // Ronda 60-b (B-1): mensaje genérico al cliente; el detalle vive en el log.
@@ -1678,7 +1920,7 @@ export default {
         status: 500,
         headers: { 'Content-Type': 'application/json', ...corsHeaders }
       });
-      return withCorsHeaders(fallback, request, env);
+      return withSecurityHeaders(withCorsHeaders(fallback, request, env));
     }
   }
 };

@@ -154,3 +154,15 @@ CREATE TABLE IF NOT EXISTS push_subscriptions (
   created_at TEXT DEFAULT (datetime('now')),
   updated_at TEXT DEFAULT (datetime('now'))
 );
+
+-- ==============================================================================
+-- R61 — RATE LIMIT GLOBAL (D1). El estado por-isolate del Worker se pierde entre
+-- reciclajes de Cloudflare; D1 (fuertemente consistente) lleva la ventana REAL.
+-- Ventana fija deslizante: si window_start es más viejo que (now - ventana),
+-- el contador se reinicia en 1. Limpieza oportunista de filas > 24 h.
+-- ==============================================================================
+CREATE TABLE IF NOT EXISTS rate_limits (
+  key TEXT PRIMARY KEY,
+  count INTEGER NOT NULL DEFAULT 1,
+  window_start INTEGER NOT NULL
+);

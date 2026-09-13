@@ -278,9 +278,16 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ onClose }) => {
   const handleSave = (e: React.FormEvent) => {
     e.preventDefault();
     AttendanceStorageService.saveSettings(settings);
-    if (settings.activeDayTemplate) {
-      AttendanceStorageService.applyDayTemplate(settings.activeDayTemplate);
-    }
+    // R61 (fix H-5): NO se re-aplica la plantilla activa al guardar ajustes.
+    // Antes, este handleSave llamaba applyDayTemplate(settings.activeDayTemplate)
+    // en CADA guardado, lo que REGENERABA los slots desde la plantilla y BORRABA
+    // las ediciones manuales de horarios (p. ej. el slot-7 nocturno de la jornada
+    // extendida murió dos veces durante el E2E de R60-h por este camino).
+    // La plantilla se aplica SOLO cuando el usuario lo pide explícitamente
+    // (Horarios → Plantillas) o en la auto-sanación de arranque
+    // (ensureActiveTemplateConsistency / deleteCustomTemplate, que ya viven en
+    // AttendanceStorageService). Guardar ajustes sin relación con horarios
+    // jamás debe tocar los slots.
     CloudflareSyncService.initAutoSync();
     setShowSavedToast(true);
     setTimeout(() => {

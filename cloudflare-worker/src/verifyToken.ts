@@ -88,7 +88,7 @@ export async function verifyClassToken(token: string, secrets: string[]): Promis
     if (parts.length !== 6) return { verified: false, kind: 'CLASE_V2', reason: 'MALFORMED' };
     const [, , teacherId, subjectSlug, expStr, sig] = parts;
     const expiresAt = Number(expStr);
-    if (!teacherId || !subjectSlug || !Number.isFinite(expiresAt) || !/^[0-9a-f]{16}|[0-9a-f]{32}$/.test(sig || '')) {
+    if (!teacherId || !subjectSlug || !Number.isFinite(expiresAt) || !/^(?:[0-9a-f]{16}|[0-9a-f]{32})$/.test(sig || '')) {
       return { verified: false, kind: 'CLASE_V2', reason: 'MALFORMED' };
     }
     const base = `${teacherId}|${subjectSlug}|${expiresAt}`;
@@ -110,7 +110,7 @@ export async function verifyClassToken(token: string, secrets: string[]): Promis
     const [, , grade, slotId, dowStr, expStr, sig] = parts;
     const dayOfWeek = Number(dowStr);
     const expiresAt = Number(expStr);
-    if (!grade || !slotId || !Number.isFinite(dayOfWeek) || !Number.isFinite(expiresAt) || !/^[0-9a-f]{16}|[0-9a-f]{32}$/.test(sig || '')) {
+    if (!grade || !slotId || !Number.isFinite(dayOfWeek) || !Number.isFinite(expiresAt) || !/^(?:[0-9a-f]{16}|[0-9a-f]{32})$/.test(sig || '')) {
       return { verified: false, kind: 'CLASE_V1', reason: 'MALFORMED' };
     }
     const base = `${grade}|${slotId}|${dayOfWeek}|${expiresAt}`;
