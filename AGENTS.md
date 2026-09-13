@@ -139,6 +139,12 @@ Este documento es la **fuente única de verdad técnica (Single Source of Truth)
    - La verificación de conectividad del Worker (12/09/2026, ronda 60-d) con `AUTH_TOKEN = 622eb26403f3ebb52ffb0588be608b15ccbfebeb3ab459b21c30800153c55916` resultó en `200 OK` contra `/api/sync/metrics` y `/api/sync/pull?schoolCode=INAS-ANTONIA-SANTOS-2026` — el token en el paquete es el token ACTIVO en producción y NO debe ser reemplazado.
    - Esta regla **NO autoriza** a subir credenciales al repo público (siguen prohibidas en el bundle y en git — F-25 sigue en vigor: solo leídas de `process.env` o del paquete fuera del repo).
    - Esta regla **NO aplica** al `cloudflareWorkerUrl` y `schoolCode` (datos públicos del Worker en producción) — esos sí pueden ajustarse si el prototipo cambia de entorno.
+10. **Regla de Respaldo Obligatorio — Empaquetado zip al usuario cuando no hay credenciales en el entorno (orden directa del propietario, 14/09/2026):**
+   - **Objetivo: que el trabajo NUNCA se pierda.** Los entornos de ejecución del agente son efímeros — los reinicios ya han borrado `download/`, `scripts/credenciales/` e incluso repos locales completos con commits sin subir. Lo único verdaderamente durable es el repo remoto (GitHub) y la copia que el propietario conserva fuera del entorno.
+   - Al cierre de cada ronda con trabajo no pusheado (commits locales), se busca toda credencial de subida disponible en el entorno: `scripts/credenciales/`, variables de entorno, `upload/Paquete_Credenciales_INAS_*.md` (el gateway de subida REDACTA los tokens tipo PAT — verificar si el valor llegó completo), y el backup KV `__SYSTEM__credentials_package_*` (procedimiento de recuperación documentado en §6 del paquete). Si se encuentra una credencial válida, se sube con el protocolo seguro de remote temporal (PAT embebido solo durante el push, remote restaurado a HTTPS limpio inmediatamente después) y se verifica en el remoto.
+   - **Si NO se encuentra ninguna credencial en el entorno, el trabajo se empaqueta en un archivo zip comprimido y se le pasa al usuario para que él lo mantenga** — seguro y que no se borre. El zip se deposita en `download/` y debe contener como mínimo: (1) un `git bundle` con los commits no pusheados (integridad verificable con `git bundle verify`), (2) los parches `format-patch` individuales por commit (alternativa sin bundle), y (3) un `LEEME.txt`/`LEEME.md` con el procedimiento paso a paso para que el propietario los suba él mismo con su PAT.
+   - La misma regla aplica a cualquier otro artefacto crítico no pusheable (claves remediadas de cuentas, backups JSON, informes de auditoría, copias del paquete de credenciales): si no puede llegar al repo remoto, llega al propietario dentro del zip.
+   - **PROHIBIDO** dar por "entregado" trabajo que solo existe dentro del entorno efímero del agente, y prohibido borrar las copias maestras del tester (`scripts/credenciales/`) sin dejar el reemplazo correspondiente en `download/`.
 
 ---
 
@@ -234,6 +240,22 @@ Esta sección documenta el mapa exhaustivo de comunicaciones, protocolos, plataf
 ---
 
 ## 📋 3. Bitácora de Implementaciones y Correcciones Realizadas
+
+### ✅ Ronda 63 (14/09/2026) — RECUPERACIÓN TRAS REINICIO DEL ENTORNO: los 5 commits R62 sobrevivieron + Regla 10 (empaquetado zip al propietario) + entrega del respaldo
+
+**Contexto:** el entorno de ejecución del agente fue reiniciado y borró `download/` (incluida la copia del propietario de credenciales), `scripts/credenciales/` (maestra del tester) y los artefactos pendientes de entrega. El propietario re-subió `Paquete_Credenciales_INAS_2026-09-06 (2).md` y ordenó: (1) buscar y subir los 5 commits R62 no pusheados, (2) codificar como regla permanente el protocolo de respaldo — si no hay credenciales en el entorno, se empaqueta en zip comprimido y se le pasa al propietario para que él lo mantenga, seguro y que no se borre.
+
+**Verificación de supervivencia:** los 5 commits estaban ÍNTEGROS en el repo local — `a0253d9` (R61-a worker+UI), `757dd6b` (R61-b PIN↔cuenta), `6531038` (R61-b.2 idempotencia), `bc69750` (R61-c auditoría multiagente), `01328b4` (R62 docs). Las 194 diferencias de permisos (644→755) eran solo artefacto del reinicio (`core.fileMode=false`), 0 cambios de contenido.
+
+**Búsqueda de credenciales de subida (exhaustiva):** variables de entorno vacías; sin gh CLI/.netrc; el paquete subido trae el PAT **REDACTADO** por el gateway; el backup KV `__SYSTEM__credentials_package_r36` fue recuperado con el token `cfut_` activo (procedimiento §6) — es de la Ronda 36, **previo al PAT** (añadido en R60-d), por lo que no lo contiene. **Conclusión: sin credenciales de GitHub en el entorno → aplica el empaquetado zip.**
+
+**Escaneo de seguridad pre-subida (repo público):** los diffs de `c2fa888..HEAD` (757 líneas añadidas) no introducen NINGÚN secreto nuevo — la mención del `AUTH_TOKEN` en la bitácora R62 cita la verificación R60-d con el valor que YA estaba en `origin/main` desde rondas anteriores, y el valor rotado del legacy (`d8715850…`) NO aparece en ningún diff (verificado por regex). Seguro para que el propietario haga push.
+
+**Restauración de la maestra del tester:** `scripts/credenciales/` reconstruida con el paquete .md subido por el propietario + `paquete.json` recuperado del backup KV. Nota para futuras rondas: el PAT solo existe en la copia del propietario y su gestor de contraseñas (§5b).
+
+**Entrega al propietario (Regla 10 aplicada):** zip en `download/` con (1) `git bundle` del rango `c2fa888..HEAD` — verificable con `git bundle verify`, (2) parches `format-patch` por commit, (3) LEEME con el procedimiento exacto de subida (push con PAT embebido + remote limpio), (4) `r61_remediacion_resultado.json` (las 6 claves de portal estudiantiles — pendiente de entrega desde R62), y (5) copias del paquete de credenciales. Regla 10 añadida a §1 con esta misma fecha.
+
+---
 
 ### ✅ Ronda 62 (13/09/2026) — BUCLE DE AUTOAUDITORÍA INTEGRAL: fixes R61 + auditoría multiagente (3 ALTO Worker + 2 ALTO UI) + rotación DEMOSTRADA del legacyQrSecret + remediación de las 6 cuentas estudiantiles derivables + rate limit GLOBAL D1 + OWASP + 405/400
 
