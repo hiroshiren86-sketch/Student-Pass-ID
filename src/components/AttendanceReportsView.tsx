@@ -140,7 +140,10 @@ export const AttendanceReportsView: React.FC<AttendanceReportsViewProps> = ({ cu
         </div>
 
         <div className="glass-panel p-4 rounded-2xl space-y-1 border-emerald-500/30">
-          <span className="text-[11px] font-bold text-emerald-600 dark:text-emerald-400 uppercase">Presentes Hoy</span>
+          {/* R61 (fix ARV-1): el texto ya no miente — los datos son de la fecha
+              seleccionada (no necesariamente "hoy") y el corte puntual lo decide
+              el bloque/tolerancia al escanear, no un umbral fijo heredado. */}
+          <span className="text-[11px] font-bold text-emerald-600 dark:text-emerald-400 uppercase">Presentes ({selectedDate === getTodayDateString() ? 'hoy' : selectedDate})</span>
           <div className="text-2xl font-black text-emerald-600 dark:text-emerald-400">
             {summary.totalPresent}
           </div>
@@ -157,7 +160,7 @@ export const AttendanceReportsView: React.FC<AttendanceReportsViewProps> = ({ cu
           <div className="text-2xl font-black text-indigo-600 dark:text-indigo-400">
             {summary.punctualCount}
           </div>
-          <span className="text-[10px] text-indigo-600/80">Antes de 07:15 AM</span>
+          <span className="text-[10px] text-indigo-600/80">Dentro del bloque (según horario)</span>
         </div>
 
         <div className="glass-panel p-4 rounded-2xl space-y-1 border-amber-500/30">

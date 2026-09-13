@@ -421,6 +421,17 @@ export const ScheduleBuilderView: React.FC = () => {
     // Calculate duration in minutes
     const [h1, m1] = newSlotStart.split(':').map(Number);
     const [h2, m2] = newSlotEnd.split(':').map(Number);
+    // R61 (fix SBV-2): un rango invertido o vacío se RECHAZA explícitamente — antes
+    // se guardaba en silencio con dur = 5 min y el bloque quedaba ordenado al final
+    // de la jornada con horas sin sentido.
+    if (!Number.isFinite(h1) || !Number.isFinite(m1) || !Number.isFinite(h2) || !Number.isFinite(m2)) {
+      showToast('Horas inválidas: define inicio y fin del bloque (HH:MM).');
+      return;
+    }
+    if ((h2 * 60 + m2) - (h1 * 60 + m1) <= 0) {
+      showToast('La hora de fin del bloque debe ser POSTERIOR a la de inicio.');
+      return;
+    }
     const dur = Math.max(5, (h2 * 60 + m2) - (h1 * 60 + m1));
 
     let updatedSlots = [...slots];
@@ -459,14 +470,30 @@ export const ScheduleBuilderView: React.FC = () => {
   };
 
   const handleDeleteSlot = (id: string) => {
+    // R61 (fix SBV-1b): el último bloque de clase es irremplazable para el Aula
+    // Docente (crash TCV-3) y para la jornada — se exige confirmación endurecida.
+    const remainingClass = slots.filter(s => s.id !== id && (s.type === 'CLASS' || s.type === 'CIVIC' || s.type === 'ADVISORY')).length;
+    const isLastClassBlock = remainingClass === 0;
+    const orphaned = assignments.filter(a => a.slotId === id).length;
     // Ronda 8 (O2): confirmación con modal propio (antes window.confirm nativo)
     setConfirmState({
-      title: 'Eliminar bloque',
-      message: '¿Eliminar este bloque del horario escolar? Esta acción no se puede deshacer.',
+      title: isLastClassBlock ? 'Eliminar el ÚLTIMO bloque de clase' : 'Eliminar bloque',
+      message: isLastClassBlock
+        ? `Este es el ÚLTIMO bloque de clase del horario. Sin bloques, el Aula Docente y los escaneos dejan de funcionar hasta que Rectoría restaure la plantilla (Horarios → Plantillas).${orphaned > 0 ? ` Además, ${orphaned} cátedra(s) asignadas a este bloque quedarán huérfanas y serán eliminadas.` : ''} ¿Continuar?`
+        : `¿Eliminar este bloque del horario escolar?${orphaned > 0 ? ` Sus ${orphaned} cátedra(s) asignadas quedarán huérfanas y también serán eliminadas para no inflar las horas semanales.` : ''} Esta acción no se puede deshacer.`,
       action: () => {
+        // R61 (fix SBV-1a): purgar las asignaciones (cátedras) del bloque eliminado —
+        // antes quedaban huérfanas: inflaban "Xh semanales", disparaban conflictos
+        // fantasma de docentes y referenciaban bloques inexistentes en los QR de clase.
+        if (orphaned > 0) {
+          const kept = assignments.filter(a => a.slotId !== id);
+          AttendanceStorageService.saveScheduleAssignments(kept);
+        }
         const updated = slots.filter(s => s.id !== id).map((s, idx) => ({ ...s, order: idx + 1 }));
         AttendanceStorageService.saveScheduleSlots(updated);
-        showToast('Bloque eliminado.');
+        showToast(orphaned > 0
+          ? `Bloque eliminado junto con ${orphaned} cátedra(s) huérfana(s).`
+          : 'Bloque eliminado.');
       }
     });
   };

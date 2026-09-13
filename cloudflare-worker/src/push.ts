@@ -286,9 +286,29 @@ export async function handlePushRoutes(request: Request, env: Env, url: URL, pat
     const canListenRectoria = !!authz && authz.role === 'ADMIN';
     const requestedRole = ['RECTORIA', 'PORTAL'].includes(String(body.role)) ? String(body.role) : 'PORTAL';
     const role = requestedRole === 'RECTORIA' && !canListenRectoria ? 'PORTAL' : requestedRole;
-    const studentCode = body.studentCode ? String(body.studentCode).trim() : null;
+    let studentCode = body.studentCode ? String(body.studentCode).trim() : null;
+    // R61 (fix P1 — propiedad): la identidad verificada MANDA sobre el body. Una
+    // sesión de ESTUDIANTE_ACUDIENTE solo puede suscribir SU propio código — antes,
+    // cualquier autenticado podía suscribir notificaciones de un estudiante ajeno
+    // y recibir las decisiones (con fechas y motivos de salud) de sus excusas.
+    if (authz && authz.source === 'identity' && authz.role === 'ESTUDIANTE_ACUDIENTE' && authz.linkedStudentCode) {
+      if (studentCode && studentCode !== String(authz.linkedStudentCode)) {
+        return err('No puedes suscribir notificaciones de otro estudiante: la identidad de tu sesión solo permite tu propio código.', 403);
+      }
+      studentCode = String(authz.linkedStudentCode);
+    }
     if (!endpoint.startsWith('https://') || !p256dh || !auth) {
       return err('Suscripción inválida: se requiere endpoint https, keys.p256dh y keys.auth.');
+    }
+    // R61 (fix P3 — allowlist de push services): el endpoint debe pertenecer a un
+    // push service REAL. Antes, cualquier URL https arbitraria hacía que el Worker
+    // le hiciera fetch con el JWT VAPID firmado en la cabecera Authorization
+    // (SSRF ciego + exposición del JWT a hosts no confiables).
+    let endpointHost = '';
+    try { endpointHost = new URL(endpoint).hostname; } catch { /* cae al rechazo */ }
+    const PUSH_SERVICE_SUFFIXES = ['.googleapis.com', '.mozilla.com', '.push.microsoft.com', '.push.apple.com'];
+    if (!endpointHost || !PUSH_SERVICE_SUFFIXES.some(sfx => endpointHost.endsWith(sfx))) {
+      return err('El endpoint de la suscripción no pertenece a un servicio de notificaciones reconocido (FCM, Mozilla, Microsoft o Apple).', 400);
     }
     await ensurePushTable(env);
     const id = `push-${Date.now()}-${Math.random().toString(36).substring(2, 8)}`;
@@ -328,7 +348,22 @@ export async function handlePushRoutes(request: Request, env: Env, url: URL, pat
     const canListenRectoria = !!authz && authz.role === 'ADMIN';
     const requestedRole = ['RECTORIA', 'PORTAL'].includes(String(body.role)) ? String(body.role) : 'RECTORIA';
     const role = requestedRole === 'RECTORIA' && !canListenRectoria ? 'PORTAL' : requestedRole;
-    const studentCode = body.studentCode ? String(body.studentCode).trim() : undefined;
+    let studentCode = body.studentCode ? String(body.studentCode).trim() : undefined;
+    // R61 (fix P2): un NO-admin SIN studentCode ya no dispara la prueba masiva a
+    // TODAS las suscripciones PORTAL del colegio (vector de spam school-wide +
+    // fuga parcial de endpoints). Los no-admin prueban SOLO su propio código; la
+    // identidad estudiante lo exige por propiedad (como en subscribe).
+    if (!canListenRectoria) {
+      if (authz && authz.source === 'identity' && authz.role === 'ESTUDIANTE_ACUDIENTE' && authz.linkedStudentCode) {
+        if (studentCode && studentCode !== String(authz.linkedStudentCode)) {
+          return err('No puedes enviar notificaciones de prueba a otro estudiante.', 403);
+        }
+        studentCode = String(authz.linkedStudentCode);
+      }
+      if (!studentCode) {
+        return err('La prueba masiva de notificaciones es de Rectoría. Los estudiantes prueban con su propio código (studentCode).', 403);
+      }
+    }
     const detail = await sendPushDetailed(env, {
       role: studentCode ? undefined : role,
       studentCode,
@@ -339,7 +374,9 @@ export async function handlePushRoutes(request: Request, env: Env, url: URL, pat
     return ok({
       success: true,
       sent: detail.sent,
-      results: detail.results,
+      // R61 (fix P2b): los endpoints de terceros (fragmentos de URLs con tokens de
+      // suscripción) no viajan en la respuesta de no-admins.
+      results: canListenRectoria ? detail.results : detail.results.map((r: any) => ({ ...r, ep: undefined })),
       message: detail.sent > 0
         ? `Entregado a ${detail.sent} dispositivo(s). Deberías ver la notificación en segundos.`
         : 'No se entregó a ninguna suscripción (revisa que este dispositivo esté activado).'

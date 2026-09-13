@@ -41,6 +41,13 @@ export const CardsManagerView: React.FC = () => {
   const [isGeneratingPdf, setIsGeneratingPdf] = useState(false);
   const [previewStudent, setPreviewStudent] = useState<Student | null>(students[0] || null);
 
+  // R61 (fix CMV-1): el canvas del código de barras se genera UNA vez por estudiante
+  // (antes: 2 generaciones por render, en cada tecla del buscador).
+  const previewBarcodeUrl = useMemo(
+    () => (previewStudent ? generateBarcodeDataUrl(previewStudent.code, { height: 20 }) : null),
+    [previewStudent]
+  );
+
   // Filtrar estudiantes con búsqueda inteligente fuzzy
   const filteredStudents = useMemo(() => {
     return students.filter(std => {
@@ -424,10 +431,12 @@ export const CardsManagerView: React.FC = () => {
                   </div>
 
                   {/* Real 1D Barcode (Code 128) for USB Laser/CCD Scanners */}
+                  {/* R61 (fix CMV-1): memoizado — antes se generaba el canvas Code128 2×
+                      por render (condición + src), en cada tecla del buscador. */}
                   <div className="bg-white border-t border-slate-200/90 -mx-3 -mb-3 px-2 py-1 flex flex-col items-center justify-center">
-                    {generateBarcodeDataUrl(previewStudent.code, { height: 20 }) ? (
+                    {previewBarcodeUrl ? (
                       <img 
-                        src={generateBarcodeDataUrl(previewStudent.code, { height: 20 })} 
+                        src={previewBarcodeUrl} 
                         alt={`Código de barras ${previewStudent.code}`}
                         className="h-7 max-w-full object-contain"
                       />

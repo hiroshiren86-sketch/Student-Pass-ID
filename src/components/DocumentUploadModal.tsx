@@ -13,7 +13,8 @@ import {
   FileSpreadsheet,
   Layers,
   Sparkles,
-  Info
+  Info,
+  AlertCircle
 } from 'lucide-react';
 import { Student, DocumentType } from '../types/attendance';
 import { AttendanceStorageService } from '../services/attendanceStorage';
@@ -37,6 +38,8 @@ export const DocumentUploadModal: React.FC<DocumentUploadModalProps> = ({
 }) => {
   const [drafts, setDrafts] = useState<ExtractedStudentDraft[]>([]);
   const [isProcessing, setIsProcessing] = useState(false);
+  // R61 (fix DUM-1): errores de parseo por archivo, visibles bajo la zona de carga.
+  const [parseErrors, setParseErrors] = useState<string[]>([]);
   // Ronda 18 (H4): confirmación propia para limpiar registros extraídos
   const [clearConfirmOpen, setClearConfirmOpen] = useState(false);
   const [showHelp, setShowHelp] = useState(false);
@@ -60,6 +63,7 @@ export const DocumentUploadModal: React.FC<DocumentUploadModalProps> = ({
   const handleFiles = async (files: FileList | File[]) => {
     setIsProcessing(true);
     const newDrafts: ExtractedStudentDraft[] = [];
+    const fileErrors: string[] = [];
     const settings = AttendanceStorageService.getSettings();
 
     for (let i = 0; i < files.length; i++) {
@@ -83,17 +87,23 @@ export const DocumentUploadModal: React.FC<DocumentUploadModalProps> = ({
               const allowedDocTypes: DocumentType[] = ['TI', 'CC', 'RC', 'CE', 'PPT', 'PEP', 'NES'];
               for (const st of visionData.students) {
                 const docTypeRaw = String(st.documentType || 'TI').toUpperCase().trim() as DocumentType;
+                // R61 (fix DUM-2): un documento NO detectado por la IA ya NO se fabrica
+                // con número aleatorio marcado como válido — entra en WARNING para que
+                // Rectoría lo complete a mano. Antes podía entrar a la matrícula sin
+                // ninguna señal visual de que el documento era inventado.
+                const docDetected = String(st.documentId || '').replace(/\D/g, '');
                 newDrafts.push({
                   id: `draft_ai_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
                   fileName: file.name,
                   documentType: allowedDocTypes.includes(docTypeRaw) ? docTypeRaw : 'TI',
-                  documentId: String(st.documentId || '').replace(/\D/g, '') || `10${Math.floor(10000000 + Math.random() * 90000000)}`,
+                  documentId: docDetected,
                   firstName: String(st.firstName || 'ESTUDIANTE').toUpperCase().trim(),
                   lastName: String(st.lastName || '').toUpperCase().trim(),
                   grade: normalizeGradeName(st.grade || '6°1'),
                   photoUrl: photoDataUrl,
                   confidence: st.confidence || 0.95,
-                  status: 'valid'
+                  status: docDetected ? 'valid' : 'warning',
+                  errorMessage: docDetected ? undefined : 'Documento no detectado por la IA — complétalo antes de guardar'
                 });
               }
               continue; // Procesado exitosamente por IA de Visión
@@ -106,11 +116,16 @@ export const DocumentUploadModal: React.FC<DocumentUploadModalProps> = ({
         const extracted = await parseDocumentFile(file);
         newDrafts.push(...extracted);
       } catch (err) {
+        // R61 (fix DUM-1): el fallo de parseo de un archivo se REPORTA — antes solo
+        // iba a consola y el archivo "desaparecía" sin explicación para el usuario.
         console.error('Error parsing file:', file.name, err);
+        fileErrors.push(`${file.name}: ${err instanceof Error ? err.message : 'formato no reconocido'}`);
       }
     }
 
     setDrafts((prev) => [...prev, ...newDrafts]);
+    // R61 (fix DUM-1): lista visible de archivos que no pudieron procesarse.
+    setParseErrors(fileErrors);
     setIsProcessing(false);
   };
 
@@ -364,6 +379,18 @@ export const DocumentUploadModal: React.FC<DocumentUploadModalProps> = ({
             </p>
           </div>
         </div>
+
+        {/* R61 (fix DUM-1): archivos que no pudieron procesarse, con motivo visible */}
+        {parseErrors.length > 0 && (
+          <div className="rounded-2xl bg-rose-50 dark:bg-rose-950/30 border border-rose-200 dark:border-rose-900 p-3 space-y-1.5">
+            <p className="text-xs font-black text-rose-700 dark:text-rose-300 flex items-center gap-1.5">
+              <AlertCircle className="w-3.5 h-3.5" /> {parseErrors.length} archivo(s) no pudieron procesarse:
+            </p>
+            <ul className="text-[11px] text-rose-700/90 dark:text-rose-300/90 list-disc list-inside space-y-0.5">
+              {parseErrors.map((pe, i) => <li key={i}>{pe}</li>)}
+            </ul>
+          </div>
+        )}
 
         {/* Extracted Items Review Table / Confirmation */}
         {drafts.length > 0 && (

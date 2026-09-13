@@ -62,13 +62,21 @@ export const ExcusesInboxView: React.FC<ExcusesInboxViewProps> = ({ reviewedBy }
   const [bulkBusy, setBulkBusy] = useState(false);
   const [confirmBulk, setConfirmBulk] = useState(false);
 
-  const load = useCallback(async () => {
-    setLoading(true);
-    await ExcuseService.syncFromWorker(); // cache para el auto-cierre, siempre fresca
-    const res = await ExcuseService.listFromWorker();
-    if (res.ok) setExcuses(res.excuses);
-    else setFeedback(`No se pudieron cargar las excusas: ${res.error}`);
-    setLoading(false);
+  const load = useCallback(async (opts: { silent?: boolean } = {}) => {
+    // R61 (fix EIV-1): el sondeo de 30 s refresca SIN tocar el loader — antes,
+    // mientras Rectoría tecleaba el motivo de un rechazo, la grilla entera se
+    // desmontaba por el "Cargando…" del sondeo y el input perdía el foco (y un
+    // click en Aprobar podía caer en el vacío). El loader visible solo existe
+    // en la carga inicial.
+    if (!opts.silent) setLoading(true);
+    try {
+      await ExcuseService.syncFromWorker(); // cache para el auto-cierre, siempre fresca
+      const res = await ExcuseService.listFromWorker();
+      if (res.ok) setExcuses(res.excuses);
+      else if (!opts.silent) setFeedback(`No se pudieron cargar las excusas: ${res.error}`);
+    } finally {
+      if (!opts.silent) setLoading(false);
+    }
   }, []);
 
   useEffect(() => { load(); }, [load]);
@@ -79,8 +87,8 @@ export const ExcusesInboxView: React.FC<ExcusesInboxViewProps> = ({ reviewedBy }
   // plano (visibilitychange). El push (VAPID) complementa, pero la lista siempre
   // muestra la verdad del Worker.
   useEffect(() => {
-    const interval = setInterval(() => { load(); }, 30_000);
-    const onVisible = () => { if (document.visibilityState === 'visible') load(); };
+    const interval = setInterval(() => { load({ silent: true }); }, 30_000);
+    const onVisible = () => { if (document.visibilityState === 'visible') load({ silent: true }); };
     document.addEventListener('visibilitychange', onVisible);
     return () => {
       clearInterval(interval);

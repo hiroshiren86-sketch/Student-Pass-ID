@@ -299,6 +299,17 @@ export function filterSnapshotByRole(data: any, authz: Authz): any {
     return rest;
   };
 
+  // R61 (fix A4 — minimización Ley 1581): al ESTUDIANTE, las fichas de sus
+  // COMPAÑEROS también viajan SIN la foto carné (base64 pesado que el portal
+  // jamás renderiza). La propia ficha la conserva íntegra.
+  const stripStudentRecordDeep = (s: any) => {
+    const stripped = stripStudentRecord(s);
+    if (!stripped || typeof stripped !== 'object') return stripped;
+    const { photoUrl: _po, ...rest } = stripped;
+    void _po;
+    return rest;
+  };
+
   if (authz.role === 'DOCENTE') {
     // El docente ve SOLO sus cursos asignados (assignedGrades de SU ficha, en el snapshot).
     const teachers = Array.isArray(data.teachers) ? data.teachers : [];
@@ -331,8 +342,8 @@ export function filterSnapshotByRole(data: any, authz: Authz): any {
         ? data.students
             .filter((s: any) => grade && s.grade === grade)
             // La PROPIA ficha viaja INTACTA (con su signedCardToken y loginKey — el
-            // portal los necesita); las de los compañeros, despojadas (stripStudentRecord).
-            .map((s: any) => (String(s.code) === selfCode ? s : stripStudentRecord(s)))
+            // portal los necesita); las de los compañeros, despojadas (deep: sin foto).
+            .map((s: any) => (String(s.code) === selfCode ? s : stripStudentRecordDeep(s)))
         : [],
       assignments: Array.isArray(data.assignments) ? data.assignments.filter((a: any) => grade && a.grade === grade) : [],
       records: Array.isArray(data.records) ? data.records.filter((r: any) => codes.has(r.studentCode)) : [],
@@ -341,5 +352,24 @@ export function filterSnapshotByRole(data: any, authz: Authz): any {
     };
   }
 
-  return data;
+  // R61 (fix A1 — default-DENY): un rol NO reconocido (typo de consola como
+  // 'RECTORIA'/'Docente'/'ADMIN ') ya NO recibe el snapshot completo con
+  // qrSecret/legacyQrSecret y fichas con credenciales. Antes, cualquier valor
+  // fuera del enum caía en el `return data` final (fail-open). Los roles legítimos
+  // de terminal (ADMIN/OPERATOR) conservan el snapshot íntegro; los desconocidos
+  // reciben settings sin secretos y colecciones vacías.
+  if (authz.role === 'ADMIN' || authz.role === 'OPERATOR') {
+    return data;
+  }
+  const { qrSecret: _uq, legacyQrSecret: _ul, ...safeSettingsUnknown } = data.settings || {};
+  void _uq; void _ul;
+  return {
+    ...data,
+    settings: safeSettingsUnknown,
+    students: [],
+    teachers: [],
+    records: [],
+    assignments: [],
+    scopedFor: { role: authz.role, note: 'default-deny: rol no reconocido' }
+  };
 }

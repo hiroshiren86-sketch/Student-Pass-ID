@@ -60,7 +60,10 @@ export const ExcuseJustifyModal: React.FC<ExcuseJustifyModalProps> = ({ record, 
       reason,
       notes: notes.trim() || undefined,
       sourceAttendanceId: record.id,
-      submittedBy: 'RECTORIA'
+      submittedBy: 'RECTORIA',
+      // R61 (fix EJM-1): la certificación del soporte físico ahora VIAJA — queda
+      // registrada en el evento de auditoría y pre-marcada en el buzón.
+      physicalDocumentVerified: physicalVerified
     });
     setSubmitting(false);
     if (!res.ok || !res.excuse) {

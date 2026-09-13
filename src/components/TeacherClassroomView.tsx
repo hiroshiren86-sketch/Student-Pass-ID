@@ -31,7 +31,8 @@ import {
   ShieldAlert,
   Flame,
   Bell,
-  X
+  X,
+  AlertTriangle
 } from 'lucide-react';
 import jsQR from 'jsqr';
 import QRCode from 'qrcode';
@@ -66,7 +67,13 @@ export const TeacherClassroomView: React.FC<TeacherClassroomViewProps> = ({
   const [students, setStudents] = useState<Student[]>(AttendanceStorageService.getStudents());
   const [settings, setSettings] = useState<SchoolSettings>(AttendanceStorageService.getSettings());
   const [records, setRecords] = useState<AttendanceRecord[]>(AttendanceStorageService.getAllAttendance());
+  // R61 (fix TCV-3): guard de 0 bloques — si Rectoría elimina todos los bloques
+  // (ScheduleBuilderView lo permite), el Aula Docente ya no crashea con
+  // TypeError sobre activeSlot undefined: muestra un estado vacío accionable.
   const scheduleSlots = AttendanceStorageService.getScheduleSlots().filter(s => s.type === 'CLASS' || s.type === 'CIVIC' || s.type === 'ADVISORY');
+  // R61 (fix TCV-1/TCV-2): versión de almacenamiento para invalidar los useMemo
+  // que leen estado derivado del storage (hora libre / delegaciones efímeras).
+  const [storageVersion, setStorageVersion] = useState<number>(0);
   const allAssignments = AttendanceStorageService.getScheduleAssignments();
   
   const uniqueGrades = AttendanceStorageService.getUniqueGrades();
@@ -210,6 +217,12 @@ export const TeacherClassroomView: React.FC<TeacherClassroomViewProps> = ({
       setStudents(AttendanceStorageService.getStudents());
       setSettings(AttendanceStorageService.getSettings());
       setRecords(AttendanceStorageService.getAllAttendance());
+      // R61 (fix TCV-1/TCV-2): versión de almacenamiento — invalida los useMemo que
+      // leen estado derivado (hora libre, delegaciones) sin depender de
+      // selectedGrade/selectedSlotId/today, que NO cambian al mutar ese estado.
+      // Antes, marcar "Hora Libre" o crear/revocar una delegación dejaba la UI
+      // congelada hasta cambiar de bloque o grado.
+      setStorageVersion(v => v + 1);
     });
     return unsubscribe;
   }, []);
@@ -240,7 +253,15 @@ export const TeacherClassroomView: React.FC<TeacherClassroomViewProps> = ({
     }
   }, [selectedGrade, selectedSlotId, allAssignments]);
 
-  const activeSlot = scheduleSlots.find(s => s.id === selectedSlotId) || scheduleSlots[0];
+  // R61 (fix TCV-3): placeholder inofensivo cuando NO hay bloques definidos — el
+  // componente no crashea (activeSlot jamás es undefined) y el render muestra un
+  // banner accionable en su lugar. Los handlers quedan contenidos: sin bloques no
+  // hay escaneos válidos que registrar contra 'slot-none'.
+  const NO_SLOTS_PLACEHOLDER: ScheduleSlot = {
+    id: 'slot-none', order: 0, type: 'CLASS', name: 'Sin bloques definidos',
+    startTime: '00:00', endTime: '00:00', durationMinutes: 0, noticeMinutesBeforeEnd: 0
+  };
+  const activeSlot = scheduleSlots.find(s => s.id === selectedSlotId) || scheduleSlots[0] || NO_SLOTS_PLACEHOLDER;
   const gradeStudents = useMemo(() => {
     return students.filter(s => s.grade === selectedGrade && s.active);
   }, [students, selectedGrade]);
@@ -257,7 +278,8 @@ export const TeacherClassroomView: React.FC<TeacherClassroomViewProps> = ({
     return AttendanceStorageService.getEphemeralDelegations()
       .filter(d => d.grade === selectedGrade && d.slotId === selectedSlotId && d.date === today)
       .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
-  }, [selectedGrade, selectedSlotId, today]);
+    // R61 (TCV-2): storageVersion invalida al crear/revocar delegaciones.
+  }, [selectedGrade, selectedSlotId, today, storageVersion]);
 
   const isDirectorOfCurrentGrade = useMemo(() => {
     return teacher?.isGroupDirector && teacher?.directorGrade === selectedGrade;
@@ -265,7 +287,8 @@ export const TeacherClassroomView: React.FC<TeacherClassroomViewProps> = ({
 
   const isNonComputableSlot = useMemo(() => {
     return AttendanceStorageService.isSlotNonComputable(selectedSlotId, selectedGrade, today);
-  }, [selectedSlotId, selectedGrade, today]);
+    // R61 (TCV-1): storageVersion invalida al marcar/desmarcar la hora libre.
+  }, [selectedSlotId, selectedGrade, today, storageVersion]);
 
   // Ventana de aviso: minutos restantes del bloque vs noticeMinutesBeforeEnd (proporcional)
   const noticeMin = activeSlot.noticeMinutesBeforeEnd || AttendanceStorageService.getProportionalNoticeMinutes(activeSlot.durationMinutes);
@@ -414,9 +437,19 @@ export const TeacherClassroomView: React.FC<TeacherClassroomViewProps> = ({
     const all = AttendanceStorageService.getAllAttendance();
 
     if (existing) {
-      existing.status = targetStatus;
-      existing.time = getCurrentTimeString();
-      existing.notes = `Ajustado manualmente por el docente a ${targetStatus}`;
+      // R61 (fix TCV-7): copia nueva en vez de mutar el objeto compartido con el
+      // estado/React; y si el registro deja de ser AUSENTE, su enlace de excusa se
+      // retira (un PUNTUAL "justificado" era un estado contradictorio en reportes).
+      const idx = all.findIndex(r => r.id === existing.id);
+      if (idx >= 0) {
+        all[idx] = {
+          ...existing,
+          status: targetStatus,
+          time: getCurrentTimeString(),
+          notes: `Ajustado manualmente por el docente a ${targetStatus}`,
+          excuseId: targetStatus === 'AUSENTE' ? existing.excuseId : undefined
+        };
+      }
       AttendanceStorageService.saveAttendance(all);
     } else {
       all.unshift({
@@ -563,6 +596,23 @@ export const TeacherClassroomView: React.FC<TeacherClassroomViewProps> = ({
   };
 
   // Camera handling
+  // R61 (fix TCV-4): los setTimeout que siembran/re-agendan el bucle rAF de escaneo
+  // quedan registrados para limpiarlos en stopCamera y al desmontar — antes, un
+  // desmonte en la ventana de 300 ms/1500 ms dejaba un bucle rAF eterno en un
+  // componente muerto (CPU colgada hasta recargar).
+  const cameraTimersRef = useRef<number[]>([]);
+  const scheduleScanLoop = (fn: () => void, ms: number) => {
+    const id = window.setTimeout(() => {
+      cameraTimersRef.current = cameraTimersRef.current.filter(x => x !== id);
+      fn();
+    }, ms);
+    cameraTimersRef.current.push(id);
+  };
+  const clearCameraTimers = () => {
+    cameraTimersRef.current.forEach(id => window.clearTimeout(id));
+    cameraTimersRef.current = [];
+  };
+
   const startCamera = async (facing: 'environment' | 'user' = cameraFacing) => {
     setCameraError(null);
     if (cameraStream) {
@@ -585,7 +635,7 @@ export const TeacherClassroomView: React.FC<TeacherClassroomViewProps> = ({
       setCameraActive(true);
       
       // Iniciar el bucle de escaneo tras breve pausa para que el video monte
-      setTimeout(() => {
+      scheduleScanLoop(() => {
         if (animFrameId.current) cancelAnimationFrame(animFrameId.current);
         animFrameId.current = requestAnimationFrame(tickScan);
       }, 300);
@@ -597,6 +647,7 @@ export const TeacherClassroomView: React.FC<TeacherClassroomViewProps> = ({
   };
 
   const stopCamera = () => {
+    clearCameraTimers();
     if (cameraStream) {
       cameraStream.getTracks().forEach(t => t.stop());
       setCameraStream(null);
@@ -637,7 +688,7 @@ export const TeacherClassroomView: React.FC<TeacherClassroomViewProps> = ({
         if (code && code.data && code.data.trim().length > 0) {
           handleRegisterScan(code.data, 'CAMERA');
           // Pausar brevemente para evitar escaneos duplicados en ráfaga
-          setTimeout(() => {
+          scheduleScanLoop(() => {
             animFrameId.current = requestAnimationFrame(tickScan);
           }, 1500);
           return;
@@ -649,6 +700,19 @@ export const TeacherClassroomView: React.FC<TeacherClassroomViewProps> = ({
 
   return (
     <div className="space-y-6">
+      {/* R61 (fix TCV-3): estado visible cuando Rectoría dejó el horario sin bloques. */}
+      {scheduleSlots.length === 0 && (
+        <div className="p-5 rounded-3xl bg-amber-50 dark:bg-amber-950/30 border border-amber-300 dark:border-amber-800 text-amber-800 dark:text-amber-200 shadow-lg">
+          <h2 className="text-sm font-black flex items-center gap-2">
+            <AlertTriangle className="w-4 h-4" /> El colegio no tiene bloques de horario definidos
+          </h2>
+          <p className="text-xs mt-1.5 leading-relaxed">
+            El Aula no puede operar sin jornada. Pide a Rectoría que restaure la plantilla de horario
+            (Horarios &rarr; Plantillas &rarr; aplicar) y esta vista volverá a la normalidad en cuanto
+            los bloques vuelvan a existir.
+          </p>
+        </div>
+      )}
       {/* Header & Course Selector Banner */}
       <div className="p-6 rounded-3xl bg-white dark:bg-zinc-950 border border-slate-200 dark:border-zinc-800/50 shadow-xl space-y-4">
         <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">

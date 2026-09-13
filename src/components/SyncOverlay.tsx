@@ -96,6 +96,20 @@ export const SyncOverlay: React.FC<SyncOverlayProps> = ({
             Cerrar
           </button>
         )}
+
+        {/* R61 (fix SO-1): salida de emergencia durante "syncing". Si el fetch al
+            Worker se cuelga (red a medias), el overlay full-screen z-[100] dejaba
+            la app inutilizable hasta que el navegador agotara el socket (minutos).
+            Cerrar aquí NO aborta la operación de red (sigue su curso y su resultado
+            se refleja en Ajustes/estado) — solo libera la pantalla. */}
+        {status === 'syncing' && (
+          <button
+            onClick={onClose}
+            className="text-[11px] font-bold text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 underline underline-offset-2 transition-colors"
+          >
+            Seguir en segundo plano (cerrar aviso)
+          </button>
+        )}
       </div>
     </div>
   );

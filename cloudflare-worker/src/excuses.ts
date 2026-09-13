@@ -136,16 +136,22 @@ async function sweepAutoApprovals(env: Env): Promise<number> {
   if (!env.DB) return 0;
   const hours = env.EXCUSE_AUTO_APPROVE_HOURS !== undefined ? Number(env.EXCUSE_AUTO_APPROVE_HOURS) : 72;
   if (!hours || hours <= 0) return 0; // colegio desactivó el auto-aprobo (R8)
-  const cutoff = new Date(Date.now() - Math.floor(hours) * 3600_000).toISOString();
+  // R61 (fix E6c): Math.ceil — un valor fraccional (0.5) hacia floor(0)=0 y el cutoff
+  // quedaba en "ahora", auto-aprobando TODAS las pendientes al primer listado.
+  const cutoff = new Date(Date.now() - Math.ceil(hours) * 3600_000).toISOString();
   const pendientes = await env.DB.prepare(
     `SELECT id, student_code, student_name FROM student_excuses
      WHERE status = 'PENDIENTE' AND created_at <= ?`
   ).bind(cutoff).all<{ id: string; student_code: string; student_name: string }>();
   let count = 0;
   for (const ex of (pendientes.results || [])) {
-    await env.DB.prepare(
+    const upd = await env.DB.prepare(
       `UPDATE student_excuses SET status='APROBADA', auto_approved=1, reviewed_by='AUTO_72H', reviewed_at=datetime('now') WHERE id=? AND status='PENDIENTE'`
     ).bind(ex.id).run();
+    // R61 (fix E6a): solo se audita lo que REALMENTE cambió (meta.changes) — si otra
+    // decisión concurrente ganó la carrera, el evento AUTO no se escribe (auditoría
+    // veraz; antes registraba auto-aprobaciones de excusas ya rechazadas).
+    if (((upd as any)?.meta?.changes ?? 1) < 1) continue;
     await writeExcuseAudit(env, {
       eventType: 'EXCUSE_AUTO_APPROVED', performedBy: 'AUTO_72H', excuseId: ex.id,
       studentCode: ex.student_code, status: 'APROBADA', extra: { windowHours: hours }
@@ -321,6 +327,16 @@ export async function handleExcusesRoutes(request: Request, env: Env, url: URL, 
       const sourceAttendanceId = body.sourceAttendanceId ? String(body.sourceAttendanceId).trim() : '';
       const today = bogotaToday();
 
+      // R61 (fix E1 — propiedad): una identidad de ESTUDIANTE_ACUDIENTE solo puede
+      // radicar excusas para SU PROPIO código (el body NO es prueba de identidad).
+      // Antes, cualquier autenticado podía radicar excusas sobre los AUSENTES de un
+      // compañero y la ventana R8 las auto-aprobaba a las 72 h sin decisión de
+      // Rectoría. Docentes (aula, Justificar) y terminales de escaneo conservan el
+      // flujo (la ficha del estudiante está en su contexto de trabajo).
+      if (authz.source === 'identity' && authz.role === 'ESTUDIANTE_ACUDIENTE' && ownStudentCode !== studentCode) {
+        return jsonErr('Tu sesión de estudiante solo puede radicar excusas para tu propio código de carné (la identidad verificada no coincide con el estudiante indicado).', 403);
+      }
+
       if (!studentCode) errors.push({ rule: 'R1', message_es: 'El código del estudiante es obligatorio.' });
       if (!isValidDate(startDate) || !isValidDate(endDate)) errors.push({ rule: 'R1', message_es: 'Las fechas deben tener formato YYYY-MM-DD válido.' });
       if (isValidDate(startDate) && isValidDate(endDate) && endDate < startDate) errors.push({ rule: 'R1', message_es: 'La fecha final no puede ser anterior a la inicial.' });
@@ -399,20 +415,33 @@ export async function handleExcusesRoutes(request: Request, env: Env, url: URL, 
       const status = 'PENDIENTE'; // Ronda 21: default real — siempre explícito (Regla 6)
 
       // Transacción: excusa + vinculación de registros AUSENTE del rango (overlay)
+      // R61 (fix E3): el attachment_path del body se IGNORA — el soporte solo puede
+      // nacer del endpoint que cifra (POST /:id/attachment). Antes, un ciphertext
+      // copiado de una excusa ajena podía trasplantarse y leerse vía la excusa propia.
       const stmts = [
         env.DB.prepare(
           `INSERT INTO student_excuses (id, student_code, student_name, grade, start_date, end_date, reason, notes, status, submitted_by, source_attendance_id, attachment_path)
            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-        ).bind(excuseId, studentCode, `${student.first_name} ${student.last_name}`, student.grade, startDate, endDate, reason, notes || null, status, submittedBy, sourceAttendanceId || null, body.attachmentPath ? String(body.attachmentPath) : null)
+        ).bind(excuseId, studentCode, `${student.first_name} ${student.last_name}`, student.grade, startDate, endDate, reason, notes || null, status, submittedBy, sourceAttendanceId || null, null)
       ];
       for (const r of recordsToLink) {
         stmts.push(env.DB.prepare(`UPDATE attendance_records SET excuse_id = ? WHERE id = ? AND status = 'AUSENTE' AND excuse_id IS NULL`).bind(excuseId, r.id));
       }
-      await env.DB.batch(stmts);
+      try {
+        await env.DB.batch(stmts);
+      } catch (e: any) {
+        // R61 (fix E5): la carrera del pre-check R2 contra el índice único debe ser
+        // un 400 amable, no un 500 con detalles internos de D1.
+        const msg = String(e?.message || e || '');
+        if (msg.includes('student_excuses.source_attendance_id')) {
+          return jsonErr('Esa ausencia ya tiene una excusa asociada.', 400, [{ rule: 'R2', message_es: '1 excusa por ausencia (índice único).' }]);
+        }
+        throw e;
+      }
 
       const hash = await writeExcuseAudit(env, {
         eventType: 'EXCUSE_CREATED', performedBy: submittedBy, excuseId,
-        studentCode, status, extra: { reason, startDate, endDate, notes: notes || null, postHoc: !!sourceAttendanceId, recordsLinked: recordsToLink.length }
+        studentCode, status, extra: { reason, startDate, endDate, notes: notes || null, postHoc: !!sourceAttendanceId, recordsLinked: recordsToLink.length, physicalDocumentVerified: body.physicalDocumentVerified === true }
       });
       await env.DB.prepare(`UPDATE student_excuses SET audit_hash = ? WHERE id = ?`).bind(hash, excuseId).run();
 
@@ -540,6 +569,12 @@ export async function handleExcusesRoutes(request: Request, env: Env, url: URL, 
       }
 
       if (!isAttachment && request.method === 'GET') {
+        // R61 (fix E2): mismo gate de propiedad que el adjunto — antes, cualquier
+        // autenticado que conociera el id leía notas de salud y motivos de un tercero.
+        // El cliente legítimo NUNCA llama este endpoint (lista por studentCode).
+        if (!isAdmin && ownStudentCode !== excuse.student_code) {
+          return jsonErr('Esta excusa solo puede consultarla Rectoría o el estudiante dueño.', 403);
+        }
         await sweepAutoApprovals(env);
         const fresh = await env.DB.prepare(`SELECT * FROM student_excuses WHERE id = ?`).bind(excuseId).first<any>();
         return jsonOk({ success: true, excuse: fresh });
@@ -577,13 +612,18 @@ export async function handleExcusesRoutes(request: Request, env: Env, url: URL, 
 
         // Efecto sobre attendance_records (mismo principio de overlay)
         let recordsAffected = 0;
+        // R61 (fix E4): el audit_hash de la excusa se fija con el hash del evento que
+        // ESTA decisión escribió (como ya hacía el create) — antes se re-leía la cabeza
+        // de la cadena y, bajo concurrencia, apuntaba al eslabón de OTRO evento y
+        // verify-chain reportaba roturas falsas (segunda pasada).
+        let auditHash: string | null = null;
         if (newStatus === 'APROBADA') {
           // Re-vincular AUSENTEs del rango que hayan quedado sin excusa (idempotente)
           const res = await env.DB.prepare(
             `UPDATE attendance_records SET excuse_id = ? WHERE student_code = ? AND status = 'AUSENTE' AND excuse_id IS NULL AND date BETWEEN ? AND ?`
           ).bind(excuseId, excuse.student_code, excuse.start_date, excuse.end_date).run();
           recordsAffected = (res as any)?.meta?.changes ?? 0;
-          await writeExcuseAudit(env, { eventType: 'EXCUSE_APPROVED', performedBy: reviewedBy, excuseId, studentCode: excuse.student_code, status: newStatus, extra: { physicalDocumentVerified: !!body.physicalDocumentVerified } });
+          auditHash = await writeExcuseAudit(env, { eventType: 'EXCUSE_APPROVED', performedBy: reviewedBy, excuseId, studentCode: excuse.student_code, status: newStatus, extra: { physicalDocumentVerified: !!body.physicalDocumentVerified } });
           // Web Push (Ronda 23): aviso al estudiante/acudiente de la decisión.
           ctx?.waitUntil(sendPushTo(env, {
             studentCode: excuse.student_code,
@@ -597,7 +637,7 @@ export async function handleExcusesRoutes(request: Request, env: Env, url: URL, 
             `UPDATE attendance_records SET excuse_id = NULL WHERE excuse_id = ?`
           ).bind(excuseId).run();
           recordsAffected = (res as any)?.meta?.changes ?? 0;
-          await writeExcuseAudit(env, { eventType: 'EXCUSE_REJECTED', performedBy: reviewedBy, excuseId, studentCode: excuse.student_code, status: newStatus, extra: { rejectReason } });
+          auditHash = await writeExcuseAudit(env, { eventType: 'EXCUSE_REJECTED', performedBy: reviewedBy, excuseId, studentCode: excuse.student_code, status: newStatus, extra: { rejectReason } });
           // Web Push (Ronda 23): aviso al estudiante/acudiente con el motivo (R6).
           ctx?.waitUntil(sendPushTo(env, {
             studentCode: excuse.student_code,
@@ -607,8 +647,9 @@ export async function handleExcusesRoutes(request: Request, env: Env, url: URL, 
           }));
         }
 
-        const hash = await getChainHead(env);
-        await env.DB.prepare(`UPDATE student_excuses SET audit_hash = ? WHERE id = ?`).bind(hash, excuseId).run();
+        if (auditHash) {
+          await env.DB.prepare(`UPDATE student_excuses SET audit_hash = ? WHERE id = ?`).bind(auditHash, excuseId).run();
+        }
 
         const fresh = await env.DB.prepare(`SELECT * FROM student_excuses WHERE id = ?`).bind(excuseId).first<any>();
         return jsonOk({
@@ -622,7 +663,10 @@ export async function handleExcusesRoutes(request: Request, env: Env, url: URL, 
 
     return jsonErr(`Método no permitido para ${path}.`, 405);
   } catch (err: any) {
+    // R61 (fix E5): mensaje genérico al cliente (los detalles de D1 con nombres de
+    // tablas/constraints NO viajan en la respuesta — viven solo en el log interno,
+    // mismo criterio que B-1 aplicó a index.ts).
     console.error('Excuses module error:', err);
-    return jsonErr(err?.message || 'Error interno en el módulo de excusas.', 500);
+    return jsonErr('Error interno al procesar la excusa. Reintenta y, si persiste, revisa el log del Worker.', 500);
   }
 }

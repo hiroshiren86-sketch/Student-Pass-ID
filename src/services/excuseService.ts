@@ -268,6 +268,11 @@ export class ExcuseService {
     notes?: string;
     sourceAttendanceId?: string;
     submittedBy: string;
+    /** R61 (fix EJM-1): certificación del soporte físico firmado (§6.1) — viaja
+     * en el evento EXCUSE_CREATED de la cadena de auditoría para que Rectoría no
+     * tenga que re-marcarla al aprobar. Antes el checkbox del modal moría en el
+     * estado del componente y nunca salía del navegador. */
+    physicalDocumentVerified?: boolean;
   }): Promise<ExcuseApiResult> {
     const baseUrl = this.getWorkerBaseUrl();
     if (!baseUrl) return { ok: false, error: 'URL del Cloudflare Worker no configurada (Ajustes → Sincronización en la Nube).' };
