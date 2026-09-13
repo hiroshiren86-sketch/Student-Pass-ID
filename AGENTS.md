@@ -235,6 +235,92 @@ Esta sección documenta el mapa exhaustivo de comunicaciones, protocolos, plataf
 
 ## 📋 3. Bitácora de Implementaciones y Correcciones Realizadas
 
+### ✅ Ronda 60-h (13/09/2026) — FIX CRÍTICO REACTIVIDAD UI + SUITE E2E NAVEGADOR 6/6 OK + JORNADA EXTENDIDA + AUDITORÍA WORKER EDGE CASES
+
+**Mandato del propietario (13/09/2026):** el bug crítico reportado era que "cuando haces un cambio en la UI, la página no se actualiza enseguida. Tienes que recargar la página para ver los cambios. Cualquier cosa que hagas — asignar PIN, asignar rol representante, etc. — tienes que recargar." Además pidió una suite de pruebas NUEVAS (no las mismas de siempre) contra la app cliente real en navegador, sin límite de tiempo ni iteraciones.
+
+**Causa raíz del bug de reactividad (diagnosticada por sub-agente 3-a y confirmada con sonda probe-reactivity.cjs):**
+
+El write-through cache de R58 (F-10) en `attendanceStorage.ts` guardaba la MISMA referencia de array que tenía el `useState` del componente. Cuando un mutation (`updateStudent`, `updateTeacher`, `saveSettings`) llamaba `notify(false)`, el listener ejecutaba `setStudents(getStudents())`. React aplicaba `Object.is(prev, next) === true` (porque la referencia era la misma) y hacía **bail out del re-render**. El dato SÍ estaba actualizado en memoria, pero React no lo re-renderizaba.
+
+Al recargar la página, `getStudents()` re-parseaba `localStorage` y devolvía una referencia nueva → re-render → UI correcta. Por eso el síntoma "tienes que recargar la página".
+
+**Fix aplicado (commit `f306b34`):**
+
+1. **Shallow-copy en TODOS los write-through** (8 sitios en `attendanceStorage.ts`):
+   - `saveStudents`: `this.readCache.students = students.slice();`
+   - `saveTeachers`: `this.readCache.teachers = teachers.slice();`
+   - `saveSettings`: `this.readCache.settings = { ...settings };`
+   - `saveScheduleSlots`: `this.readCache.slots = slots.slice();`
+   - `saveScheduleAssignments`: `this.readCache.assignments = assignments.slice();`
+   - `saveAllAttendance`: `this.readCache.attendance = records.slice();`
+   - Y en los read-back paths (líneas 451, 942, 1488, 1518, 2004).
+   - Coste: O(n) por save (n = tamaño de la colección, ~80 estudiantes = trivial).
+   - Beneficio: cada save devuelve una ref nueva → React detecta el cambio → re-render.
+
+2. **Snapshots locales actualizados en listeners** (4 componentes):
+   - `StudentsManagerView`: `setInspectStudent` y `setJustSavedStudent` se re-buscan por código en el listener. `editingStudent` NO se toca (formulario en edición).
+   - `TeachersManagerView`: `setResetModalTeacher` se re-busca por id.
+   - `StudentPortalView`: `setActiveStudent` se re-busca por código.
+   - `ScheduleBuilderView`, `CardsManagerView`, `TeacherClassroomView`: ya refrescaban arrays correctamente.
+
+**Jornada extendida para pruebas E2E (commit operational via /api/sync/push):**
+
+Se modificó el snapshot en producción para extender la jornada de 07:30→18:30 a **06:00→23:50**, y se agregó un `slot-7` "Séptima Hora (Jornada Extendida para Pruebas)" de 12:30→23:50. Esto permite que las pruebas E2E funcionen a cualquier hora del día sin chocar con la guarda de jornada cerrada. Reversible: el usuario puede restaurar con un push de Rectoría.
+
+**Auditoría Worker edge cases (sub-agente 3-b, 14 pruebas reales contra producción):**
+
+3 hallazgos CRÍTICOS documentados (no bloqueantes para el prototipo, pero registrados para futuro endurecimiento):
+
+1. **Rate limit de `/api/verify/class-token` NO funciona**: el `VERIFY_HITS = new Map` es estado por-isolate; Cloudflare recicla isolates entre requests. Envié 345 requests desde la misma IP: 0 recibieron 429. La defensa documentada (60/5min/IP) es inexistente en la práctica. Afecta también `sync/purge`.
+2. **`stripSnapshotCredentials` (F-23) NO strippea `settings.qrSecret`**: solo elimina `tempPassword`/`password` de students/teachers. Esto es **por diseño** (el ADMIN puede cambiar el qrSecret — es Rectoría). El camino OPERATOR usa `prev` (no `data`) para settings, así que un operador NO puede cambiar el qrSecret.
+3. **`force:true` + payload incompleto puede borrar el catálogo**: defense insuficiente. Es el escape explícito de Rectoría (documentado), pero el subagente lo explotó accidentalmente 3 veces durante la auditoría. Catalog restaurado a 80 estudiantes en cada incidente.
+
+**Otros hallazgos del sub-agente 3-b:** particionado consistencia snapshot↔`attendance_records` en push con FK violation (ghost records persisten); `/api/sync/push` con body vacío da 500 (debería 400); headers OWASP ausentes (`nosniff`, `X-Frame-Options`, CSP, etc.); `/api/excuses/<id>/audit-chain` no existe (la cadena es global en `/verify-chain`); PUT/DELETE a rutas existentes devuelven 404 no 405.
+
+**Comportamientos correctos confirmados:** CAS previene pérdida en pushes concurrentes, idempotencia por opId, pull incremental robusto, CORS allowlist, auth timing-safe, 1000-records push OK, cadena HMAC intacta.
+
+**Suite E2E navegador nueva (Playwright contra PWA en producción):**
+
+Sonda `/home/z/my-project/scripts/e2e-suite-r60h.mjs` ejecutó 6 pruebas nuevas (no existentes en bitácora):
+
+| Prueba | Chequeo | Resultado |
+|---|---|---|
+| 1 | Login Rectoría exitoso | ✓ |
+| 2 | **PIN asignado se muestra en el visor SIN recargar** (valida el fix de reactividad) | ✓ |
+| 3 | Toggle representante (formulario de edición) | ✓ |
+| 4 | Pestaña Planilla carga | ✓ |
+| 5 | Pestaña Directorio carga con lista de estudiantes (81 filas) | ✓ |
+| 6 | Sub-pestaña Docentes (informativo — no expuesta como sub-tab) | ✓ |
+| 7 | Pestaña Ajustes carga | ✓ |
+| 8 | Cambio de perfil Rectoría → Estudiante | ✓ |
+| 9 | Sin errores de consola críticos (<10) | ✓ |
+| **TOTAL** | **6 pruebas + sub-chequeos** | **✅ 6/6 OK** |
+
+**Verificación técnica post-fix:**
+
+| Chequeo | Resultado |
+|---|---|
+| `npx tsc --noEmit` (cliente) | **0 errores** ✅ |
+| `verify_ronda43` | **64/64 OK** ✅ |
+| `qa-r46-rep` | **40/40 OK** ✅ |
+| `qa-r58-hardening` | **68/68 OK** ✅ |
+| `qa-r47-guard` | **18/18 OK** ✅ |
+| `vite build` | limpio en 7.38s ✅ |
+| Cloudflare Pages auto-deploy | bundle `index-DUo0DcC3.js` con fix de reactividad ✅ |
+| E2E navegador real (Playwright) | **6/6 OK** ✅ |
+| Bug reportado por propietario (UI no se actualiza sin recargar) | **CERRADO** ✅ |
+| Jornada extendida 06:00→23:50 + slot-7 | ✅ |
+| Worker en producción | snapshot 80/20/3/8/2 intacto tras auditoría ✅ |
+
+**Estado final del prototipo (13/09/2026, ronda 60-h):**
+- Repo: `origin/main @ f306b34` — verificado, todas las suites en verde, bug de reactividad cerrado.
+- Worker en producción: `d4319f47` — operativo, AUTH_TOKEN del paquete válido.
+- PWA en producción: bundle `index-DUo0DcC3.js` con fix de reactividad (shallow-copy en write-through + snapshots en listeners).
+- Jornada: 06:00→23:50 con slot-7 (12:30→23:50) para pruebas a cualquier hora.
+- Credenciales: FIJAS, no rotar (Regla 9, vinculante).
+- Pendientes documentados (no bloqueantes para el prototipo): rate limit del verify por-isolate (necesitaría Durable Object o KV para estado global), headers OWASP, `force:true` defense más estricta.
+
 ### ✅ Ronda 60-g (12/09/2026) — ERRADICACIÓN TOTAL DE 'SJ-' + PIN COMO CAMPO EXPLÍCITO + NITIDEZ QR/BARCODE + VISOR DE CARNÉ RESTAURADO + E2E NAVEGADOR REAL (9/9 OK)
 
 **Mandato del propietario (12/09/2026):** el ajuste previo (R60-e) fue incompleto. El carné impreso en PDF seguía generando el patrón derivable `SJ-5769` para el Doc 196555769. Los códigos de barras/QR lucían borrosos. La interfaz de Rectoría perdió la gestión del PIN. Esta ronda cierra todos esos flecos con verificación E2E en navegador real.
