@@ -220,6 +220,28 @@ export const StudentsManagerView: React.FC<StudentsManagerViewProps> = ({ onGene
       setShowDrawer(false);
       setToastMessage(`Estudiante ${firstName} ${lastName} actualizado correctamente.`);
       setTimeout(() => setToastMessage(null), 3500);
+      // R61 (fix PIN↔cuenta): si el estudiante TIENE cuenta de acceso y Rectoría cambió
+      // su PIN, la CONTRASEÑA de la cuenta se sincroniza en el mismo guardado (patrón
+      // del provisioner: firma con el PIN anterior y aplica el nuevo). Antes el PIN
+      // local cambiaba y la cuenta quedaba con la clave vieja → el estudiante no podía
+      // entrar desde su teléfono con el PIN impreso en su carné.
+      const oldPin = (editingStudent.tempPassword || '').trim();
+      const newPin = formData.accessPin.trim();
+      if (editingStudent.hasFirebaseAccount && newPin && newPin !== oldPin) {
+        setToastMessage(`Sincronizando la contraseña de la cuenta de ${firstName} ${lastName}…`);
+        setTimeout(() => setToastMessage(null), 3000);
+        const sync = await FirebaseService.syncStudentAccountPassword(editingStudent.code, oldPin, newPin);
+        if (sync.ok) {
+          setToastMessage(`Cuenta de acceso actualizada: el nuevo PIN de ${firstName} ya funciona también en su teléfono.`);
+          setTimeout(() => setToastMessage(null), 5000);
+        } else if (sync.reason === 'old_password_mismatch') {
+          setToastMessage(`⚠ La ficha quedó con el nuevo PIN, pero la contraseña de la CUENTA de ${firstName} no coincide con el PIN anterior (divergencia histórica). El acceso desde su teléfono sigue con la última clave que la cuenta tenía. Para realinearla: edite el PIN de nuevo desde un terminal donde la cuenta aún verifique, o reprovisione la cuenta.`);
+          setTimeout(() => setToastMessage(null), 9000);
+        } else {
+          setToastMessage(`⚠ La ficha quedó con el nuevo PIN, pero no se pudo actualizar la contraseña de la cuenta (${sync.message || 'error de red'}). Reintente más tarde desde "Editar ficha" re-guardando.`);
+          setTimeout(() => setToastMessage(null), 7000);
+        }
+      }
     } else {
       const newStudent: Student = {
         code: cleanDocumentId,
@@ -279,8 +301,11 @@ export const StudentsManagerView: React.FC<StudentsManagerViewProps> = ({ onGene
     }
     try {
       if (student.hasFirebaseAccount) {
-        setToastMessage(`Este estudiante ya tiene cuenta de acceso (${student.authEmail || 'identidad'}). Use "Restablecer" desde Gestión Docentes si olvidó la clave.`);
-        setTimeout(() => setToastMessage(null), 4000);
+        // R61: el mensaje anterior remitía a "Gestión Docentes" — pero el
+        // restablecimiento de la contraseña de ESTUDIANTES vive aquí: editar la
+        // ficha y cambiar el PIN sincroniza la cuenta (R61 fix PIN↔cuenta).
+        setToastMessage(`Este estudiante ya tiene cuenta de acceso (${student.authEmail || 'identidad'}). Si olvidó su clave, edite la ficha y asigne un PIN nuevo: la cuenta se sincroniza automáticamente al guardar.`);
+        setTimeout(() => setToastMessage(null), 5000);
         return;
       }
       const result = await FirebaseService.provisionStudentAccount(student.code, accessKey, student.code, `${student.firstName} ${student.lastName}`);

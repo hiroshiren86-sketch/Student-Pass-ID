@@ -428,6 +428,52 @@ export class FirebaseService {
     }
   }
 
+  /**
+   * R61 (fix PIN↔cuenta): sincroniza la CONTRASEÑA de la cuenta de acceso de un
+   * estudiante cuando Rectoría cambia su PIN. Mismo patrón del provisioner
+   * (instancia secundaria — la sesión de Rectoría no se toca): firma con la clave
+   * VIEJA conocida y aplica la nueva. Si la clave vieja ya no coincide con la
+   * cuenta (divergencia histórica), devuelve old_password_mismatch SIN tocar nada
+   * — la UI informa honestamente (Regla 6: nada de éxitos falsos).
+   */
+  static async syncStudentAccountPassword(studentCode: string, oldPassword: string, newPassword: string): Promise<{ ok: boolean; reason?: 'old_password_mismatch' | 'error'; message?: string }> {
+    if (!studentCode || !oldPassword || !newPassword) {
+      return { ok: false, reason: 'error', message: 'Faltan la clave vieja o la nueva.' };
+    }
+    const internalEmail = this.studentInternalEmail(studentCode);
+    const secondaryApp = initializeApp({
+      apiKey: firebaseConfigData.apiKey,
+      authDomain: firebaseConfigData.authDomain,
+      projectId: firebaseConfigData.projectId,
+      storageBucket: firebaseConfigData.storageBucket,
+      messagingSenderId: firebaseConfigData.messagingSenderId,
+      appId: firebaseConfigData.appId
+    }, `inas-student-pw-sync-${Date.now()}`);
+    try {
+      const secondaryAuth = getAuth(secondaryApp);
+      let cred;
+      try {
+        cred = await signInWithEmailAndPassword(secondaryAuth, internalEmail, oldPassword);
+      } catch (e: any) {
+        const code = (e && typeof e === 'object' && 'code' in e) ? String((e as any).code) : '';
+        if (code === 'auth/invalid-credential' || code === 'auth/wrong-password' || code === 'auth/invalid-login-credentials') {
+          return { ok: false, reason: 'old_password_mismatch', message: 'La contraseña actual de la cuenta no coincide con el PIN anterior registrado en esta ficha.' };
+        }
+        throw e;
+      }
+      await updatePassword(cred.user, newPassword);
+      await signOut(secondaryAuth);
+      return { ok: true };
+    } catch (e: any) {
+      return { ok: false, reason: 'error', message: this.mapAuthError(e) || 'No se pudo actualizar la contraseña de la cuenta.' };
+    } finally {
+      try {
+        const idx = getApps().findIndex(a => a.name === secondaryApp.name);
+        if (idx >= 0) await deleteApp(getApps()[idx]);
+      } catch { /* la limpieza del sync jamás bloquea el flujo principal */ }
+    }
+  }
+
   /** Espejo nube de la ficha docente (escrito por la sesión ADMIN de Rectoría). */
   static async mirrorTeacherCloud(teacherId: string, mirror: TeacherCloudMirror): Promise<void> {
     try {
