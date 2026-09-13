@@ -117,7 +117,14 @@ export class CloudflareSyncService {
   /** URL base del Worker ya normalizada (sin espacios ni slashes finales) */
   private static getWorkerBaseUrl(): string {
     const settings = AttendanceStorageService.getSettings();
-    return (settings.cloudflareWorkerUrl || '').trim().replace(/\/+$/, '');
+    // R64 (fix de robustez): tolera que el operador pegue la URL CON la ruta de
+    // sync (https://…/api/sync/push — el push la acepta desde R47). Antes, el
+    // resto de endpoints (excusas, push, attendance, credencial, cascada)
+    // concatenaban la ruta encima → 404 silencioso del sondeo del buzón.
+    return (settings.cloudflareWorkerUrl || '')
+      .trim()
+      .replace(/\/+$/, '')
+      .replace(/\/api\/sync\/(push|pull)$/, '');
   }
 
   /**

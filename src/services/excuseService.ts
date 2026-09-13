@@ -89,10 +89,14 @@ export class ExcuseService {
   // ============================ CONEXIÓN (patrón sync) ============================
 
   private static getWorkerBaseUrl(): string {
+    // R64: misma normalización que CloudflareSyncService (URL con o sin ruta de sync).
     try {
       const raw = localStorage.getItem('inas_settings_v5');
       const settings = raw ? JSON.parse(raw) : {};
-      return (settings.cloudflareWorkerUrl || '').trim().replace(/\/+$/, '');
+      return (settings.cloudflareWorkerUrl || '')
+        .trim()
+        .replace(/\/+$/, '')
+        .replace(/\/api\/sync\/(push|pull)$/, '');
     } catch {
       return '';
     }
