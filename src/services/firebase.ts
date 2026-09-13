@@ -457,7 +457,16 @@ export class FirebaseService {
       } catch (e: any) {
         const code = (e && typeof e === 'object' && 'code' in e) ? String((e as any).code) : '';
         if (code === 'auth/invalid-credential' || code === 'auth/wrong-password' || code === 'auth/invalid-login-credentials') {
-          return { ok: false, reason: 'old_password_mismatch', message: 'La contraseña actual de la cuenta no coincide con el PIN anterior registrado en esta ficha.' };
+          // R61 (transición de datos): ¿la cuenta YA tiene la clave nueva? (idempotencia
+          // de re-guardados y migraciones) — si firma con la NUEVA, no hay nada que hacer.
+          try {
+            const already = await signInWithEmailAndPassword(secondaryAuth, internalEmail, newPassword);
+            await signOut(secondaryAuth);
+            void already;
+            return { ok: true };
+          } catch {
+            return { ok: false, reason: 'old_password_mismatch', message: 'La contraseña actual de la cuenta no coincide con el PIN anterior registrado en esta ficha.' };
+          }
         }
         throw e;
       }

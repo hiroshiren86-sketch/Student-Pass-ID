@@ -790,6 +790,11 @@ export const StudentsManagerView: React.FC<StudentsManagerViewProps> = ({ onGene
                   <p className="text-[10px] text-slate-400 leading-tight">
                     El PIN es la clave que el estudiante usa para entrar a su portal. Si lo dejas vacío, el carné impreso mostrará "Solicitar en Rectoría" como estado vacío claro. Nunca se deriva automáticamente del documento.
                   </p>
+                  {editingStudent?.hasFirebaseAccount && (
+                    <p className="text-[10px] text-amber-600 dark:text-amber-400 leading-tight font-bold">
+                      Este estudiante tiene cuenta de acceso: al cambiar y guardar el PIN, la contraseña de su cuenta se sincroniza automáticamente. Firebase exige 6 o más caracteres (un PIN de 4 dígitos no puede ser contraseña de la cuenta).
+                    </p>
+                  )}
                 </div>
 
                 {/* 6. Fotografía del Carné (Exclusiva del Formulario Individual) */}
