@@ -1,10 +1,13 @@
-import React, { useEffect } from 'react';
+import React, { useEffect, useState } from 'react';
 import { AlertTriangle, X } from 'lucide-react';
 
 /**
  * Ronda 8 (O2): Modal de confirmación propio del sistema — reemplaza window.confirm()
  * nativo para mantener la consistencia visual con el resto de modales (y responde a
  * Escape, familia del bug B1/U1). Uso: estado `confirmState` en el llamador.
+ * R64 (Fix §5): `requireText` opcional — para acciones destructivas EN CASCADA el
+ * botón de confirmación permanece deshabilitado hasta que el operador escriba el
+ * texto exacto (p. ej. "ELIMINAR"): la fricción deliberada evita borrados por reflejo.
  */
 interface ConfirmDialogProps {
   open: boolean;
@@ -12,6 +15,7 @@ interface ConfirmDialogProps {
   message: string;
   confirmLabel?: string;
   cancelLabel?: string;
+  requireText?: string;
   onConfirm: () => void;
   onCancel: () => void;
 }
@@ -22,9 +26,17 @@ export const ConfirmDialog: React.FC<ConfirmDialogProps> = ({
   message,
   confirmLabel = 'Sí, eliminar',
   cancelLabel = 'Cancelar',
+  requireText,
   onConfirm,
   onCancel
 }) => {
+  const [typed, setTyped] = useState('');
+
+  // R64: al reabrir el diálogo (nueva confirmación), el campo de verificación se limpia.
+  useEffect(() => {
+    if (open) setTyped('');
+  }, [open, title, message]);
+
   // B1: Escape cancela el diálogo (patrón Regla E10 de SettingsModal)
   useEffect(() => {
     if (!open) return;
@@ -39,6 +51,8 @@ export const ConfirmDialog: React.FC<ConfirmDialogProps> = ({
   }, [open, onCancel]);
 
   if (!open) return null;
+
+  const confirmed = !requireText || typed.trim() === requireText;
 
   return (
     <div className="fixed inset-0 z-[80] flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-md animate-fadeIn">
@@ -59,6 +73,17 @@ export const ConfirmDialog: React.FC<ConfirmDialogProps> = ({
           </button>
         </div>
         <p className="text-xs text-slate-600 dark:text-slate-300 leading-relaxed">{message}</p>
+        {requireText && (
+          <div className="space-y-1.5">
+            <input
+              autoFocus
+              value={typed}
+              onChange={(e) => setTyped(e.target.value)}
+              placeholder={`Escriba ${requireText} para confirmar…`}
+              className="w-full px-3.5 py-2.5 bg-slate-50 dark:bg-black border border-slate-200 dark:border-zinc-800/50 rounded-xl text-xs font-mono text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-red-500"
+            />
+          </div>
+        )}
         <div className="flex items-center justify-end gap-2 pt-1">
           <button
             onClick={onCancel}
@@ -68,8 +93,9 @@ export const ConfirmDialog: React.FC<ConfirmDialogProps> = ({
           </button>
           <button
             onClick={onConfirm}
-            autoFocus
-            className="px-3.5 py-2 rounded-xl bg-red-600 hover:bg-red-500 text-white text-xs font-bold shadow-md shadow-red-600/25 transition-all"
+            disabled={!confirmed}
+            autoFocus={!requireText}
+            className="px-3.5 py-2 rounded-xl bg-red-600 hover:bg-red-500 disabled:opacity-40 disabled:cursor-not-allowed text-white text-xs font-bold shadow-md shadow-red-600/25 transition-all"
           >
             {confirmLabel}
           </button>

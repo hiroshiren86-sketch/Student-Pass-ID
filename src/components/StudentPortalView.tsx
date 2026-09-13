@@ -35,7 +35,8 @@ import QRCode from 'qrcode';
 import { Student, AttendanceRecord, StudentAttendanceStats, StudentPersonalSchedule, StudentPersonalScheduleEntry, SchoolSettings } from '../types/attendance';
 import { AttendanceStorageService, getTodayDateString, getCurrentTimeString, scannedByRoleLabel } from '../services/attendanceStorage';
 import { CloudflareSyncService } from '../services/cloudflareSync';
-import { generateStudentQrPayload, generateSignedQRPayload } from '../utils/crypto';
+import { FirebaseService } from '../services/firebase';
+import { generateStudentQrPayload, generateSignedQRPayload, generateHmacSignature, deriveStudentLoginKey } from '../utils/crypto';
 import { generateStudentCardPdf, downloadPdfBlob } from '../utils/pdfGenerator';
 import { generateBarcodeDataUrl } from '../utils/barcode';
 import { SoundService } from '../utils/sound';
@@ -49,17 +50,22 @@ interface StudentPortalViewProps {
 }
 
 export const StudentPortalView: React.FC<StudentPortalViewProps> = ({ onLogout, activeStudentCode }) => {
-  const initialStudent = AttendanceStorageService.getStudents().find(s => s.code === (activeStudentCode || '1000000002')) || AttendanceStorageService.getStudents()[0];
-  // Ronda 60-e (F-25/H-30-2): el formulario del portal nace VACÍO — sin precarga de credenciales
-  // (consistent con LoginScreen.tsx:45). Antes: precargaba code+tempPassword del primer estudiante
-  // del catálogo y dejaba el literal 'SJ-1274' como fallback duro → llegaba al bundle público y
-  // cualquier visitante vea credenciales en pantalla antes de escribir una sola tecla.
+  // R64 (Fix B/C): SIN fallbacks de demostración. Antes: código hardcodeado
+  // '1000000002' y || getStudents()[0] — cualquiera que abriera el portal veía
+  // datos de un estudiante genérico sin autenticarse. Ahora el portal nace en
+  // su formulario de login y solo muestra la ficha del estudiante autenticado
+  // (sesión real o selección explícita de Rectoría vía activeStudentCode).
   const [studentCodeInput, setStudentCodeInput] = useState(activeStudentCode || '');
   const [passwordInput, setPasswordInput] = useState('');
-  const [activeStudent, setActiveStudent] = useState<Student | null>(activeStudentCode ? (AttendanceStorageService.getStudentByCodeOrDoc(activeStudentCode) || initialStudent) : null);
+  const [activeStudent, setActiveStudent] = useState<Student | null>(activeStudentCode ? (AttendanceStorageService.getStudentByCodeOrDoc(activeStudentCode) || null) : null);
   const [loginError, setLoginError] = useState<string | null>(null);
   const [isFirstLogin, setIsFirstLogin] = useState(false);
-  const [newPassword, setNewPassword] = useState('');
+  // R64 (Fix A): cambio de clave con verificación de la actual + confirmación.
+  const [pwCurrentInput, setPwCurrentInput] = useState('');
+  const [pwNewInput, setPwNewInput] = useState('');
+  const [pwConfirmInput, setPwConfirmInput] = useState('');
+  const [pwError, setPwError] = useState<string | null>(null);
+  const [pwBusy, setPwBusy] = useState(false);
   const [passwordUpdated, setPasswordUpdated] = useState(false);
   const [showPasswordModal, setShowPasswordModal] = useState(false);
   const [studentStats, setStudentStats] = useState<StudentAttendanceStats | null>(null);
@@ -105,7 +111,6 @@ export const StudentPortalView: React.FC<StudentPortalViewProps> = ({ onLogout, 
   const animFrameId = useRef<number | null>(null);
 
   const allStudents = AttendanceStorageService.getStudents();
-  const sampleStudents = allStudents.slice(0, 4);
 
   // Ronda 8 (B6): handler compartido para la foto — clic (picker) y drag & drop usan el mismo camino
   const handlePhotoFile = (file: File | undefined | null) => {
@@ -175,15 +180,9 @@ export const StudentPortalView: React.FC<StudentPortalViewProps> = ({ onLogout, 
     }
   };
 
-  // Ronda 58 (F-24): el autocompletado rápido SOLO prellena el CÓDIGO. Antes
-  // ESCRIBÍA la contraseña en pantalla con el patrón derivable 'SJ-' + últimos 4
-  // dígitos del código (F-18) — cualquiera que abriera el portal veía la clave de
-  // otro estudiante sin saber nada.
-  const fillQuickStudent = (std: Student) => {
-    setStudentCodeInput(std.code);
-    setPasswordInput('');
-    setLoginError(null);
-  };
+  // Ronda 58 (F-24): el autocompletado rápido fue RETIRADO (R64, Fix C): prellenaba
+  // códigos de los primeros 4 estudiantes del catálogo — superficie de enumeración
+  // en cualquier dispositivo. El login del portal exige teclear código + clave.
 
   // Ronda 58 (F-24): ELIMINADAS las tres puertas traseras del portal:
   //   1. la palabra fija 'colegio2026' abría el portal de CUALQUIER estudiante;
@@ -192,9 +191,19 @@ export const StudentPortalView: React.FC<StudentPortalViewProps> = ({ onLogout, 
   // Ahora la verificación pasa por el MISMO punto único que LoginScreen
   // (verifyStudentCredential): clave en claro local o verificador HMAC del snapshot,
   // con mensajes accionables y CERO fallbacks (Regla 6).
+  // R64 (Finding D): el login interno del portal ahora tiene el MISMO backoff que
+  // LoginScreen (5 fallos → 30 s, duplicando hasta 15 min) — era la única
+  // superficie de verificación de claves sin límite de intentos.
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoginError(null);
+
+    const throttle = AttendanceStorageService.getPortalLoginThrottle();
+    if (throttle.lockedUntil > Date.now()) {
+      const secs = Math.ceil((throttle.lockedUntil - Date.now()) / 1000);
+      setLoginError(`Demasiados intentos fallidos. Espera ${secs > 60 ? `${Math.ceil(secs / 60)} minuto(s)` : `${secs} segundo(s)`} e inténtalo de nuevo.`);
+      return;
+    }
 
     const student = AttendanceStorageService.getStudentByCodeOrDoc(studentCodeInput.trim());
     if (!student) {
@@ -204,35 +213,132 @@ export const StudentPortalView: React.FC<StudentPortalViewProps> = ({ onLogout, 
 
     const cred = await AttendanceStorageService.verifyStudentCredential(student, passwordInput);
     if (!cred.ok) {
-      setLoginError(cred.message || 'Contraseña incorrecta. Solicita una nueva clave en Rectoría.');
+      const t = AttendanceStorageService.recordPortalLoginFailure();
+      setLoginError(t.lockedUntil > Date.now()
+        ? 'Demasiados intentos fallidos. El acceso queda pausado unos momentos por seguridad.'
+        : (cred.message || 'Contraseña incorrecta. Solicita una nueva clave en Rectoría.'));
       return;
     }
 
+    AttendanceStorageService.clearPortalLoginThrottle();
     setActiveStudent(student);
     setIsFirstLogin(!student.hasCustomPassword);
     setPasswordUpdated(false);
   };
 
-  const handlePasswordChange = (e: React.FormEvent) => {
+  // R64 (Fix A — LA corrección central del bug de persistencia de contraseña):
+  // el cambio de clave del portal ANTES escribía SOLO localStorage
+  // (updateStudent({tempPassword})) — no tocaba Firebase Auth, no regeneraba el
+  // verifier y el siguiente pull BORRABA el cambio (el snapshot jamás transporta
+  // tempPassword). Resultado: la sesión actual funcionaba, pero al cerrar sesión
+  // o limpiar los datos del navegador el login fallaba y el estudiante quedaba
+  // encerrado fuera. AHORA el cambio es REAL y DURABLE en TRES capas:
+  //   1. Firebase Auth (la autoridad): re-autenticación con la clave actual y
+  //      updatePassword — sobrevive a limpiar los datos del navegador.
+  //   2. Verificador local (fallback offline): HMAC(loginKey, nueva) sobre la
+  //      propia ficha — coherente inmediatamente en este dispositivo.
+  //   3. La NUBE (/api/students/credential): el verifier nuevo queda en el
+  //      snapshot D1/KV — un dispositivo recién limpiado lo recibe con el pull
+  //      y el login con la clave nueva funciona desde el primer intento.
+  const handlePasswordChange = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (newPassword.length < 4) {
-      alert('La nueva contraseña debe tener al menos 4 caracteres.');
+    setPwError(null);
+    if (!activeStudent) return;
+
+    const current = pwCurrentInput;
+    const next = pwNewInput;
+    if (next.length < 6) {
+      setPwError('La nueva clave debe tener al menos 6 caracteres (requisito de la cuenta de acceso).');
       return;
     }
-    if (activeStudent) {
-      AttendanceStorageService.updateStudent(activeStudent.code, { 
-        tempPassword: newPassword,
-        hasCustomPassword: true 
-      });
-      setActiveStudent({
-        ...activeStudent,
-        tempPassword: newPassword,
-        hasCustomPassword: true
-      });
+    if (next !== pwConfirmInput) {
+      setPwError('La confirmación no coincide con la nueva clave.');
+      return;
+    }
+    if (next === current) {
+      setPwError('La nueva clave debe ser distinta de la actual.');
+      return;
+    }
+
+    // Paso 1 — validar la clave ACTUAL (prueba de propiedad antes de tocar nada).
+    const cred = await AttendanceStorageService.verifyStudentCredential(activeStudent, current);
+    if (!cred.ok) {
+      setPwError(cred.message || 'La clave actual no es correcta.');
+      return;
+    }
+
+    setPwBusy(true);
+    try {
+      const session = AttendanceStorageService.getCurrentSession();
+      const isOwnRealSession = session?.role === 'ESTUDIANTE_ACUDIENTE'
+        && session.studentCode === activeStudent.code
+        && !!session.uid;
+      const steps: string[] = [];
+
+      // Paso 2 — Firebase Auth (autoridad). Identidad propia → changeOwnPassword
+      // (re-autenticación incluida). Sin identidad pero con cuenta → provisioner
+      // (firma con la actual, aplica la nueva; idempotente).
+      if (isOwnRealSession) {
+        try {
+          await FirebaseService.changeOwnPassword(current, next);
+          steps.push('cuenta de acceso');
+        } catch (err: any) {
+          setPwError(err?.message || 'No se pudo actualizar la contraseña de tu cuenta. Inténtalo de nuevo.');
+          return;
+        }
+      } else if (activeStudent.hasFirebaseAccount) {
+        const sync = await FirebaseService.syncStudentAccountPassword(activeStudent.code, current, next);
+        if (sync.ok) {
+          steps.push('cuenta de acceso');
+        } else if (sync.reason === 'old_password_mismatch') {
+          setPwError('La clave actual de tu CUENTA no coincide (quizá ya la cambiaste antes). Usa la última clave con la que pudiste entrar; si no la recuerdas, pide ayuda en Rectoría.');
+          return;
+        } else {
+          setPwError(sync.message || 'No se pudo actualizar la contraseña de tu cuenta. Inténtalo de nuevo.');
+          return;
+        }
+      }
+
+      // Paso 3 — verificador local + NUBE (fallback sin conexión / dispositivos limpiados).
+      try {
+        const loginKey = activeStudent.loginKey
+          || await deriveStudentLoginKey(AttendanceStorageService.getSettings().qrSecret || '', activeStudent.code);
+        if (loginKey) {
+          const newVerifier = await generateHmacSignature(next, loginKey);
+          AttendanceStorageService.updateStudent(activeStudent.code, {
+            tempPassword: next,
+            hasCustomPassword: true,
+            loginKey,
+            tempPasswordVerifier: newVerifier
+          } as any);
+        } else {
+          AttendanceStorageService.updateStudent(activeStudent.code, {
+            tempPassword: next,
+            hasCustomPassword: true
+          });
+        }
+      } catch {
+        AttendanceStorageService.updateStudent(activeStudent.code, {
+          tempPassword: next,
+          hasCustomPassword: true
+        });
+      }
+
+      const cloud = await CloudflareSyncService.updateOwnCredentialInCloud(activeStudent.code, current, next);
+      if (cloud.ok) {
+        steps.push('verificación sin conexión');
+      }
+
+      const fresh = AttendanceStorageService.getStudentByCodeOrDoc(activeStudent.code) || { ...activeStudent, tempPassword: next, hasCustomPassword: true };
+      setActiveStudent(fresh);
       setPasswordUpdated(true);
       setIsFirstLogin(false);
       setShowPasswordModal(false);
-      setNewPassword('');
+      setPwCurrentInput(''); setPwNewInput(''); setPwConfirmInput('');
+      // Mensaje honesto de qué se actualizó y dónde (Regla 6).
+      alert(`Contraseña actualizada correctamente (${steps.join(' + ') || 'este dispositivo'}).${cloud.ok ? ' Ya funciona en cualquier dispositivo, incluso tras limpiar los datos del navegador.' : (cloud.message ? ` Nota: ${cloud.message}` : '')}`);
+    } finally {
+      setPwBusy(false);
     }
   };
 
@@ -483,30 +589,8 @@ export const StudentPortalView: React.FC<StudentPortalViewProps> = ({ onLogout, 
               />
             </div>
 
-            {/* Quick Demo Test Buttons */}
-            {sampleStudents.length > 0 && (
-              <div className="space-y-1.5 pt-1">
-                <div className="text-[10px] font-bold text-indigo-600 dark:text-indigo-400 uppercase tracking-wider">
-                  ⚡ Accesos Rápidos de Prueba:
-                </div>
-                <div className="grid grid-cols-2 gap-1.5">
-                  {sampleStudents.map((std) => (
-                    <button
-                      key={std.code}
-                      type="button"
-                      onClick={() => fillQuickStudent(std)}
-                      className={`px-2 py-1.5 rounded-lg border text-[10px] font-mono text-left truncate transition-all ${
-                        studentCodeInput === std.code
-                          ? 'bg-indigo-600 text-white border-indigo-600 font-bold shadow-xs'
-                          : 'bg-slate-100 dark:bg-slate-800/80 hover:bg-slate-200 text-slate-700 dark:text-slate-300 border-slate-200 dark:border-zinc-800'
-                      }`}
-                    >
-                      {std.firstName.split(' ')[0]} ({std.grade}) {std.isRepresentative && '★'}
-                    </button>
-                  ))}
-                </div>
-              </div>
-            )}
+            {/* R64 (Fix C): botones de acceso rápido de PRUEBA retirados — el login
+                del portal es código + clave, sin prellenado de terceros. */}
 
             <button
               type="submit"
@@ -1383,7 +1467,9 @@ export const StudentPortalView: React.FC<StudentPortalViewProps> = ({ onLogout, 
         )}
       </div>
 
-      {/* Modal para Cambiar Contraseña */}
+      {/* Modal para Cambiar Contraseña — R64 (Fix A): pide la clave ACTUAL (prueba
+          de propiedad), la nueva (≥6, requisito de la cuenta) y su confirmación.
+          Antes: un solo campo sin verificación previa y solo localStorage. */}
       {showPasswordModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-md animate-fadeIn">
           <div className="p-6 rounded-3xl bg-white dark:bg-zinc-950 border border-slate-200 dark:border-zinc-800/50 shadow-2xl max-w-md w-full space-y-4">
@@ -1404,7 +1490,7 @@ export const StudentPortalView: React.FC<StudentPortalViewProps> = ({ onLogout, 
               <button
                 onClick={() => {
                   setShowPasswordModal(false);
-                  setNewPassword('');
+                  setPwCurrentInput(''); setPwNewInput(''); setPwConfirmInput(''); setPwError(null);
                 }}
                 className="p-1.5 text-slate-400 hover:text-slate-700 dark:hover:text-white rounded-xl hover:bg-slate-100 dark:hover:bg-slate-800"
               >
@@ -1415,36 +1501,76 @@ export const StudentPortalView: React.FC<StudentPortalViewProps> = ({ onLogout, 
             <form onSubmit={handlePasswordChange} className="space-y-3.5 pt-1">
               <div className="space-y-1.5">
                 <label className="text-xs font-bold text-slate-700 dark:text-slate-300">
-                  Nueva Contraseña Personal
+                  Contraseña Actual
                 </label>
                 <input
                   type="password"
                   required
                   autoFocus
-                  value={newPassword}
-                  onChange={(e) => setNewPassword(e.target.value)}
-                  placeholder="Mínimo 4 caracteres..."
+                  value={pwCurrentInput}
+                  onChange={(e) => setPwCurrentInput(e.target.value)}
+                  placeholder="La que usaste para entrar…"
                   className="w-full px-3.5 py-2.5 bg-slate-50 dark:bg-black border border-slate-200 dark:border-zinc-800/50 rounded-xl text-xs font-mono text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
                 />
               </div>
 
+              <div className="space-y-1.5">
+                <label className="text-xs font-bold text-slate-700 dark:text-slate-300">
+                  Nueva Contraseña Personal
+                </label>
+                <input
+                  type="password"
+                  required
+                  value={pwNewInput}
+                  onChange={(e) => setPwNewInput(e.target.value)}
+                  placeholder="Mínimo 6 caracteres…"
+                  className="w-full px-3.5 py-2.5 bg-slate-50 dark:bg-black border border-slate-200 dark:border-zinc-800/50 rounded-xl text-xs font-mono text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                />
+              </div>
+
+              <div className="space-y-1.5">
+                <label className="text-xs font-bold text-slate-700 dark:text-slate-300">
+                  Confirmar Nueva Contraseña
+                </label>
+                <input
+                  type="password"
+                  required
+                  value={pwConfirmInput}
+                  onChange={(e) => setPwConfirmInput(e.target.value)}
+                  placeholder="Repite la nueva contraseña…"
+                  className="w-full px-3.5 py-2.5 bg-slate-50 dark:bg-black border border-slate-200 dark:border-zinc-800/50 rounded-xl text-xs font-mono text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                />
+              </div>
+
+              {pwError && (
+                <div className="p-2.5 rounded-xl bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-900/60 text-[11px] font-bold text-rose-700 dark:text-rose-300 leading-relaxed">
+                  {pwError}
+                </div>
+              )}
+
+              <p className="text-[10px] text-slate-500 dark:text-slate-400 leading-relaxed">
+                La nueva clave se aplica a tu cuenta de acceso y queda registrada en la nube del colegio: funcionará en cualquier dispositivo, incluso después de borrar los datos del navegador.
+              </p>
+
               <div className="flex items-center justify-end gap-2 pt-2">
                 <button
                   type="button"
+                  disabled={pwBusy}
                   onClick={() => {
                     setShowPasswordModal(false);
-                    setNewPassword('');
+                    setPwCurrentInput(''); setPwNewInput(''); setPwConfirmInput(''); setPwError(null);
                   }}
-                  className="px-4 py-2 bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 rounded-xl text-xs font-bold"
+                  className="px-4 py-2 bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 rounded-xl text-xs font-bold disabled:opacity-50"
                 >
                   Cancelar
                 </button>
                 <button
                   type="submit"
-                  className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-xs font-bold shadow-md shadow-indigo-600/25 flex items-center gap-1.5"
+                  disabled={pwBusy}
+                  className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-60 text-white rounded-xl text-xs font-bold shadow-md shadow-indigo-600/25 flex items-center gap-1.5"
                 >
                   <Check className="w-4 h-4" />
-                  <span>Guardar Contraseña</span>
+                  <span>{pwBusy ? 'Actualizando…' : 'Guardar Contraseña'}</span>
                 </button>
               </div>
             </form>

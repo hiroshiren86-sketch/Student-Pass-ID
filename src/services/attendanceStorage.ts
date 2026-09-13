@@ -67,7 +67,21 @@ const QRSECRET_MIRROR_KEY = 'inas_qrsecret_mirror_v1'; // Ronda 58 (F-10): espej
  * colegio está en America/Bogota y la suite corre con la misma zona simulada).
  */
 export function bogotaTodayTimeToEpochMs(timeStr: string, dateStr: string = getTodayDateString()): number {
-  return Date.parse(`${dateStr}T${timeStr}:00`);
+  // R64 (fix de zona horaria — bug latente desde la Ronda 19): los slots y ventanas
+  // guardan HORAS DE PARED de Bogotá (getCurrentDateString/getCurrentTimeString
+  // fijan timeZone:'America/Bogota'), pero Date.parse() de un datetime SIN zona
+  // usa la zona LOCAL DEL RUNTIME — correcta solo en un navegador dentro de
+  // Colombia. En cualquier otro runtime (Node/CI en UTC, un teléfono en el
+  // exterior) el día escolar quedaba desplazado ±horas: la clase activa moría
+  // "antes de empezar", o seguía viva después del fin del bloque. Colombia NO
+  // tiene horario de verano (COT = UTC-5 fijo) → la conversión es determinista.
+  const [y, m, d] = dateStr.split('-').map(Number);
+  const [hh, mm] = timeStr.split(':').map(Number);
+  if (!y || !m || !d || hh === undefined || mm === undefined) {
+    // forma inesperada: comportamiento previo (zona local del runtime)
+    return Date.parse(`${dateStr}T${timeStr}:00`);
+  }
+  return Date.UTC(y, m - 1, d, hh + 5, mm, 0, 0);
 }
 
 /**
@@ -633,12 +647,76 @@ export class AttendanceStorageService {
     return { ok: false, reason: 'mismatch', message: 'Credenciales incorrectas. Verifica el código y la clave, o solicita una nueva clave en Rectoría.' };
   }
 
+  // ==================== R64 (Finding D) — THROTTLE DEL LOGIN INTERNO DEL PORTAL ====================
+  // El login del portal (StudentPortalView.handleLogin) era la ÚNICA superficie de
+  // verificación de claves sin backoff (F-18c solo cubría LoginScreen): 5 fallos →
+  // 30 s, duplicando hasta 15 min (mismo mecanismo inas_login_throttle_v1).
+  static getPortalLoginThrottle(): { fails: number; lockedUntil: number } {
+    try {
+      const raw = localStorage.getItem('inas_portal_login_throttle_v1');
+      const parsed = raw ? JSON.parse(raw) : null;
+      if (parsed && typeof parsed.fails === 'number') {
+        return { fails: parsed.fails, lockedUntil: Number(parsed.lockedUntil) || 0 };
+      }
+    } catch { /* lectura corrupta: contador a cero */ }
+    return { fails: 0, lockedUntil: 0 };
+  }
+
+  static recordPortalLoginFailure(): { fails: number; lockedUntil: number } {
+    const cur = this.getPortalLoginThrottle();
+    const fails = cur.fails + 1;
+    const lockedUntil = fails >= 5 ? Math.min(Date.now() + 30_000 * Math.pow(2, fails - 5), Date.now() + 15 * 60_000) : 0;
+    try { localStorage.setItem('inas_portal_login_throttle_v1', JSON.stringify({ fails, lockedUntil })); } catch { /* cuota */ }
+    return { fails, lockedUntil };
+  }
+
+  static clearPortalLoginThrottle(): void {
+    try { localStorage.removeItem('inas_portal_login_throttle_v1'); } catch { /* noop */ }
+  }
+
   static updateStudent(code: string, updates: Partial<Student>): boolean {
     const students = this.getStudents();
     const idx = students.findIndex(s => s.code === code);
     if (idx === -1) return false;
     students[idx] = { ...students[idx], ...updates };
-    this.saveStudents(students);
+    // R64 (Fix A — dos reglas):
+    //
+    // 1) VERIFIER AL MOMENTO DE EDITAR: si esta sesión es Rectoría (ADMIN) y se
+    //    asigna un PIN deliberadamente (StudentsManagerView), el verifier y la
+    //    loginKey se recomputean YA (Rectoría tiene el qrSecret). Así el PIN
+    //    editado y su verifier viajan SIEMPRE coherentes, y la regla de
+    //    "credencial fresca" del sanitize (cloudflareSync) puede distinguir un
+    //    edit legítimo (verifier == HMAC(pin)) de un PIN local obsoleto (el
+    //    estudiante cambió su clave desde el portal: verifier ≠ HMAC(pin)).
+    //
+    // 2) ORIGEN POR SESIÓN: las ediciones de ficha desde una sesión NO-ADMIN
+    //    (portal del estudiante: foto, clave) son personalización de
+    //    dispositivo — NO sellan dirty (un push de operador no puede publicarlas
+    //    y el sello bloqueaba los pulls de ajustes para siempre). En sesión
+    //    ADMIN mantiene 'local' (la edición publica con el próximo push).
+    const session = this.getCurrentSession();
+    const isAdminSession = session?.role === 'ADMIN';
+    const newPin = (updates as any).tempPassword;
+    if (isAdminSession && typeof newPin === 'string' && newPin.trim() !== '') {
+      try {
+        const secret = this.getSettings().qrSecret;
+        if (secret) {
+          // Recomputación asíncrona best-effort: si falla, el sanitize del push
+          // la reintentará (la ficha sube coherente de cualquier forma).
+          deriveStudentLoginKey(secret, code).then(async (loginKey) => {
+            const verifier = await generateHmacSignature(newPin, loginKey);
+            const fresh = this.getStudents();
+            const i = fresh.findIndex(s => s.code === code);
+            if (i >= 0 && (fresh[i] as any).tempPassword === newPin) {
+              (fresh[i] as any).loginKey = loginKey;
+              (fresh[i] as any).tempPasswordVerifier = verifier;
+              this.saveStudents(fresh, isAdminSession ? 'local' : 'cloud');
+            }
+          }).catch(() => { /* sin secret/red: el sanitize del push computa */ });
+        }
+      } catch { /* best-effort */ }
+    }
+    this.saveStudents(students, isAdminSession ? 'local' : 'cloud');
     return true;
   }
 

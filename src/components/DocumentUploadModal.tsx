@@ -109,7 +109,12 @@ export const DocumentUploadModal: React.FC<DocumentUploadModalProps> = ({
               continue; // Procesado exitosamente por IA de Visión
             }
           } catch (aiErr) {
+            // R64 (mejora defensiva IA — auditoría 1d P1): el fallo de la visión IA
+            // ya NO es 100% silencioso (antes: solo console.warn y el usuario creía
+            // que la IA había procesado la foto). Se informa en la banda de errores
+            // de parseo y el parser local toma el relevo de forma VISIBLE.
             console.warn('Fallback a parser local tras error en visión IA:', aiErr);
+            fileErrors.push(`${file.name}: la extracción con IA de visión no pudo completarse (${aiErr instanceof Error ? aiErr.message : 'error del proveedor'}) — se intentó con el lector local.`);
           }
         }
 

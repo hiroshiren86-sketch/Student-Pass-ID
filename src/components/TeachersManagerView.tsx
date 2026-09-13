@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { ConfirmDialog } from './ConfirmDialog';
+import { CloudflareSyncService } from '../services/cloudflareSync';
 import { 
   Users, 
   UserPlus, 
@@ -47,7 +48,7 @@ export const TeachersManagerView: React.FC = () => {
   const uniqueGrades = AttendanceStorageService.getUniqueGrades();
 
   // Ronda 18 (H4): estado de confirmación para acciones destructivas
-  const [deleteConfirm, setDeleteConfirm] = useState<{ title: string; message: string; action: () => void } | null>(null);
+  const [deleteConfirm, setDeleteConfirm] = useState<{ title: string; message: string; requireText?: string; action: () => void } | null>(null);
   const [searchTerm, setSearchTerm] = useState('');
   const [toastMsg, setToastMsg] = useState<string | null>(null);
 
@@ -149,6 +150,8 @@ export const TeachersManagerView: React.FC = () => {
     const isGroupDirector = Boolean(formData.directorGrade && formData.directorGrade.trim() !== '');
 
     if (editingTeacher) {
+      const oldTemp = (editingTeacher.tempPassword || '').trim();
+      const newTemp = (formData.tempPassword || '').trim();
       AttendanceStorageService.updateTeacher(editingTeacher.id, {
         documentId: formData.documentId,
         fullName: formData.fullName,
@@ -162,6 +165,22 @@ export const TeachersManagerView: React.FC = () => {
         tempPassword: formData.tempPassword
       });
       showToast(`¡Docente ${formData.fullName} actualizado con éxito!`);
+      // R64 (Fix A — gap docente): si el docente TIENE cuenta real y Rectoría cambió
+      // su clave temporal, la CONTRASEÑA de la cuenta se sincroniza en el mismo
+      // guardado (espejo del fix PIN↔cuenta de estudiantes, R61). Antes la ficha
+      // local cambiaba y la cuenta quedaba con la clave previa → el docente no
+      // podía entrar con la clave que Rectoría le comunicó.
+      if (editingTeacher.hasFirebaseAccount && newTemp && newTemp !== oldTemp) {
+        const target = (editingTeacher.authEmail || formData.email || `${generatedUsername}@inas.edu.co`).trim().toLowerCase();
+        const sync = await FirebaseService.syncTeacherAccountPassword(target, oldTemp, newTemp);
+        if (sync.ok) {
+          showToast(`Cuenta de acceso actualizada: la nueva clave temporal de ${formData.fullName} ya funciona para entrar.`);
+        } else if (sync.reason === 'old_password_mismatch') {
+          showToast(`⚠ La ficha quedó con la nueva clave, pero la CUENTA de ${formData.fullName} no coincide con la temporal anterior (divergencia histórica o el docente ya la cambió). Para realinearla use "Reset por Correo" o comuníquele la clave vigente.`);
+        } else {
+          showToast(`⚠ La ficha quedó con la nueva clave, pero no se pudo sincronizar la cuenta (${sync.message || 'error de red'}). Reintente re-guardando más tarde.`);
+        }
+      }
     } else {
       const initialTemp = formData.tempPassword || `Docente${Math.floor(1000 + Math.random() * 9000)}*`;
       const newTeacher: Teacher = {
@@ -236,16 +255,56 @@ export const TeachersManagerView: React.FC = () => {
   };
 
   const handleDelete = (t: Teacher) => {
-    // Ronda 18 (H4): ConfirmDialog propio del sistema en lugar de window.confirm nativo
+    // R64 (Fix §5 — ELIMINACIÓN EN CASCADA, paso 1 de 2): purga cátedras, ficha del
+    // catálogo (D1 + snapshot + KV + versión) y, si se conoce la clave, la cuenta
+    // Firebase. El paso 2 exige escribir ELIMINAR (fricción deliberada).
     setDeleteConfirm({
-      title: 'Eliminar docente',
-      message: `¿Seguro que deseas eliminar al docente ${t.fullName}? Esta acción revocará sus accesos.`,
+      title: 'Eliminar docente (paso 1 de 2)',
+      message: `¿Eliminar al docente ${t.fullName}? Se abrirá una segunda confirmación: la eliminación es EN CASCADA (cátedras de horario, ficha del catálogo en la nube y cuenta de acceso).`,
       action: () => {
-        AttendanceStorageService.deleteTeacher(t.id);
-        setTeachers(AttendanceStorageService.getTeachers());
-        showToast(`Docente ${t.fullName} eliminado.`);
+        setDeleteConfirm({
+          title: 'CONFIRMAR eliminación en cascada',
+          message: `Escriba ELIMINAR para borrar a ${t.fullName} y toda su huella: cátedras de horario, ficha del catálogo (D1 + snapshot + KV) y su cuenta de acceso Firebase (si la clave vigente es conocida). Esta acción no se puede deshacer.`,
+          requireText: 'ELIMINAR',
+          action: () => { void executeCascadeDelete(t); }
+        });
       }
     });
+  };
+
+  // R64 (Fix §5): ejecución de la cascada docente — nube (endpoint ADMIN), cuenta
+  // Firebase (provisioner con la clave vigente si se conoce), local al final.
+  const executeCascadeDelete = async (t: Teacher) => {
+    showToast(`Eliminando en cascada: ${t.fullName}…`);
+
+    const cloud = await CloudflareSyncService.cascadeDeleteEntity('teacher', t.id);
+    if (!cloud.ok) {
+      showToast(`⚠ La eliminación en la nube FALLÓ y NO se completó: ${cloud.message || 'error'}. Nada se borró localmente; reintenta cuando la nube responda.`);
+      return;
+    }
+
+    let accountNote = '';
+    if (t.hasFirebaseAccount) {
+      const knownTemp = (t.tempPassword || '').trim();
+      const target = (t.authEmail || t.email || '').trim().toLowerCase();
+      if (knownTemp && target) {
+        const del = await FirebaseService.deleteProvisionedAccount(target, knownTemp);
+        accountNote = del.ok
+          ? ' Cuenta de acceso Firebase eliminada.'
+          : ` ⚠ La cuenta de acceso NO se pudo eliminar (${del.message}). Reinicie su clave temporal y vuelva a eliminar para cerrarla.`;
+      } else {
+        accountNote = ' ⚠ Sin clave vigente registrada: la cuenta de acceso Firebase quedó VIVA (el docente aún podría entrar). Asigne una clave temporal conocida, guarde y vuelva a eliminar.';
+      }
+    }
+
+    AttendanceStorageService.deleteTeacher(t.id);
+    setTeachers(AttendanceStorageService.getTeachers());
+
+    try {
+      await CloudflareSyncService.pullFromCloudflare();
+    } catch { /* el auto-sync convergerá */ }
+
+    showToast(`Docente ${t.fullName} eliminado en cascada.${cloud.message ? ` (${cloud.message})` : ''}${accountNote}`);
   };
 
   const handleResetPassword = (t: Teacher) => {
@@ -950,6 +1009,7 @@ export const TeachersManagerView: React.FC = () => {
         open={!!deleteConfirm}
         title={deleteConfirm?.title || ''}
         message={deleteConfirm?.message || ''}
+        requireText={deleteConfirm?.requireText}
         onConfirm={() => { const a = deleteConfirm?.action; setDeleteConfirm(null); a?.(); }}
         onCancel={() => setDeleteConfirm(null)}
       />

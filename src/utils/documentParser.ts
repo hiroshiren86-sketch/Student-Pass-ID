@@ -226,7 +226,12 @@ export function parseDataFromFileName(fileName: string, photoUrl?: string): Extr
 
   // Buscar número de documento (cadena de 6 a 12 dígitos)
   const docMatch = cleanName.match(/\b\d{6,12}\b/);
-  const documentId = docMatch ? docMatch[0] : `10${Math.floor(10000000 + Math.random() * 90000000)}`;
+  // R64 (auditoría 1d P1): FIN de la fabricación de documentos. Antes: un nombre
+  // de archivo sin número generaba un documento ALEATORIO '10XXXXXXXX' (10 dígitos
+  // que pasaban la validación 6-12) — podía entrar a la matrícula como real. Ahora
+  // queda VACÍO con estado warning + mensaje visible (Rectoría lo completa a mano,
+  // mismo criterio que DUM-2 para la ruta IA).
+  const documentId = docMatch ? docMatch[0] : '';
 
   // Buscar grado (ej: 6-5, 10 4, 11°2, 604, 7-1)
   let grade = '6°1';
@@ -279,7 +284,8 @@ export function parseDataFromFileName(fileName: string, photoUrl?: string): Extr
     grade,
     photoUrl,
     confidence: docMatch && nameParts.length >= 2 ? 0.9 : 0.6,
-    status: docMatch ? 'valid' : 'warning'
+    status: docMatch ? 'valid' : 'warning',
+    errorMessage: docMatch ? undefined : 'Documento no encontrado en el nombre del archivo — complétalo antes de guardar'
   };
 }
 
@@ -346,13 +352,18 @@ export function parseTextOrCsvContent(content: string, fileName: string): Extrac
             }
           }
         } else {
-          // Asignación secuencial
-          doc = normalizeDocumentOrCode(parts[0]) || `1000${i}`;
+          // R64 (auditoría 1d P1): FIN de la asignación secuencial fabricada. Antes:
+          // una fila CSV sin documento recibía '1000<i>' SECUENCIAL con status 'valid'
+          // — decenas de documentos inventados podían entrar a la matrícula marcados
+          // como válidos. Ahora la fila entra en WARNING con documento VACÍO para que
+          // Rectoría lo complete (o la descarte) conscientemente.
+          doc = '';
           fName = parts[1] || 'ESTUDIANTE';
           lName = parts[2] || '';
           gr = normalizeGradeName(parts[3] || '6°1');
         }
 
+        const hasDoc = /^\d{6,12}$/.test(doc);
         results.push({
           id: `draft_${Date.now()}_${i}`,
           fileName,
@@ -361,8 +372,9 @@ export function parseTextOrCsvContent(content: string, fileName: string): Extrac
           firstName: fName || 'ESTUDIANTE',
           lastName: lName || '',
           grade: gr,
-          confidence: 0.95,
-          status: 'valid'
+          confidence: hasDoc ? 0.95 : 0.5,
+          status: hasDoc ? 'valid' : 'warning',
+          errorMessage: hasDoc ? undefined : 'Documento ausente en esta fila del CSV — complétalo antes de guardar'
         });
       }
     } else {

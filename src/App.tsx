@@ -16,6 +16,8 @@ import {
   ChevronDown,
   Layers,
   ArrowRight,
+  ArrowLeft,
+  Search,
   Wifi,
   ExternalLink,
   BookOpen,
@@ -67,6 +69,11 @@ export default function App() {
   // contraseña temporal). En modo forzado el modal no se puede cerrar sin completar.
   const [forcedPasswordChange, setForcedPasswordChange] = useState(false);
   const [showRoleModal, setShowRoleModal] = useState(false);
+  // R64 (Fix B): selector explícito de identidad — el Escudito ya NO impersona al
+  // primer estudiante/docente del catálogo ([0]). Al elegir Docente o Estudiante se
+  // abre un BUSCADOR de la persona concreta; sin selección no hay cambio de rol.
+  const [rolePicker, setRolePicker] = useState<'DOCENTE' | 'ESTUDIANTE_ACUDIENTE' | null>(null);
+  const [pickerSearch, setPickerSearch] = useState('');
   // Ronda 29: asistente de primer ingreso (guía por perfil, una sola vez por dispositivo)
   const [showWelcomeTour, setShowWelcomeTour] = useState(false);
   const [isTourManualReopen, setIsTourManualReopen] = useState(false);
@@ -246,31 +253,54 @@ export default function App() {
     setIsAuthenticated(false);
   };
 
-  // Set default active tab when role changes from in-app switcher (Admin only)
-  const switchRole = (role: UserRole) => {
-    setCurrentRole(role);
-    setShowRoleModal(false);
-    setIsUserMenuOpen(false);
-    // Ronda 30 (H-30-1): la píldora es una VISTA PREVIA dentro de la sesión de
-    // Rectoría — ya NO sobrescribe la sesión persistida (antes persistSession()
-    // reescribía el rol y, al recargar, el dispositivo entraba como Docente o
-    // Estudiante sin haberse autenticado como tal). Solo se actualiza la bandera
-    // de enrutamiento push; la sesión real (authAt) queda intacta hasta logout
-    // o nuevo login.
-    try { localStorage.setItem('inas_push_role_v1', role === 'ADMIN' ? 'RECTORIA' : 'PORTAL'); } catch {}
+  // Set default active tab when role changes from in-app switcher (Rectoría only)
+  // R64 (Fix B): switchRole exige un OBJETIVO EXPLÍCITO para Docente/Estudiante —
+  // fin de la impersonación ciega al primer elemento del catálogo (getStudents()[0],
+  // "el estudiante genérico" siempre igual). Rectoría sigue siendo un VISTA PREVIA
+  // dentro de su sesión (R30): la sesión persistida no se toca, solo el rol activo.
+  const switchRole = (role: UserRole, target?: { teacher?: Teacher; student?: Student }) => {
     if (role === 'DOCENTE') {
+      const t = target?.teacher;
+      if (!t) return; // sin docente seleccionado NO hay cambio (el picker exige elegir)
+      setCurrentRole(role);
+      setShowRoleModal(false);
+      setRolePicker(null);
+      setIsUserMenuOpen(false);
+      try { localStorage.setItem('inas_push_role_v1', 'PORTAL'); } catch {}
       setActiveTab('teacher');
-      const firstTeacher = AttendanceStorageService.getTeachers()[0];
-      setLoggedUser({ teacher: firstTeacher, username: firstTeacher?.fullName || 'Prof. Juan Pablo Pérez' });
-    } else if (role === 'ESTUDIANTE_ACUDIENTE') {
-      setActiveTab('portal');
-      const firstStudent = AttendanceStorageService.getStudents()[0];
-      setLoggedUser({ student: firstStudent, username: `${firstStudent?.firstName} ${firstStudent?.lastName}` });
-    } else if (role === 'ADMIN') {
-      setActiveTab('students');
-      setLoggedUser({ username: 'Rectoría / Administrador General' });
+      setLoggedUser({ teacher: t, username: t.fullName });
+      return;
     }
+    if (role === 'ESTUDIANTE_ACUDIENTE') {
+      const s = target?.student;
+      if (!s) return; // sin estudiante seleccionado NO hay cambio
+      setCurrentRole(role);
+      setShowRoleModal(false);
+      setRolePicker(null);
+      setIsUserMenuOpen(false);
+      try { localStorage.setItem('inas_push_role_v1', 'PORTAL'); } catch {}
+      setActiveTab('portal');
+      setLoggedUser({ student: s, username: `${s.firstName} ${s.lastName}` });
+      return;
+    }
+    // ADMIN: retorno a Rectoría (fin de la vista previa — la sesión real nunca cambió)
+    setCurrentRole('ADMIN');
+    setShowRoleModal(false);
+    setRolePicker(null);
+    setIsUserMenuOpen(false);
+    try { localStorage.setItem('inas_push_role_v1', 'RECTORIA'); } catch {}
+    setActiveTab('students');
+    setLoggedUser({ username: 'Rectoría / Administrador General' });
   };
+
+  // R64 (Fix B): ¿hay una sesión REAL de Rectoría debajo del rol activo? (Vista previa)
+  // La píldora es clickeable en ese caso desde CUALQUIER rol — el "bloqueo" del que
+  // informaba el propietario (cambiar a estudiante y no poder volver) era porque la
+  // píldora solo respondía con currentRole==='ADMIN'. Para un docente/estudiante con
+  // sesión PROPIA (sin Rectoría debajo) la píldora sigue fija: su identidad es la
+  // autenticada y no debe poder saltar a la de otro.
+  const hasUnderlyingAdminSession = AttendanceStorageService.getCurrentSession()?.role === 'ADMIN';
+  const canOpenRoleSwitcher = currentRole === 'ADMIN' || hasUnderlyingAdminSession;
 
   // Close dropdowns on outside click
   useEffect(() => {
@@ -299,9 +329,9 @@ export default function App() {
     { id: 'schedules' as ActiveTab, label: 'Horarios Escolares', short: 'Horarios', icon: Calendar, badge: 'Plantillas', primary: true, roles: ['ADMIN'] },
     { id: 'teachers' as ActiveTab, label: 'Gestión Docentes', short: 'Docentes', icon: Key, badge: 'Credenciales', primary: false, roles: ['ADMIN'] },
     { id: 'cards' as ActiveTab, label: 'Generador de Carnés PDF', short: 'Carnés', icon: CreditCard, badge: 'CR80 PVC', primary: false, roles: ['ADMIN'] },
-    { id: 'teacher' as ActiveTab, label: 'Portal Docente (Aula)', short: 'Aula', icon: BookOpen, badge: 'Clases', primary: true, roles: ['ADMIN', 'DOCENTE'] },
+    { id: 'teacher' as ActiveTab, label: 'Portal Docente (Aula)', short: 'Aula', icon: BookOpen, badge: 'Clases', primary: true, roles: ['DOCENTE'] },
     { id: 'ai-grades' as ActiveTab, label: 'Analítica e IA por Grado', short: 'IA', icon: BrainCircuit, badge: 'IA Global', primary: false, roles: ['ADMIN', 'DOCENTE'] },
-    { id: 'portal' as ActiveTab, label: 'Portal Estudiante / Acudiente', short: 'Portal', icon: UserCheck, badge: 'Consulta', primary: false, roles: ['ADMIN', 'ESTUDIANTE_ACUDIENTE'] },
+    { id: 'portal' as ActiveTab, label: 'Portal Estudiante / Acudiente', short: 'Portal', icon: UserCheck, badge: 'Consulta', primary: false, roles: ['ESTUDIANTE_ACUDIENTE'] },
   ];
 
   const visibleNavItems = navItems.filter(item => item.roles.includes(currentRole));
@@ -349,10 +379,14 @@ export default function App() {
 
           {/* Clean Segmented Navigation & Role Switcher */}
           <div className="flex items-center gap-2">
-            {/* Active Role Selector Badge (Admin can switch; other roles locked to authenticated account) */}
-            {currentRole === 'ADMIN' ? (
+            {/* Active Role Selector Badge ("Escudito") — R64 (Fix B): clickeable
+                desde CUALQUIER rol MIENTRAS haya una sesión real de Rectoría debajo
+                (vista previa): se puede volver a Rectoría o cambiar de identidad sin
+                recargar. Los roles con sesión propia (docente/estudiante autenticados)
+                quedan fijos a su identidad. */}
+            {canOpenRoleSwitcher ? (
               <button
-                onClick={() => setShowRoleModal(true)}
+                onClick={() => { setShowRoleModal(true); setRolePicker(null); setPickerSearch(''); }}
                 className={`px-3 py-1.5 rounded-2xl border text-xs font-bold transition-all flex items-center gap-1.5 ${roleConfig[currentRole].color} shadow-xs hover:opacity-90`}
                 title="Cambiar Perfil de Usuario (Rectoría / Docente / Estudiante)"
               >
@@ -363,7 +397,7 @@ export default function App() {
             ) : (
               <div
                 className={`px-3 py-1.5 rounded-2xl border text-xs font-bold flex items-center gap-1.5 ${roleConfig[currentRole].color} shadow-xs cursor-default`}
-                title={`Rol activo: ${roleConfig[currentRole].label}`}
+                title={`Rol activo: ${roleConfig[currentRole].label} (sesión autenticada)`}
               >
                 {React.createElement(roleConfig[currentRole].icon, { className: 'w-3.5 h-3.5' })}
                 <span className="hidden sm:inline">{roleConfig[currentRole].label}</span>
@@ -621,7 +655,7 @@ export default function App() {
         {activeTab === 'attendance' && <AttendanceReportsView currentRole={currentRole} reviewedBy={loggedUser.username} />}
         {activeTab === 'excuses' && <ExcusesInboxView reviewedBy={loggedUser.username} />}
         {activeTab === 'ai-grades' && <GradeAiSummaryView />}
-        {activeTab === 'portal' && <StudentPortalView activeStudentCode={loggedUser.student?.code} onLogout={handleLogout} />}
+        {activeTab === 'portal' && <StudentPortalView activeStudentCode={loggedUser.student?.code} onLogout={() => { if (currentRole !== 'ADMIN' && hasUnderlyingAdminSession) { switchRole('ADMIN'); } else { handleLogout(); } }} />}
       </main>
 
       {/* Ronda 29: Asistente de primer ingreso (una vez por perfil/dispositivo) */}
@@ -637,93 +671,239 @@ export default function App() {
         />
       )}
 
-      {/* Role Selection Modal (Accessible by Admin) */}
+      {/* Role Selection Modal (Escudito) — R64 (Fix B/C): consolidación de la
+          navegación. El Escudito es EL ÚNICO punto de cambio de identidad: elegir
+          Docente o Estudiante abre un BUSCADOR de la persona concreta (antes
+          impersonaba SIEMPRE al primer elemento del catálogo — "el estudiante
+          genérico" del bug del propietario), y desde cualquier vista previa se
+          puede VOLVER a Rectoría sin recargar ni cerrar sesión. Los accesos
+          directos duplicados ("Portal Estudiante"/"Portal Docente (Aula)" en la
+          navegación de Rectoría) fueron retirados (Fix C): solo el Escudito. */}
       {showRoleModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-md animate-fadeIn">
-          <div className="p-6 sm:p-8 rounded-3xl bg-white dark:bg-zinc-950 border border-slate-200 dark:border-zinc-800/50 shadow-2xl max-w-lg w-full space-y-6">
+          <div className="p-6 sm:p-8 rounded-3xl bg-white dark:bg-zinc-950 border border-slate-200 dark:border-zinc-800/50 shadow-2xl max-w-lg w-full space-y-5 max-h-[90vh] overflow-y-auto">
             <div className="text-center space-y-1.5">
               <div className="w-12 h-12 rounded-2xl bg-indigo-50 dark:bg-indigo-950 text-indigo-600 dark:text-indigo-400 mx-auto flex items-center justify-center font-black">
                 <School className="w-6 h-6" />
               </div>
               <h3 className="text-xl font-black text-slate-900 dark:text-white tracking-tight">
-                Cambio Rápido de Perfil de Acceso
+                {rolePicker === 'DOCENTE' ? 'Elegir Docente' : rolePicker === 'ESTUDIANTE_ACUDIENTE' ? 'Elegir Estudiante / Acudiente' : 'Cambio Rápido de Perfil de Acceso'}
               </h3>
               <p className="text-xs text-slate-500 dark:text-slate-400">
-                Cambie instantáneamente entre los 3 perfiles de acceso institucional.
+                {rolePicker
+                  ? 'Busque por nombre, código o documento y seleccione la persona cuya vista desea abrir.'
+                  : 'Cambie entre los perfiles de acceso institucional. Docente y Estudiante exigen elegir la persona concreta.'}
               </p>
             </div>
 
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              {/* 1. Admin / Rectoría */}
-              <button
-                onClick={() => switchRole('ADMIN')}
-                className={`p-4 rounded-2xl border text-left transition-all space-y-2 ${
-                  currentRole === 'ADMIN'
-                    ? 'border-purple-500 bg-purple-50/50 dark:bg-purple-950/40 shadow-md ring-2 ring-purple-500/20'
-                    : 'border-slate-200 dark:border-zinc-800/50 hover:border-slate-300 dark:hover:border-slate-700 bg-white dark:bg-black'
-                }`}
-              >
-                <div className="w-8 h-8 rounded-xl bg-purple-100 dark:bg-purple-900/60 text-purple-600 dark:text-purple-300 flex items-center justify-center">
-                  <Shield className="w-4 h-4" />
-                </div>
-                <div>
-                  <h4 className="text-xs font-black text-slate-900 dark:text-white">
-                    1. Rectoría / Admin
-                  </h4>
-                  <p className="text-[10px] text-slate-500 dark:text-slate-400 mt-0.5 leading-relaxed">
-                    Control total, directorio, horarios, gestión docente, carnés CR80, reportes e IA.
-                  </p>
-                </div>
-              </button>
+            {!rolePicker && (
+              <>
+                {currentRole !== 'ADMIN' && hasUnderlyingAdminSession && (
+                  <button
+                    onClick={() => switchRole('ADMIN')}
+                    className="w-full p-3.5 rounded-2xl border-2 border-purple-500 bg-purple-50/60 dark:bg-purple-950/40 text-left transition-all flex items-center justify-between shadow-md"
+                  >
+                    <div className="flex items-center gap-3">
+                      <div className="w-9 h-9 rounded-xl bg-purple-100 dark:bg-purple-900/60 text-purple-600 dark:text-purple-300 flex items-center justify-center">
+                        <ArrowLeft className="w-4 h-4" />
+                      </div>
+                      <div>
+                        <h4 className="text-xs font-black text-slate-900 dark:text-white">Volver a Rectoría / Admin</h4>
+                        <p className="text-[10px] text-slate-500 dark:text-slate-400 mt-0.5">Regresar a la administración completa (fin de la vista previa).</p>
+                      </div>
+                    </div>
+                    <span className="text-[9px] font-black px-2 py-1 rounded-full bg-purple-600 text-white">ACTIVO AL SALIR</span>
+                  </button>
+                )}
 
-              {/* 2. Docente / Aula */}
-              <button
-                onClick={() => switchRole('DOCENTE')}
-                className={`p-4 rounded-2xl border text-left transition-all space-y-2 ${
-                  currentRole === 'DOCENTE'
-                    ? 'border-emerald-500 bg-emerald-50/50 dark:bg-emerald-950/40 shadow-md ring-2 ring-emerald-500/20'
-                    : 'border-slate-200 dark:border-zinc-800/50 hover:border-slate-300 dark:hover:border-slate-700 bg-white dark:bg-black'
-                }`}
-              >
-                <div className="w-8 h-8 rounded-xl bg-emerald-100 dark:bg-emerald-900/60 text-emerald-600 dark:text-emerald-300 flex items-center justify-center">
-                  <BookOpen className="w-4 h-4" />
-                </div>
-                <div>
-                  <h4 className="text-xs font-black text-slate-900 dark:text-white">
-                    2. Docente (Aula y Horarios)
-                  </h4>
-                  <p className="text-[10px] text-slate-500 dark:text-slate-400 mt-0.5 leading-relaxed">
-                    Llamado a lista por bloques, escáner en vivo, subrol de Director de Grupo y Representantes.
-                  </p>
-                </div>
-              </button>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  {/* 1. Admin / Rectoría */}
+                  {currentRole === 'ADMIN' ? (
+                    <div className="p-4 rounded-2xl border-2 border-purple-500 bg-purple-50/50 dark:bg-purple-950/40 shadow-md ring-2 ring-purple-500/20 space-y-2">
+                      <div className="w-8 h-8 rounded-xl bg-purple-100 dark:bg-purple-900/60 text-purple-600 dark:text-purple-300 flex items-center justify-center">
+                        <Shield className="w-4 h-4" />
+                      </div>
+                      <div>
+                        <h4 className="text-xs font-black text-slate-900 dark:text-white">1. Rectoría / Admin</h4>
+                        <p className="text-[10px] text-slate-500 dark:text-slate-400 mt-0.5 leading-relaxed">Perfil activo: control total, directorio, horarios, carnés, reportes e IA.</p>
+                      </div>
+                    </div>
+                  ) : (
+                    <button
+                      onClick={() => switchRole('ADMIN')}
+                      className="p-4 rounded-2xl border text-left transition-all space-y-2 border-slate-200 dark:border-zinc-800/50 hover:border-slate-300 dark:hover:border-slate-700 bg-white dark:bg-black"
+                    >
+                      <div className="w-8 h-8 rounded-xl bg-purple-100 dark:bg-purple-900/60 text-purple-600 dark:text-purple-300 flex items-center justify-center">
+                        <Shield className="w-4 h-4" />
+                      </div>
+                      <div>
+                        <h4 className="text-xs font-black text-slate-900 dark:text-white">1. Rectoría / Admin</h4>
+                        <p className="text-[10px] text-slate-500 dark:text-slate-400 mt-0.5 leading-relaxed">Control total, directorio, horarios, gestión docente, carnés CR80, reportes e IA.</p>
+                      </div>
+                    </button>
+                  )}
 
-              {/* 3. Estudiante / Acudiente */}
-              <button
-                onClick={() => switchRole('ESTUDIANTE_ACUDIENTE')}
-                className={`p-4 rounded-2xl border text-left transition-all space-y-2 ${
-                  currentRole === 'ESTUDIANTE_ACUDIENTE'
-                    ? 'border-sky-500 bg-sky-50/50 dark:bg-sky-950/40 shadow-md ring-2 ring-sky-500/20'
-                    : 'border-slate-200 dark:border-zinc-800/50 hover:border-slate-300 dark:hover:border-slate-700 bg-white dark:bg-black'
-                }`}
-              >
-                <div className="w-8 h-8 rounded-xl bg-sky-100 dark:bg-sky-900/60 text-sky-600 dark:text-sky-300 flex items-center justify-center">
-                  <GraduationCap className="w-4 h-4" />
+                  {/* 2. Docente / Aula */}
+                  <button
+                    onClick={() => { setRolePicker('DOCENTE'); setPickerSearch(''); }}
+                    className={`p-4 rounded-2xl border text-left transition-all space-y-2 ${
+                      currentRole === 'DOCENTE'
+                        ? 'border-emerald-500 bg-emerald-50/50 dark:bg-emerald-950/40 shadow-md ring-2 ring-emerald-500/20'
+                        : 'border-slate-200 dark:border-zinc-800/50 hover:border-slate-300 dark:hover:border-slate-700 bg-white dark:bg-black'
+                    }`}
+                  >
+                    <div className="w-8 h-8 rounded-xl bg-emerald-100 dark:bg-emerald-900/60 text-emerald-600 dark:text-emerald-300 flex items-center justify-center">
+                      <BookOpen className="w-4 h-4" />
+                    </div>
+                    <div>
+                      <h4 className="text-xs font-black text-slate-900 dark:text-white">
+                        2. Docente (Aula y Horarios)
+                      </h4>
+                      <p className="text-[10px] text-slate-500 dark:text-slate-400 mt-0.5 leading-relaxed">
+                        Llamado a lista por bloques, escáner en vivo y tarjetas QR. {currentRole === 'DOCENTE' ? '(perfil activo — elija otro docente para cambiar)' : 'Elija el docente concreto →'}
+                      </p>
+                    </div>
+                  </button>
+
+                  {/* 3. Estudiante / Acudiente */}
+                  <button
+                    onClick={() => { setRolePicker('ESTUDIANTE_ACUDIENTE'); setPickerSearch(''); }}
+                    className={`p-4 rounded-2xl border text-left transition-all space-y-2 ${
+                      currentRole === 'ESTUDIANTE_ACUDIENTE'
+                        ? 'border-sky-500 bg-sky-50/50 dark:bg-sky-950/40 shadow-md ring-2 ring-sky-500/20'
+                        : 'border-slate-200 dark:border-zinc-800/50 hover:border-slate-300 dark:hover:border-slate-700 bg-white dark:bg-black'
+                    }`}
+                  >
+                    <div className="w-8 h-8 rounded-xl bg-sky-100 dark:bg-sky-900/60 text-sky-600 dark:text-sky-300 flex items-center justify-center">
+                      <GraduationCap className="w-4 h-4" />
+                    </div>
+                    <div>
+                      <h4 className="text-xs font-black text-slate-900 dark:text-white">
+                        3. Estudiante / Acudiente
+                      </h4>
+                      <p className="text-[10px] text-slate-500 dark:text-slate-400 mt-0.5 leading-relaxed">
+                        Historial de asistencia, carné digital y modo Representante. {currentRole === 'ESTUDIANTE_ACUDIENTE' ? '(perfil activo — elija otro estudiante para cambiar)' : 'Elija el estudiante concreto →'}
+                      </p>
+                    </div>
+                  </button>
                 </div>
-                <div>
-                  <h4 className="text-xs font-black text-slate-900 dark:text-white">
-                    3. Estudiante / Acudiente
-                  </h4>
-                  <p className="text-[10px] text-slate-500 dark:text-slate-400 mt-0.5 leading-relaxed">
-                    Consulta individual de historial de asistencia, asignaturas y modo Representante de Salón.
-                  </p>
+              </>
+            )}
+
+            {rolePicker && (
+              <div className="space-y-3">
+                <div className="flex items-center gap-2">
+                  <div className="relative flex-1">
+                    <Search className="w-3.5 h-3.5 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+                    <input
+                      autoFocus
+                      value={pickerSearch}
+                      onChange={(e) => setPickerSearch(e.target.value)}
+                      placeholder={rolePicker === 'DOCENTE' ? 'Buscar docente por nombre, documento o asignatura…' : 'Buscar estudiante por nombre, código o documento…'}
+                      className="w-full pl-9 pr-3 py-2.5 bg-slate-50 dark:bg-black border border-slate-200 dark:border-zinc-800/50 rounded-xl text-xs text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                    />
+                  </div>
+                  <button
+                    onClick={() => { setRolePicker(null); setPickerSearch(''); }}
+                    className="px-3 py-2.5 bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 rounded-xl text-xs font-bold hover:bg-slate-200 transition-all flex items-center gap-1.5"
+                  >
+                    <ArrowLeft className="w-3.5 h-3.5" />
+                    <span className="hidden sm:inline">Atrás</span>
+                  </button>
                 </div>
-              </button>
-            </div>
+
+                {(() => {
+                  const q = pickerSearch.trim().toLowerCase();
+                  if (rolePicker === 'DOCENTE') {
+                    const teachers = AttendanceStorageService.getTeachers().filter(t =>
+                      !q || `${t.fullName} ${t.documentId || ''} ${(t.subjects || []).join(' ')}`.toLowerCase().includes(q)
+                    );
+                    if (teachers.length === 0) {
+                      return (
+                        <div className="p-4 rounded-2xl bg-slate-50 dark:bg-black border border-slate-200 dark:border-zinc-800/50 text-xs text-slate-500 text-center">
+                          No hay docentes en el catálogo local{q ? ' que coincidan con la búsqueda' : ''}. Sincroniza (Pull) o registre docentes primero en Gestión Docentes.
+                        </div>
+                      );
+                    }
+                    return (
+                      <div className="space-y-1.5 max-h-72 overflow-y-auto pr-1">
+                        {teachers.map((t) => (
+                          <button
+                            key={t.id}
+                            onClick={() => switchRole('DOCENTE', { teacher: t })}
+                            className={`w-full p-3 rounded-2xl border text-left transition-all flex items-center justify-between ${
+                              loggedUser.teacher?.id === t.id
+                                ? 'border-emerald-500 bg-emerald-50/60 dark:bg-emerald-950/40'
+                                : 'border-slate-200 dark:border-zinc-800/50 hover:border-emerald-300 dark:hover:border-emerald-800 bg-white dark:bg-black hover:bg-emerald-50/40 dark:hover:bg-emerald-950/20'
+                            }`}
+                          >
+                            <div className="flex items-center gap-3 min-w-0">
+                              <div className="w-9 h-9 rounded-xl bg-emerald-100 dark:bg-emerald-900/60 text-emerald-700 dark:text-emerald-300 flex items-center justify-center font-black text-xs shrink-0">
+                                {t.fullName.split(' ').map(p => p[0]).slice(0, 2).join('')}
+                              </div>
+                              <div className="min-w-0">
+                                <p className="text-xs font-black text-slate-900 dark:text-white truncate">{t.fullName}</p>
+                                <p className="text-[10px] text-slate-500 dark:text-slate-400 truncate">
+                                  {(t.subjects || []).slice(0, 3).join(' · ') || 'Sin asignaturas'}
+                                  {t.isGroupDirector ? ' · ⭐ Dirección de Grupo' : ''}
+                                </p>
+                              </div>
+                            </div>
+                            {loggedUser.teacher?.id === t.id && (
+                              <span className="text-[9px] font-black px-2 py-1 rounded-full bg-emerald-600 text-white shrink-0">ACTIVO</span>
+                            )}
+                          </button>
+                        ))}
+                      </div>
+                    );
+                  }
+                  const students = AttendanceStorageService.getStudents().filter(s =>
+                    !q || `${s.firstName} ${s.lastName} ${s.code} ${s.documentId || ''} ${s.grade}`.toLowerCase().includes(q)
+                  );
+                  if (students.length === 0) {
+                    return (
+                      <div className="p-4 rounded-2xl bg-slate-50 dark:bg-black border border-slate-200 dark:border-zinc-800/50 text-xs text-slate-500 text-center">
+                        No hay estudiantes en el catálogo local{q ? ' que coincidan con la búsqueda' : ''}. Sincroniza (Pull) o matricule primero en el Directorio.
+                      </div>
+                    );
+                  }
+                  return (
+                    <div className="space-y-1.5 max-h-72 overflow-y-auto pr-1">
+                      {students.map((s) => (
+                        <button
+                          key={s.code}
+                          onClick={() => switchRole('ESTUDIANTE_ACUDIENTE', { student: s })}
+                          className={`w-full p-3 rounded-2xl border text-left transition-all flex items-center justify-between ${
+                            loggedUser.student?.code === s.code
+                              ? 'border-sky-500 bg-sky-50/60 dark:bg-sky-950/40'
+                              : 'border-slate-200 dark:border-zinc-800/50 hover:border-sky-300 dark:hover:border-sky-800 bg-white dark:bg-black hover:bg-sky-50/40 dark:hover:bg-sky-950/20'
+                          }`}
+                        >
+                          <div className="flex items-center gap-3 min-w-0">
+                            <div className="w-9 h-9 rounded-xl bg-sky-100 dark:bg-sky-900/60 text-sky-700 dark:text-sky-300 flex items-center justify-center font-black text-xs shrink-0">
+                              {s.firstName[0]}{s.lastName[0]}
+                            </div>
+                            <div className="min-w-0">
+                              <p className="text-xs font-black text-slate-900 dark:text-white truncate">
+                                {s.firstName} {s.lastName} {s.isRepresentative && <span title="Representante de salón">★</span>}
+                              </p>
+                              <p className="text-[10px] text-slate-500 dark:text-slate-400 truncate font-mono">{s.grade} · {s.code}</p>
+                            </div>
+                          </div>
+                          {loggedUser.student?.code === s.code && (
+                            <span className="text-[9px] font-black px-2 py-1 rounded-full bg-sky-600 text-white shrink-0">ACTIVO</span>
+                          )}
+                        </button>
+                      ))}
+                    </div>
+                  );
+                })()}
+              </div>
+            )}
 
             <div className="flex justify-end">
               <button
-                onClick={() => setShowRoleModal(false)}
+                onClick={() => { setShowRoleModal(false); setRolePicker(null); setPickerSearch(''); }}
                 className="px-5 py-2.5 bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 rounded-2xl text-xs font-bold hover:bg-slate-200 transition-all"
               >
                 Cerrar

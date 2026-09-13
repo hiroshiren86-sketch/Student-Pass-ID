@@ -324,7 +324,21 @@ export class CloudflareSyncService {
         if (entry.tempPassword) {
           const loginKey = await deriveStudentLoginKey(secretForVerifier, entry.code);
           const verifier = await generateHmacSignature(entry.tempPassword, loginKey);
-          out = { ...out, loginKey, tempPasswordVerifier: verifier };
+          // R64 (Fix A — regla de credencial fresca): si la ficha ya trae un
+          // verifier que NO coincide con el HMAC del PIN en claro local, ese
+          // verifier es MÁS NUEVO (el estudiante cambió su clave desde el portal
+          // vía /api/students/credential y llegó aquí por un pull). NO se recompute
+          // (pisaría la clave nueva del estudiante con la vieja que Rectoría tenía
+          // en claro) y el PIN local obsoleto se retira también del dispositivo
+          // (ya no corresponde a la clave real de la cuenta).
+          if (entry.tempPasswordVerifier && entry.tempPasswordVerifier !== verifier) {
+            out = { ...out, loginKey, tempPasswordVerifier: entry.tempPasswordVerifier };
+            try {
+              AttendanceStorageService.updateStudent(entry.code, { tempPassword: undefined, hasCustomPassword: true });
+            } catch { /* limpieza best-effort */ }
+          } else {
+            out = { ...out, loginKey, tempPasswordVerifier: verifier };
+          }
         }
       } else if (entry.tempPassword) {
         // Sin secret local no se puede calcular el verificador: JAMÁS se sube la clave
@@ -384,7 +398,7 @@ export class CloudflareSyncService {
    *               el CAS de catálogo obsoleto (enviar force:true tras revisar que realmente
    *               se quiere pisar la nube). Por defecto false.
    */
-  static async performCloudflareSync(force = false): Promise<CloudflareSyncResult> {
+  static async performCloudflareSync(force = false, _is409Retry = false): Promise<CloudflareSyncResult> {
     const settings = AttendanceStorageService.getSettings();
     const baseUrl = this.getWorkerBaseUrl();
     const timestamp = new Date().toLocaleTimeString('es-CO', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
@@ -529,13 +543,27 @@ export class CloudflareSyncService {
       if (!response.ok) {
         const errText = await response.text();
         // Ronda 47 (Fase 2 — Flanco 3): 409 = catálogo obsoleto. Mensaje accionable.
+        // R64 (Fix A): AUTO-RECUPERACIÓN — el 409 significa "tu catálogo local está
+        // desfasado" (p. ej. el propio estudiante actualizó su verifier vía
+        // /api/students/credential y la versión de la nube subió). Antes exigía
+        // un Pull manual del operador; ahora el ciclo converge solo: Pull →
+        // REINTENTO con el estado local fresco (una sola vez; si vuelve a rebotar
+        // por una carrera extrema, se devuelve el mensaje accionable de siempre).
         if (response.status === 409) {
+          if (!_is409Retry) {
+            try {
+              const pull = await this.pullFromCloudflare();
+              if (pull.success) {
+                return await this.performCloudflareSync(force, true);
+              }
+            } catch { /* el pull de recuperación falló: mensaje manual */ }
+          }
           return {
             success: false,
             timestamp,
             syncedRecordsCount: 0,
             syncedStudentsCount: 0,
-            message: `Sincronización rechazada: tu terminal tiene un catálogo desactualizado (${errText}). Descarga primero con "Descargar (Pull)" y reintenta.`,
+            message: `Sincronización rechazada: tu terminal tiene un catálogo desactualizado (${errText}). Ya se intentó descargar el catálogo nuevo; reintenta en unos segundos.`,
             target: 'Cloudflare Worker',
             details: { conflict: true, raw: errText }
           };
@@ -554,7 +582,11 @@ export class CloudflareSyncService {
       // "ediciones sin subir" se libera para que los pulls futuros vuelvan a converger.
       // Se hace DESPUÉS de guardar catalogVersion (ese saveSettings es de protocolo, con
       // sync=true, y volvería a sellar → por eso el orden es: saveSettings CAS → clear).
-      if (data?.success !== false) {
+      // R64 (Fix A): el sello SOLO se libera si el Worker realmente ESCRIBIÓ el catálogo
+      // (catalogWritten — los pushes de operador respondían success:true con el catálogo
+      // DESCARTADO, liberando el sello en falso y dejando la edición de credencial
+      // "publicada" sin estarlo — el siguiente pull la borraba).
+      if (data?.success !== false && data?.catalogWritten === true) {
         AttendanceStorageService.clearLocalSyncDirty();
       }
 
@@ -715,6 +747,73 @@ export class CloudflareSyncService {
   }
 
   /**
+   * R64 (Fix A): el estudiante actualiza el VERIFICADOR de SU clave en la nube vía
+   * /api/students/credential (Worker). Se llama DESPUÉS de que Firebase Auth ya
+   * quedó actualizado (changeOwnPassword o provisioner): hace converger el
+   * fallback local para que la clave nueva funcione en un dispositivo recién
+   * limpiado (el pull trae el verifier nuevo) y en modo offline.
+   * La clave viaja por HTTPS; el Worker NUNCA la persiste (solo su HMAC).
+   */
+  static async updateOwnCredentialInCloud(studentCode: string, currentPassword: string, newPassword: string): Promise<{ ok: boolean; message?: string }> {
+    const baseUrl = this.getWorkerBaseUrl();
+    if (!baseUrl) {
+      return { ok: false, message: 'URL del Worker no configurada: la clave nueva funciona con tu cuenta de acceso, pero este dispositivo no pudo registrarla también para el modo sin conexión.' };
+    }
+    try {
+      const res = await fetch(`${baseUrl.replace(/\/+$/, '')}/api/students/credential`, {
+        method: 'POST',
+        headers: await this.workerHeaders(),
+        body: JSON.stringify({
+          schoolCode: AttendanceStorageService.getSettings().schoolCode || 'INAS_2026',
+          studentCode,
+          currentPassword,
+          newPassword
+        })
+      });
+      const json: any = await res.json().catch(() => null);
+      if (!res.ok) {
+        return { ok: false, message: json?.error || `La nube no aceptó el registro de la nueva clave (HTTP ${res.status}).` };
+      }
+      return { ok: true, message: json?.message };
+    } catch {
+      return { ok: false, message: 'Sin conexión con la nube: la clave nueva funciona con tu cuenta de acceso; el modo sin conexión quedará alineado en la próxima sincronización.' };
+    }
+  }
+
+  /**
+   * R64 (Fix §5): eliminación EN CASCADA de un estudiante o docente en la nube
+   * (Worker /api/admin/entity/delete): D1 (records, excusas + eventos del-,
+   * push subscriptions, fila), snapshot (ficha, horario, tombstone), índice KV
+   * y versión de catálogo. La cuenta Firebase se elimina aparte (provisioner).
+   * Requiere el token ADMIN del terminal (Rectoría).
+   */
+  static async cascadeDeleteEntity(type: 'student' | 'teacher', code: string, performedBy?: string): Promise<{ ok: boolean; message?: string; d1?: any; catalogVersion?: number }> {
+    const baseUrl = this.getWorkerBaseUrl();
+    if (!baseUrl) {
+      return { ok: false, message: 'URL del Worker no configurada. Configúrala en Ajustes → Sync y Seguridad.' };
+    }
+    try {
+      const res = await fetch(`${baseUrl.replace(/\/+$/, '')}/api/admin/entity/delete`, {
+        method: 'POST',
+        headers: await this.workerHeaders(),
+        body: JSON.stringify({
+          schoolCode: AttendanceStorageService.getSettings().schoolCode || 'INAS_2026',
+          type,
+          code,
+          performedBy: performedBy || 'RECTORIA'
+        })
+      });
+      const json: any = await res.json().catch(() => null);
+      if (!res.ok) {
+        return { ok: false, message: json?.error || `La nube rechazó la eliminación (HTTP ${res.status}).` };
+      }
+      return { ok: true, message: json?.message, d1: json?.d1, catalogVersion: json?.catalogVersion };
+    } catch (e: any) {
+      return { ok: false, message: `Sin conexión con la nube: ${e?.message || e}` };
+    }
+  }
+
+  /**
    * Ejecuta la sincronización de BAJADA (Pull) desde el Cloudflare Worker hacia el almacenamiento local
    */
   static async pullFromCloudflare(): Promise<{ success: boolean; message: string; data?: any }> {
@@ -780,7 +879,23 @@ export class CloudflareSyncService {
         // terminal pero aún no subido (sin push) debía estar en la nube para que el Worker lo
         // filtrara; aquí se filtra también, para que el estudiante NO RESUCITE en este pull.
         const tombStudents = new Set(AttendanceStorageService.getTombstones().filter(t => t.type === 'student').map(t => t.id));
-        const incomingStudents = students.filter((s: any) => s && !tombStudents.has(String(s.code)));
+        // R64 (Fix A — preservación de credencial local): el snapshot JAMÁS transporta
+        // tempPassword (se strippea en ambos extremos por diseño F-23). Antes el pull
+        // REEMPLAZABA la ficha y BORRABA la clave en claro local: (a) el terminal de
+        // Rectoría perdía los PIN ("sin PIN asignado" en el directorio y sin oldPin para
+        // realinear cuentas con el provisioner), y (b) el portal del estudiante perdía su
+        // clave recién cambiada ANTES de que nada la publicara. Ahora el valor local se
+        // preserva cuando el entrante no lo trae (que es SIEMPRE). Si el PIN local está
+        // obsoleto (el estudiante cambió su clave desde el portal), la regla del sanitize
+        // del push lo detecta (verifier ≠ HMAC(pin)) y lo retira sin pisar el verifier nuevo.
+        const localByCode = new Map(AttendanceStorageService.getStudents().map(s => [String(s.code), s]));
+        const preserveLocalPin = (s: any) =>
+          (s && !s.tempPassword && localByCode.has(String(s.code)))
+            ? { ...s, tempPassword: localByCode.get(String(s.code))!.tempPassword }
+            : s;
+        const incomingStudents = students
+          .filter((s: any) => s && !tombStudents.has(String(s.code)))
+          .map(preserveLocalPin);
         if (scopedRole) {
           // Ronda 56: upsert — la porción del grado pisa/añade; el resto de la matrícula
           // local se CONSERVA (el snapshot scopeado jamás destruye el catálogo del teléfono).

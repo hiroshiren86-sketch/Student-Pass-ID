@@ -1,6 +1,34 @@
 import { AttendanceRecord, GradeAiSummaryResult, SchoolSettings, Student } from '../types/attendance';
 import { AttendanceStorageService } from './attendanceStorage';
 
+/**
+ * R64 (mejora defensiva IA — auditoría 1d, P1): TODAS las llamadas a proveedores
+ * de IA van con TIMEOUT y AbortController (20 s por defecto). Antes un proveedor
+ * lento o una red colgada dejaban loaders infinitos ("Extrayendo datos…",
+ * "Probando conexión…", skeleton eterno del resumen de grado). Al agotar el
+ * timeout se lanza un AbortError que los catch existentes ya tratan como fallo
+ * honesto → el motor local toma el relevo.
+ */
+async function fetchWithTimeout(input: string, init?: RequestInit, timeoutMs = 20_000): Promise<Response> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await globalThis.fetch(input, { ...init, signal: controller.signal });
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/**
+ * R64 (mejora defensiva IA): clasifica un HTTP de proveedor como NO-REINTENTABLE
+ * (la clave/quota/red son independientes del modelo — probar otro modelo solo
+ * agrava el 429 y quema tiempo). 401/403 = clave inválida o IP bloqueada;
+ * 429 = cuota agotada.
+ */
+function isFatalProviderHttp(status: number): boolean {
+  return status === 401 || status === 403 || status === 429;
+}
+
 export interface AiModelInfo {
   id: string;
   name: string;
@@ -50,7 +78,7 @@ export class AiService {
     try {
       if (p === 'groq') {
         const targetModel = model || 'llama-3.1-8b-instant';
-        const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+        const res = await fetchWithTimeout('https://api.groq.com/openai/v1/chat/completions', {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
@@ -83,7 +111,7 @@ export class AiService {
         }
       } else if (p === 'mistral') {
         const targetModel = model || 'mistral-small-latest';
-        const res = await fetch('https://api.mistral.ai/v1/chat/completions', {
+        const res = await fetchWithTimeout('https://api.mistral.ai/v1/chat/completions', {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
@@ -116,7 +144,7 @@ export class AiService {
         }
       } else if (p === 'gemini') {
         const targetModel = model || 'gemini-2.5-flash';
-        const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${targetModel}:generateContent`, {
+        const res = await fetchWithTimeout(`https://generativelanguage.googleapis.com/v1beta/models/${targetModel}:generateContent`, {
           method: 'POST',
           // Ronda 58 (F-15): clave en el header oficial, no en la query string.
           headers: { 'Content-Type': 'application/json', 'x-goog-api-key': trimmedKey },
@@ -146,7 +174,7 @@ export class AiService {
         }
       } else if (p === 'openrouter') {
         const targetModel = model || 'meta-llama/llama-3.3-70b-instruct';
-        const res = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+        const res = await fetchWithTimeout('https://openrouter.ai/api/v1/chat/completions', {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
@@ -179,7 +207,7 @@ export class AiService {
         }
       } else if (p === 'openai') {
         const targetModel = model || 'gpt-4.1-mini';
-        const res = await fetch('https://api.openai.com/v1/chat/completions', {
+        const res = await fetchWithTimeout('https://api.openai.com/v1/chat/completions', {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
@@ -271,7 +299,7 @@ export class AiService {
    */
   private static async fetchDirectProviderModels(provider: string, apiKey: string): Promise<AiModelInfo[] | null> {
     if (provider === 'groq') {
-      const res = await fetch('https://api.groq.com/openai/v1/models', {
+      const res = await fetchWithTimeout('https://api.groq.com/openai/v1/models', {
         headers: { Authorization: `Bearer ${apiKey}` }
       });
       if (res.ok) {
@@ -297,7 +325,7 @@ export class AiService {
         }
       }
     } else if (provider === 'mistral') {
-      const res = await fetch('https://api.mistral.ai/v1/models', {
+      const res = await fetchWithTimeout('https://api.mistral.ai/v1/models', {
         headers: { Authorization: `Bearer ${apiKey}` }
       });
       if (res.ok) {
@@ -318,7 +346,7 @@ export class AiService {
         }
       }
     } else if (provider === 'openrouter') {
-      const res = await fetch('https://openrouter.ai/api/v1/models');
+      const res = await fetchWithTimeout('https://openrouter.ai/api/v1/models');
       if (res.ok) {
         const data = await res.json();
         if (Array.isArray(data.data)) {
@@ -337,7 +365,7 @@ export class AiService {
         }
       }
     } else if (provider === 'openai') {
-      const res = await fetch('https://api.openai.com/v1/models', {
+      const res = await fetchWithTimeout('https://api.openai.com/v1/models', {
         headers: { Authorization: `Bearer ${apiKey}` }
       });
       if (res.ok) {
@@ -358,7 +386,7 @@ export class AiService {
       }
     } else if (provider === 'gemini') {
       // Ronda 58 (F-15): clave en el header oficial, no en la query string.
-      const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models`, {
+      const res = await fetchWithTimeout(`https://generativelanguage.googleapis.com/v1beta/models`, {
         headers: { 'x-goog-api-key': apiKey }
       });
       if (res.ok) {
@@ -610,7 +638,7 @@ Responde SIEMPRE en formato JSON con la siguiente estructura exacta:
 
       for (const modelCandidate of modelsToTry) {
         try {
-          const resp = await fetch(endpoint, {
+          const resp = await fetchWithTimeout(endpoint, {
             method: 'POST',
             headers: {
               'Content-Type': 'application/json',
@@ -642,6 +670,12 @@ Responde SIEMPRE en formato JSON con la siguiente estructura exacta:
                 };
               } catch {}
             }
+          } else if (isFatalProviderHttp(resp.status)) {
+            // R64: clave inválida / IP bloqueada / cuota agotada — probar OTRO modelo
+            // es inútil y agrava el límite. Se corta el ciclo YA (el motor local
+            // toma el relevo en la UI).
+            console.warn(`[aiService] HTTP ${resp.status} del proveedor ${provider}: no se reintentarán más modelos (clave/cuota).`);
+            break;
           }
         } catch {}
       }
@@ -650,7 +684,7 @@ Responde SIEMPRE en formato JSON con la siguiente estructura exacta:
       for (const modelName of candidateModels) {
         try {
           const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent`;
-          const resp = await fetch(geminiUrl, {
+          const resp = await fetchWithTimeout(geminiUrl, {
             method: 'POST',
             // Ronda 58 (F-15): clave en el header oficial, no en la query string.
             headers: { 'Content-Type': 'application/json', 'x-goog-api-key': apiKey },
@@ -679,6 +713,9 @@ Responde SIEMPRE en formato JSON con la siguiente estructura exacta:
                 };
               } catch {}
             }
+          } else if (isFatalProviderHttp(resp.status)) {
+            console.warn(`[aiService] HTTP ${resp.status} de Gemini: no se reintentarán más modelos (clave/cuota).`);
+            break;
           }
         } catch {}
       }
@@ -737,7 +774,7 @@ Si la imagen no contiene datos de estudiantes, devuelve {"students": []}. No inc
         : 'mistral-small-latest'
       );
 
-      const resp = await fetch(endpoint, {
+      const resp = await fetchWithTimeout(endpoint, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -772,7 +809,7 @@ Si la imagen no contiene datos de estudiantes, devuelve {"students": []}. No inc
     if (provider === 'gemini') {
       const visionModel = (settings.aiVisionModel || '').trim() || 'gemini-2.5-flash';
       const url = `https://generativelanguage.googleapis.com/v1beta/models/${visionModel}:generateContent`;
-      const resp = await fetch(url, {
+      const resp = await fetchWithTimeout(url, {
         method: 'POST',
         // Ronda 58 (F-15): clave en el header oficial, no en la query string.
         headers: { 'Content-Type': 'application/json', 'x-goog-api-key': apiKey },

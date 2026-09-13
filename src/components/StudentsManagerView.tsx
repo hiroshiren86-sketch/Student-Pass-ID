@@ -24,6 +24,7 @@ import {
 import { Student, SchoolSettings, DocumentType, UserRole } from '../types/attendance';
 import { AttendanceStorageService } from '../services/attendanceStorage';
 import { FirebaseService } from '../services/firebase';
+import { CloudflareSyncService } from '../services/cloudflareSync';
 import { generateStudentCardPdf, downloadPdfBlob } from '../utils/pdfGenerator';
 import { matchStudentFuzzy, normalizeDocumentOrCode } from '../utils/searchHelper';
 import { generateBarcodeDataUrl } from '../utils/barcode';
@@ -61,7 +62,7 @@ export const StudentsManagerView: React.FC<StudentsManagerViewProps> = ({ onGene
   const [inspectStudent, setInspectStudent] = useState<Student | null>(null);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   // Ronda 18 (H4): confirmación propia para eliminar estudiante (antes confirm() nativo)
-  const [deleteConfirm, setDeleteConfirm] = useState<{ title: string; message: string; action: () => void } | null>(null);
+  const [deleteConfirm, setDeleteConfirm] = useState<{ title: string; message: string; requireText?: string; action: () => void } | null>(null);
   const singlePhotoInputRef = useRef<HTMLInputElement>(null);
 
   const uniqueGrades = AttendanceStorageService.getUniqueGrades();
@@ -324,15 +325,71 @@ export const StudentsManagerView: React.FC<StudentsManagerViewProps> = ({ onGene
   };
 
   const handleDelete = (code: string, name: string) => {
-    // Ronda 18 (H4): ConfirmDialog propio del sistema en lugar de confirm() nativo
+    // R64 (Fix §5 — ELIMINACIÓN EN CASCADA, paso 1 de 2): Rectoría confirma la
+  // intención. La cascada completa purga D1 (asistencias, excusas + eventos
+  // del-, suscripciones push, fila), el snapshot (ficha, horario, tombstone),
+  // el índice KV, la versión de catálogo y la cuenta Firebase Auth (provisioner
+  // con la clave vigente — el paso 2 pide confirmación explícita con el texto
+  // ELIMINAR). El borrado local anterior (solo ficha + tombstone) dejaba la
+  // cuenta viva y TODA la huella D1 huérfana.
     setDeleteConfirm({
-      title: 'Eliminar estudiante',
-      message: `¿Eliminar al estudiante ${name} (${code})? Esta acción no se puede deshacer.`,
+      title: 'Eliminar estudiante (paso 1 de 2)',
+      message: `¿Eliminar al estudiante ${name} (${code})? Se abrirá una segunda confirmación: la eliminación es EN CASCADA y purga TODO (asistencias, excusas, suscripciones, catálogo de la nube y cuenta de acceso).`,
       action: () => {
-        AttendanceStorageService.deleteStudent(code);
-        refreshList();
+        setDeleteConfirm({
+          title: 'CONFIRMAR eliminación en cascada',
+          message: `Escriba ELIMINAR para borrar a ${name} (${code}) y TODA su huella: registros de asistencia, excusas, suscripciones push, ficha del catálogo (D1 + snapshot + KV) y su cuenta de acceso Firebase. Esta acción no se puede deshacer.`,
+          requireText: 'ELIMINAR',
+          action: () => executeCascadeDelete(code, name, 'student')
+        });
       }
     });
+  };
+
+  // R64 (Fix §5): ejecución de la cascada — nube primero (endpoint ADMIN),
+  // cuenta Firebase después (provisioner con la clave vigente si se conoce),
+  // borrado local al final (ficha + tombstone). Cada paso reporta honestamente.
+  const executeCascadeDelete = async (code: string, name: string, _type: 'student') => {
+    setToastMessage(`Eliminando en cascada: ${name}…`);
+    setTimeout(() => setToastMessage(null), 4000);
+
+    // 1. La nube (D1 + snapshot + KV + versión) — endpoint de Rectoría.
+    const cloud = await CloudflareSyncService.cascadeDeleteEntity('student', code);
+    if (!cloud.ok) {
+      setToastMessage(`⚠ La eliminación en la nube FALLÓ y NO se completó: ${cloud.message || 'error desconocido'}. No se borró nada localmente (reintenta cuando la nube responda).`);
+      setTimeout(() => setToastMessage(null), 8000);
+      return;
+    }
+
+    // 2. Cuenta Firebase Auth (provisioner — solo si existe y conocemos la clave vigente).
+    const student = students.find(s => s.code === code);
+    let accountNote = '';
+    if (student?.hasFirebaseAccount) {
+      const knownPin = (student.tempPassword || '').trim();
+      if (knownPin) {
+        const del = await FirebaseService.deleteProvisionedAccount(
+          student.authEmail || FirebaseService.studentInternalEmail(code),
+          knownPin
+        );
+        accountNote = del.ok
+          ? ' Cuenta de acceso Firebase eliminada.'
+          : ` ⚠ La cuenta de acceso NO se pudo eliminar (${del.message || 'contraseña vigente desconocida'}). Bórrela después desde "Editar ficha" con la clave correcta, o reiníciela primero.`;
+      } else {
+        accountNote = ' ⚠ Sin clave vigente registrada: la cuenta de acceso Firebase quedó VIVA. Asígnele un PIN conocido, sincronice y vuelva a eliminar para cerrarla.';
+      }
+    }
+
+    // 3. Local: ficha + tombstone (el pull ya no la traerá de vuelta).
+    AttendanceStorageService.deleteStudent(code);
+    refreshList();
+
+    // 4. Convergencia: descargar el catálogo nuevo (la versión subió).
+    try {
+      await CloudflareSyncService.pullFromCloudflare();
+    } catch { /* el auto-sync convergerá */ }
+
+    setToastMessage(`Estudiante ${name} eliminado en cascada.${cloud.message ? ` (${cloud.message})` : ''}${accountNote}`);
+    setTimeout(() => setToastMessage(null), accountNote ? 10000 : 6000);
   };
 
   return (
@@ -1260,6 +1317,7 @@ export const StudentsManagerView: React.FC<StudentsManagerViewProps> = ({ onGene
         open={!!deleteConfirm}
         title={deleteConfirm?.title || ''}
         message={deleteConfirm?.message || ''}
+        requireText={deleteConfirm?.requireText}
         onConfirm={() => { const a = deleteConfirm?.action; setDeleteConfirm(null); a?.(); }}
         onCancel={() => setDeleteConfirm(null)}
       />

@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { 
   Sparkles, 
   BrainCircuit, 
@@ -30,6 +30,8 @@ export const GradeAiSummaryView: React.FC = () => {
   const [loading, setLoading] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<GradeAiSummaryResult | null>(null);
+  // R64: guard anti-stale — solo la ÚLTIMA invocación puede escribir el estado.
+  const fetchTicket = useRef(0);
   const [aiStatus, setAiStatus] = useState<{ activeProvider: string; activeModel: string; availableProviders: string[]; hasAnyKey: boolean }>({
     activeProvider: 'none',
     activeModel: '',
@@ -55,6 +57,12 @@ export const GradeAiSummaryView: React.FC = () => {
   ];
 
   const fetchGradeSummary = async (queryPrompt?: string) => {
+    // R64 (mejora defensiva IA — auditoría 1d P1): GUARD ANTI-STALE. Un cambio
+    // rápido de grado/periodo disparaba una nueva generación mientras la anterior
+    // seguía en vuelo: la respuesta VIEJA llegaba al final y pisaba la nueva
+    // (resultado del grado equivocado en pantalla). Ahora cada invocación lleva
+    // un ticket; solo la ÚLTIMA puede escribir el estado.
+    const ticket = ++fetchTicket.current;
     setLoading(true);
     setError(null);
 
@@ -70,7 +78,12 @@ export const GradeAiSummaryView: React.FC = () => {
         records
       });
 
-      setResult(data);
+      if (ticket === fetchTicket.current) {
+        setResult(data);
+        if (!data) {
+          setError('La IA de la nube no respondió (clave inválida, cuota agotada o sin conexión). Se muestra el motor local debajo.');
+        }
+      }
     } catch (err: any) {
       console.error('Error generating AI summary:', err);
       // Fallback determinista garantizado sin errores en pantalla
@@ -81,9 +94,14 @@ export const GradeAiSummaryView: React.FC = () => {
         students,
         records
       );
-      setResult(fallback);
+      if (ticket === fetchTicket.current) {
+        setError(`La IA de la nube falló (${err?.message || 'error'}). Se muestra el análisis del motor local.`);
+        setResult(fallback);
+      }
     } finally {
-      setLoading(false);
+      if (ticket === fetchTicket.current) {
+        setLoading(false);
+      }
     }
   };
 

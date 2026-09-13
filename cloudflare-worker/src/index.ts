@@ -442,6 +442,45 @@ function safeJsonParse(s: string): any {
 }
 
 // ==============================================================================
+// R64 (Fix A) — HMAC-SHA256 hex truncado a 32, IDÉNTICO al generateHmacSignature
+// del cliente (src/utils/crypto.ts). Necesario para verificar/recomputar el
+// verificador de credencial del estudiante del lado del servidor sin enviar
+// jamás la clave en claro al snapshot: verifier = HMAC(loginKey, password),
+// loginKey = HMAC(qrSecret, `loginkey:v1:<code>`) (fórmula R59).
+// ==============================================================================
+async function hmacHex(key: string, message: string): Promise<string> {
+  const enc = new TextEncoder();
+  const cryptoKey = await crypto.subtle.importKey(
+    'raw',
+    enc.encode(key),
+    { name: 'HMAC', hash: 'SHA-256' },
+    false,
+    ['sign']
+  );
+  const sig = await crypto.subtle.sign('HMAC', cryptoKey, enc.encode(message));
+  return Array.from(new Uint8Array(sig)).map(b => b.toString(16).padStart(2, '0')).join('').substring(0, 32);
+}
+
+// Carga el snapshot del colegio (KV primero, D1 después — mismo orden que el pull).
+async function loadSnapshotData(env: Env, schoolCode: string): Promise<any | null> {
+  if (env.ATTENDANCE_KV) {
+    try {
+      const cached = await env.ATTENDANCE_KV.get(`latest_snapshot_${schoolCode}`, 'json') as any;
+      if (cached && cached.data) return cached.data;
+    } catch { /* lectura no crítica */ }
+  }
+  if (env.DB) {
+    try {
+      const row = await env.DB.prepare(
+        `SELECT data_json FROM sync_snapshots WHERE school_code = ? OR id = ? LIMIT 1`
+      ).bind(schoolCode, `snapshot_${schoolCode}`).first() as any;
+      if (row?.data_json) return safeJsonParse(row.data_json);
+    } catch { /* lectura no crítica */ }
+  }
+  return null;
+}
+
+// ==============================================================================
 // Ronda 58 (F-23) — SANITIZACIÓN DE CREDENCIALES EN EL SNAPSHOT (defensa en
 // profundidad del lado del servidor).
 //
@@ -1318,6 +1357,7 @@ async function handleRoute(request: Request, env: Env, ctx: ExecutionContext): P
           deduplicated: false,
           catalogVersion: newCatalogVersion,
           role: tokenRole,
+          catalogWritten: isAdmin, // R64 (Fix A): el cliente libera el sello dirty SOLO si el catálogo se escribió (pushes de operador respondían success:true con el catálogo descartado)
           deviceId: device.deviceId,
           opId: opId
         });
@@ -1743,6 +1783,364 @@ async function handleRoute(request: Request, env: Env, ctx: ExecutionContext): P
       }
 
       // =========================================================================
+      // RUTA: STUDENTS CREDENTIAL (R64 — Fix A: durabilidad de la clave del portal)
+      //
+      // La identidad ESTUDIANTE_ACUDIENTE autenticada (X-Firebase-Id-Token, ya
+      // verificada por resolveAuthz) actualiza el VERIFICADOR de SU PROPIA clave
+      // en el snapshot de la nube. El portal ya actualizó Firebase Auth (la
+      // autoridad del login); este endpoint hace converger el verificador HMAC
+      // del fallback local para que el login con la clave NUEVA funcione en un
+      // dispositivo recién limpiado (pull fresco trae el verifier nuevo) y para
+      // que el PIN impreso en carnés futuros corresponda.
+      //
+      // Defensas: (1) solo la propia identidad (linkedStudentCode == ficha),
+      // (2) verificación de la clave ACTUAL contra el verifier vigente,
+      // (3) rate limit 10/hora/IP, (4) CAS + bump de catalog_version (el push
+      // obsoleto de Rectoría rebota 409 y converge antes de pisar).
+      // La clave NUEVA viaja por HTTPS pero NUNCA se persiste: solo su HMAC.
+      // =========================================================================
+      if (path === '/api/students/credential' && request.method === 'POST') {
+        // R64: dos caminos de autenticación para el MISMO objetivo (la propia ficha):
+        //   · IDENTIDAD ESTUDIANTE_ACUDIENTE: target = su linkedStudentCode (self).
+        //   · Otra credencial válida (p. ej. terminal con token de operador donde el
+        //     estudiante entró por el camino local): target = body.studentCode, y
+        //     la prueba de propiedad es conocer la CLAVE ACTUAL (verificación del
+        //     verifier abajo + rate limit 10/hora/IP). Conocer la clave vigente es
+        //     la prueba definitiva de que el verificador le pertenece a quien lo cambia.
+        const isStudentIdentity = authz.source === 'identity' && authz.role === 'ESTUDIANTE_ACUDIENTE' && !!authz.linkedStudentCode;
+        if (!isStudentIdentity && authz.role === 'ADMIN' && authz.source === 'identity' && !authz.linkedStudentCode) {
+          // Una identidad ADMIN (Rectoría) no cambia verificadores por esta vía:
+          // su flujo es el push de catálogo. Se rechaza para evitar ambigüedad.
+          return errorResponse('Rectoría cambia las claves desde el catálogo (push). Esta ruta es del propio estudiante.', 403);
+        }
+        const cIp = clientIp(request);
+        if (await d1RateLimited(env, `pwchg:${cIp}`, 10, 60 * 60 * 1000)) {
+          return errorResponse('Demasiados cambios de clave desde esta red. Espera una hora e intenta de nuevo.', 429);
+        }
+        let cBody: any;
+        try {
+          cBody = await request.json() as any;
+        } catch {
+          return errorResponse('Cuerpo inválido: se espera JSON { schoolCode, currentPassword, newPassword }.', 400);
+        }
+        const cSchool = String(cBody?.schoolCode || env.SCHOOL_CODE || 'INAS-ANTONIA-SANTOS-2026');
+        const currentPassword = String(cBody?.currentPassword || '');
+        const newPassword = String(cBody?.newPassword || '');
+        if (!currentPassword || newPassword.length < 6) {
+          return errorResponse('Se requieren la clave actual y la nueva (mínimo 6 caracteres — límite de Firebase Auth).', 400);
+        }
+        const selfCode = String(isStudentIdentity ? authz.linkedStudentCode : (cBody?.studentCode || '')).trim();
+        if (!selfCode) {
+          return errorResponse('Falta el código del estudiante (campo studentCode) para el cambio de clave.', 400);
+        }
+
+        const snap = await loadSnapshotData(env, cSchool);
+        if (!snap || !Array.isArray(snap.students)) {
+          return errorResponse('La nube no tiene catálogo para este colegio. Solicita a Rectoría que sincronice.', 404);
+        }
+        const ficha = (snap.students as any[]).find((s: any) => String(s?.code) === selfCode);
+        if (!ficha) {
+          return errorResponse('Tu ficha no está en el catálogo de la nube. Solicita a Rectoría que sincronice.', 404);
+        }
+
+        // loginKey: la de la propia ficha (R59) o derivada del qrSecret del snapshot.
+        const loginKey: string = String(ficha.loginKey || '') ||
+          (snap.settings?.qrSecret ? await hmacHex(String(snap.settings.qrSecret), `loginkey:v1:${selfCode}`) : '');
+        if (!loginKey) {
+          return errorResponse('La institución no tiene clave de firma configurada en la nube. Rectoría debe sincronizar una vez.', 409);
+        }
+
+        // Verificación de la clave ACTUAL contra el verifier vigente (defensa en
+        // profundidad — la identidad Firebase ya autenticó al solicitante, pero el
+        // cambio del verifier exige conocer la clave vigente del snapshot).
+        if (ficha.tempPasswordVerifier) {
+          const currentVerify = await hmacHex(loginKey, currentPassword);
+          if (currentVerify !== String(ficha.tempPasswordVerifier)) {
+            return errorResponse('La clave actual no coincide con la registrada en la nube. Usa la clave impresa en tu carné o la última que Rectoría te asignó.', 403, { reason: 'CURRENT_MISMATCH' });
+          }
+        }
+        const newVerifier = await hmacHex(loginKey, newPassword);
+
+        const writtenAt = await casWriteSnapshot(env, cSchool, (prev, row) => {
+          const students = Array.isArray(prev?.students) ? prev.students : [];
+          const nextStudents = students.map((s: any) => {
+            if (!s || String(s.code) !== selfCode) return s;
+            const { tempPassword: _tp, ...rest } = s;
+            void _tp;
+            return { ...rest, tempPasswordVerifier: newVerifier, hasCustomPassword: true };
+          });
+          return {
+            data: { ...(prev || {}), students: nextStudents },
+            studentsCount: nextStudents.length,
+            recordsCount: Array.isArray(prev?.records) ? prev.records.length : 0,
+            schoolName: row?.school_name || env.SCHOOL_NAME || ''
+          };
+        });
+        if (!writtenAt) {
+          return errorResponse('La nube estaba muy ocupada (contención de escritura). Reintenta en unos segundos.', 503);
+        }
+
+        // Reflejar a KV (el pull lee KV primero) + bump de versión (el push obsoleto
+        // de Rectoría rebota 409 y converge antes de pisar el verifier nuevo).
+        const snapRow = await env.DB.prepare(
+          `SELECT data_json, updated_at FROM sync_snapshots WHERE id = ?`
+        ).bind(`snapshot_${cSchool}`).first<{ data_json: string; updated_at: string }>();
+        const freshSnap = safeJsonParse(snapRow?.data_json || 'null') || snap;
+        if (env.ATTENDANCE_KV) {
+          await reflectSnapshotToKV(env, cSchool, {
+            syncedAt: snapRow?.updated_at || writtenAt,
+            studentsCount: Array.isArray(freshSnap.students) ? freshSnap.students.length : 0,
+            recordsCount: Array.isArray(freshSnap.records) ? freshSnap.records.length : 0,
+            data: freshSnap
+          });
+        }
+        const newVer = await bumpCatalogVersion(env, cSchool, `identity-${authz.uid}`, 'ESTUDIANTE_ACUDIENTE');
+        await logDeviceSync(env, {
+          deviceId: `identity-${authz.uid}`,
+          deviceName: 'Portal Estudiantil (cambio de clave)',
+          role: 'ESTUDIANTE_ACUDIENTE',
+          action: 'STUDENT_CREDENTIAL_UPDATE',
+          schoolCode: cSchool,
+          catalogVersion: newVer,
+          studentsCount: 0,
+          recordsCount: 0,
+          details: { studentCode: selfCode } // sin material de clave, jamás
+        });
+        try {
+          await env.DB.prepare(
+            `INSERT INTO audit_logs (id, event_type, performed_by, ip_address, details_json, created_at)
+             VALUES (?, 'STUDENT_CREDENTIAL_UPDATE', ?, ?, ?, datetime('now'))`
+          ).bind(
+            `pwchg_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+            `identity-${authz.uid}`,
+            cIp,
+            JSON.stringify({ studentCode: selfCode, catalogVersion: newVer })
+          ).run();
+        } catch { /* auditoría best-effort */ }
+
+        return jsonResponse({
+          success: true,
+          message: 'Tu nueva clave ya está registrada en la nube: funcionará en cualquier dispositivo, incluso tras limpiar los datos del navegador.',
+          catalogVersion: newVer,
+          timestamp: new Date().toISOString()
+        });
+      }
+
+      // =========================================================================
+      // RUTA: ADMIN ENTITY DELETE (R64 — Fix §5: eliminación en cascada)
+      //
+      // Rectoría (terminal con token ADMIN) purga TODA la huella de un estudiante
+      // o docente en la nube:
+      //   · D1: attendance_records, student_excuses (+ eventos del- que dispara el
+      //     trigger forense trg_excuse_delete_audit, retirados EN EL MISMO lote —
+      //     procedimiento documentado R62 que mantiene la cadena HMAC intacta),
+      //     push_subscriptions del estudiante, fila students/teachers, cátedras
+      //     del docente (schedule_assignments).
+      //   · Snapshot (D1 + KV): ficha, horario personal, records propios,
+      //     assignments del docente + tombstone (los pulls de otros terminales
+      //     filtran la entidad y no resucita).
+      //   · students_index KV: la entrada del QR de portería se retira.
+      //   · catalog_version: bump (los pushes obsoletos rebotan 409 y convergen).
+      // La cuenta Firebase Auth NO se toca aquí: se elimina desde el cliente con
+      // el patrón provisioner (clave conocida) — Regla 7: el Worker jamás usa la
+      // Service Account para borrar identidades.
+      // =========================================================================
+      if (path === '/api/admin/entity/delete' && request.method === 'POST') {
+        if (!authz.canWriteCatalog) {
+          return errorResponse('Solo Rectoría (token ADMIN del terminal) puede ejecutar la eliminación en cascada.', 403);
+        }
+        const dIp = clientIp(request);
+        if (await d1RateLimited(env, `entitydel:${dIp}`, 30, 60 * 60 * 1000)) {
+          return errorResponse('Límite de eliminaciones alcanzado (30 por hora). Espera antes de reintentar.', 429);
+        }
+        let dBody: any;
+        try {
+          dBody = await request.json() as any;
+        } catch {
+          return errorResponse('Cuerpo inválido: se espera JSON { schoolCode, type, code, performedBy? }.', 400);
+        }
+        const dSchool = String(dBody?.schoolCode || env.SCHOOL_CODE || 'INAS-ANTONIA-SANTOS-2026');
+        const dType = dBody?.type === 'teacher' ? 'teacher' : dBody?.type === 'student' ? 'student' : null;
+        const dCode = String(dBody?.code || '').trim();
+        const performedBy = (typeof dBody?.performedBy === 'string' && dBody.performedBy.trim()) ? dBody.performedBy.trim().slice(0, 120) : 'RECTORIA';
+        if (!dType || !dCode) {
+          return errorResponse('Se requiere type ("student"|"teacher") y code (código del estudiante o id del docente).', 400);
+        }
+        if (!env.DB) {
+          return errorResponse('Worker sin D1 configurado: no hay nada que eliminar.', 503);
+        }
+        const device = getDeviceContext(request, dBody, env);
+
+        const changes: Record<string, number> = {};
+        let auditDetails: any = { type: dType, code: dCode, performedBy };
+
+        if (dType === 'student') {
+          // 1. Inventario previo (para el backup forense del evento de auditoría).
+          const excuseRows = (await env.DB.prepare(`SELECT id FROM student_excuses WHERE student_code = ?`).bind(dCode).all() as any).results || [];
+          const excuseIds: string[] = excuseRows.map((r: any) => String(r.id));
+          const recCount = ((await env.DB.prepare(`SELECT COUNT(*) AS n FROM attendance_records WHERE student_code = ?`).bind(dCode).first() as any)?.n) ?? 0;
+          auditDetails = { ...auditDetails, recordsDeleted: recCount, excuseIds };
+
+          // 2. Lote FK-seguro (hijas antes que la madre). Los eventos del- que el
+          //    trigger trg_excuse_delete_audit inserta por cada excusa borrada se
+          //    retiran EN EL MISMO lote (procedimiento R62 — la cadena HMAC queda
+          //    intacta; los eventos EXCUSE_* legítimos permanecen como evidencia).
+          const delEvents = excuseIds.map(id => env.DB.prepare(
+            `DELETE FROM audit_logs WHERE event_type = ?`
+          ).bind(`del-${id}`));
+          const batchStmts = [
+            env.DB.prepare(`DELETE FROM attendance_records WHERE student_code = ?`).bind(dCode),
+            env.DB.prepare(`DELETE FROM student_excuses WHERE student_code = ?`).bind(dCode),
+            ...delEvents,
+            env.DB.prepare(`DELETE FROM push_subscriptions WHERE student_code = ?`).bind(dCode),
+            env.DB.prepare(`DELETE FROM students WHERE code = ?`).bind(dCode)
+          ];
+          const batchRes = await env.DB.batch(batchStmts);
+          batchRes.forEach((r: any, i: number) => {
+            const labels = ['attendance_records', 'student_excuses', ...excuseIds.map(() => 'audit_del_events'), 'push_subscriptions', 'students'];
+            const key = labels[i] || `stmt_${i}`;
+            changes[key] = (changes[key] || 0) + ((r as any)?.meta?.changes ?? 0);
+          });
+
+          // 3. Snapshot: ficha + horario personal + records propios + tombstone (CAS).
+          const writtenAt = await casWriteSnapshot(env, dSchool, (prev, row) => {
+            const students = (Array.isArray(prev?.students) ? prev.students : []).filter((s: any) => s && String(s.code) !== dCode);
+            const records = (Array.isArray(prev?.records) ? prev.records : []).filter((r: any) => !r || String(r.studentCode) !== dCode);
+            let schedules = prev?.studentSchedules;
+            if (schedules && typeof schedules === 'object' && !Array.isArray(schedules)) {
+              schedules = Object.fromEntries(Object.entries(schedules).filter(([k]) => k !== dCode));
+            }
+            const tombstones = mergeTombstones(
+              Array.isArray(prev?.tombstones) ? prev.tombstones : [],
+              [{ id: dCode, type: 'student', deletedAt: new Date().toISOString() }]
+            );
+            return {
+              data: { ...(prev || {}), students, records, studentSchedules: schedules, tombstones },
+              studentsCount: students.length,
+              recordsCount: records.length,
+              schoolName: row?.school_name || env.SCHOOL_NAME || ''
+            };
+          });
+          if (!writtenAt) {
+            return errorResponse('D1 eliminado, pero el snapshot no se pudo actualizar por contención. Reintenta en unos segundos (los datos D1 ya están borrados).', 503, { partial: true, d1: changes });
+          }
+
+          // 4. Releer snapshot + reflexión KV + índice de estudiantes sin la ficha.
+          const snapRow = await env.DB.prepare(
+            `SELECT data_json, updated_at FROM sync_snapshots WHERE id = ?`
+          ).bind(`snapshot_${dSchool}`).first<{ data_json: string; updated_at: string }>();
+          const freshSnap = safeJsonParse(snapRow?.data_json || 'null');
+          if (env.ATTENDANCE_KV && freshSnap) {
+            await reflectSnapshotToKV(env, dSchool, {
+              syncedAt: snapRow?.updated_at || writtenAt,
+              studentsCount: Array.isArray(freshSnap.students) ? freshSnap.students.length : 0,
+              recordsCount: Array.isArray(freshSnap.records) ? freshSnap.records.length : 0,
+              data: freshSnap
+            });
+            try {
+              const idx = await env.ATTENDANCE_KV.get(`students_index_${dSchool}`, 'json') as any;
+              if (idx && idx[dCode]) {
+                delete idx[dCode];
+                await env.ATTENDANCE_KV.put(`students_index_${dSchool}`, JSON.stringify(idx));
+              }
+            } catch { /* índice best-effort */ }
+          }
+
+          // 5. Versión + logs + auditoría (DESPUÉS de borrar: el evento documenta lo borrado).
+          const newVer = await bumpCatalogVersion(env, dSchool, device.deviceId, 'ADMIN');
+          await logDeviceSync(env, {
+            deviceId: device.deviceId, deviceName: device.deviceName, role: 'ADMIN',
+            action: 'STUDENT_CASCADE_DELETED', schoolCode: dSchool, catalogVersion: newVer,
+            studentsCount: -1, recordsCount: -(changes['attendance_records'] || 0), details: auditDetails
+          });
+          try {
+            await env.DB.prepare(
+              `INSERT INTO audit_logs (id, event_type, performed_by, ip_address, details_json, created_at)
+               VALUES (?, 'STUDENT_CASCADE_DELETED', ?, ?, ?, datetime('now'))`
+            ).bind(
+              `casc_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+              performedBy, dIp, JSON.stringify(auditDetails)
+            ).run();
+          } catch { /* auditoría best-effort */ }
+
+          return jsonResponse({
+            success: true,
+            message: `Estudiante ${dCode} eliminado en cascada: ${changes['attendance_records'] || 0} registro(s) de asistencia, ${changes['student_excuses'] || 0} excusa(s), ${changes['push_subscriptions'] || 0} suscripción(es) push y la fila del catálogo D1. El snapshot, el índice KV y la versión de catálogo quedaron actualizados.`,
+            d1: changes,
+            catalogVersion: newVer,
+            note: 'La cuenta de acceso Firebase debe eliminarse desde el cliente (provisioner con la clave conocida) — el Worker no usa la Service Account (Regla 7).',
+            timestamp: new Date().toISOString()
+          });
+        }
+
+        // ---- Docente ----
+        if (dType === 'teacher') {
+          const batchRes = await env.DB.batch([
+            env.DB.prepare(`DELETE FROM schedule_assignments WHERE teacher_id = ?`).bind(dCode),
+            env.DB.prepare(`DELETE FROM teachers WHERE id = ?`).bind(dCode)
+          ]);
+          batchRes.forEach((r: any, i: number) => {
+            const labels = ['schedule_assignments', 'teachers'];
+            changes[labels[i]] = (r as any)?.meta?.changes ?? 0;
+          });
+
+          const writtenAt = await casWriteSnapshot(env, dSchool, (prev, row) => {
+            const teachers = (Array.isArray(prev?.teachers) ? prev.teachers : []).filter((t: any) => t && String(t.id) !== dCode);
+            const assignments = (Array.isArray(prev?.assignments) ? prev.assignments : []).filter((a: any) => !a || String(a.teacherId) !== dCode);
+            const tombstones = mergeTombstones(
+              Array.isArray(prev?.tombstones) ? prev.tombstones : [],
+              [{ id: dCode, type: 'teacher', deletedAt: new Date().toISOString() }]
+            );
+            return {
+              data: { ...(prev || {}), teachers, assignments, tombstones },
+              studentsCount: Array.isArray(prev?.students) ? prev.students.length : 0,
+              recordsCount: Array.isArray(prev?.records) ? prev.records.length : 0,
+              schoolName: row?.school_name || env.SCHOOL_NAME || ''
+            };
+          });
+          if (!writtenAt) {
+            return errorResponse('D1 eliminado, pero el snapshot no se pudo actualizar por contención. Reintenta en unos segundos.', 503, { partial: true, d1: changes });
+          }
+          const snapRow = await env.DB.prepare(
+            `SELECT data_json, updated_at FROM sync_snapshots WHERE id = ?`
+          ).bind(`snapshot_${dSchool}`).first<{ data_json: string; updated_at: string }>();
+          const freshSnap = safeJsonParse(snapRow?.data_json || 'null');
+          if (env.ATTENDANCE_KV && freshSnap) {
+            await reflectSnapshotToKV(env, dSchool, {
+              syncedAt: snapRow?.updated_at || writtenAt,
+              studentsCount: Array.isArray(freshSnap.students) ? freshSnap.students.length : 0,
+              recordsCount: Array.isArray(freshSnap.records) ? freshSnap.records.length : 0,
+              data: freshSnap
+            });
+          }
+          const newVer = await bumpCatalogVersion(env, dSchool, device.deviceId, 'ADMIN');
+          await logDeviceSync(env, {
+            deviceId: device.deviceId, deviceName: device.deviceName, role: 'ADMIN',
+            action: 'TEACHER_CASCADE_DELETED', schoolCode: dSchool, catalogVersion: newVer,
+            studentsCount: 0, recordsCount: 0, details: auditDetails
+          });
+          try {
+            await env.DB.prepare(
+              `INSERT INTO audit_logs (id, event_type, performed_by, ip_address, details_json, created_at)
+               VALUES (?, 'TEACHER_CASCADE_DELETED', ?, ?, ?, datetime('now'))`
+            ).bind(
+              `casc_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+              performedBy, dIp, JSON.stringify(auditDetails)
+            ).run();
+          } catch { /* auditoría best-effort */ }
+
+          return jsonResponse({
+            success: true,
+            message: `Docente ${dCode} eliminado en cascada: ${changes['schedule_assignments'] || 0} cátedra(s) y su ficha del catálogo. El snapshot y la versión quedaron actualizados.`,
+            d1: changes,
+            catalogVersion: newVer,
+            note: 'La cuenta de acceso Firebase debe eliminarse desde el cliente (provisioner con la clave conocida) — el Worker no usa la Service Account (Regla 7).',
+            timestamp: new Date().toISOString()
+          });
+        }
+      }
+
+      // =========================================================================
       // RUTA: REGISTRAR ASISTENCIA INDIVIDUAL EN VIVO (Escaneo instantáneo)
       // =========================================================================
       if (path === '/api/attendance' && request.method === 'POST') {
@@ -1877,6 +2275,8 @@ const KNOWN_ROUTE_METHODS: Record<string, string[]> = {
   '/api/sync/export': ['GET'],
   '/api/sync/purge': ['POST'],
   '/api/verify/class-token': ['POST'],
+  '/api/students/credential': ['POST'], // R64 (Fix A): el estudiante persiste su nueva clave en la nube
+  '/api/admin/entity/delete': ['POST'], // R64 (Fix §5): eliminación en cascada (Rectoría)
   '/api/attendance': ['POST'],
   '/api/excuses': ['GET', 'POST'],
   '/api/excuses/verify-chain': ['GET'],

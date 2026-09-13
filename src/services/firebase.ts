@@ -10,6 +10,7 @@ import {
   EmailAuthProvider,
   sendPasswordResetEmail,
   createUserWithEmailAndPassword,
+  deleteUser,
   getIdToken,
   User as FirebaseUser
 } from 'firebase/auth';
@@ -480,6 +481,107 @@ export class FirebaseService {
         const idx = getApps().findIndex(a => a.name === secondaryApp.name);
         if (idx >= 0) await deleteApp(getApps()[idx]);
       } catch { /* la limpieza del sync jamás bloquea el flujo principal */ }
+    }
+  }
+
+  /**
+   * R64 (Fix §5 — cascada): elimina la cuenta REAL de Firebase Auth de un
+   * estudiante o docente desde la sesión de Rectoría, con el patrón provisioner
+   * (instancia secundaria — la sesión de Rectoría no se toca). Requiere la
+   * CONTRASEÑA VIGENTE de la cuenta (el SDK cliente solo permite borrar la
+   * PROPIA cuenta: se firma con ella y se elimina desde esa sesión).
+   * Regla 7 respetada: el Worker NO usa la Service Account para borrar — la
+   * eliminación la ejecuta el dueño de la cuenta con su propia credencial.
+   */
+  static async deleteProvisionedAccount(email: string, password: string): Promise<{ ok: boolean; reason?: 'invalid_credential' | 'error'; message?: string }> {
+    const target = (email || '').trim().toLowerCase();
+    if (!target || !password) {
+      return { ok: false, reason: 'error', message: 'Se requieren el correo de la cuenta y su contraseña vigente.' };
+    }
+    const secondaryApp = initializeApp({
+      apiKey: firebaseConfigData.apiKey,
+      authDomain: firebaseConfigData.authDomain,
+      projectId: firebaseConfigData.projectId,
+      storageBucket: firebaseConfigData.storageBucket,
+      messagingSenderId: firebaseConfigData.messagingSenderId,
+      appId: firebaseConfigData.appId
+    }, `inas-deleter-${Date.now()}`);
+    try {
+      const secondaryAuth = getAuth(secondaryApp);
+      let cred;
+      try {
+        cred = await signInWithEmailAndPassword(secondaryAuth, target, password);
+      } catch (e: any) {
+        const code = (e && typeof e === 'object' && 'code' in e) ? String((e as any).code) : '';
+        if (code === 'auth/invalid-credential' || code === 'auth/wrong-password' || code === 'auth/invalid-login-credentials' || code === 'auth/user-not-found') {
+          return { ok: false, reason: 'invalid_credential', message: code === 'auth/user-not-found' ? 'La cuenta ya no existe en Firebase.' : 'La contraseña vigente no coincide — la cuenta NO fue eliminada.' };
+        }
+        throw e;
+      }
+      await deleteUser(cred.user);
+      return { ok: true };
+    } catch (e: any) {
+      return { ok: false, reason: 'error', message: this.mapAuthError(e) || 'No se pudo eliminar la cuenta de acceso.' };
+    } finally {
+      try {
+        const idx = getApps().findIndex(a => a.name === secondaryApp.name);
+        if (idx >= 0) await deleteApp(getApps()[idx]);
+      } catch { /* la limpieza jamás bloquea el flujo principal */ }
+    }
+  }
+
+  /**
+   * R64 (Fix A — gap docente): sincroniza la CONTRASEÑA de la cuenta de acceso de
+   * un DOCENTE cuando Rectoría edita su clave temporal. Espejo exacto de
+   * syncStudentAccountPassword (provisioner + idempotencia): firma con la VIEJA
+   * y aplica la nueva; si la vieja ya no coincide, prueba la nueva (idempotencia
+   * de re-guardados) y si no, reporta la divergencia SIN tocar nada.
+   */
+  static async syncTeacherAccountPassword(email: string, oldPassword: string, newPassword: string): Promise<{ ok: boolean; reason?: 'old_password_mismatch' | 'error'; message?: string }> {
+    const target = (email || '').trim().toLowerCase();
+    if (!target || !oldPassword || !newPassword) {
+      return { ok: false, reason: 'error', message: 'Faltan el correo, la clave vieja o la nueva.' };
+    }
+    if (newPassword.length < 6) {
+      return { ok: false, reason: 'error', message: 'La nueva clave debe tener al menos 6 caracteres (requisito de Firebase).' };
+    }
+    const secondaryApp = initializeApp({
+      apiKey: firebaseConfigData.apiKey,
+      authDomain: firebaseConfigData.authDomain,
+      projectId: firebaseConfigData.projectId,
+      storageBucket: firebaseConfigData.storageBucket,
+      messagingSenderId: firebaseConfigData.messagingSenderId,
+      appId: firebaseConfigData.appId
+    }, `inas-teacher-pw-sync-${Date.now()}`);
+    try {
+      const secondaryAuth = getAuth(secondaryApp);
+      let cred;
+      try {
+        cred = await signInWithEmailAndPassword(secondaryAuth, target, oldPassword);
+      } catch (e: any) {
+        const code = (e && typeof e === 'object' && 'code' in e) ? String((e as any).code) : '';
+        if (code === 'auth/invalid-credential' || code === 'auth/wrong-password' || code === 'auth/invalid-login-credentials') {
+          try {
+            const already = await signInWithEmailAndPassword(secondaryAuth, target, newPassword);
+            await signOut(secondaryAuth);
+            void already;
+            return { ok: true }; // idempotencia: ya estaba aplicada
+          } catch {
+            return { ok: false, reason: 'old_password_mismatch', message: 'La contraseña actual de la cuenta no coincide con la clave temporal previa registrada en la ficha.' };
+          }
+        }
+        throw e;
+      }
+      await updatePassword(cred.user, newPassword);
+      await signOut(secondaryAuth);
+      return { ok: true };
+    } catch (e: any) {
+      return { ok: false, reason: 'error', message: this.mapAuthError(e) || 'No se pudo actualizar la contraseña de la cuenta docente.' };
+    } finally {
+      try {
+        const idx = getApps().findIndex(a => a.name === secondaryApp.name);
+        if (idx >= 0) await deleteApp(getApps()[idx]);
+      } catch { /* la limpieza jamás bloquea el flujo principal */ }
     }
   }
 

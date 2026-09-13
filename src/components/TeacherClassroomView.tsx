@@ -62,7 +62,7 @@ interface TeacherClassroomViewProps {
 
 export const TeacherClassroomView: React.FC<TeacherClassroomViewProps> = ({ 
   teacher,
-  teacherName = 'Prof. Juan Pablo Pérez' 
+  teacherName = 'Docente' 
 }) => {
   const [students, setStudents] = useState<Student[]>(AttendanceStorageService.getStudents());
   const [settings, setSettings] = useState<SchoolSettings>(AttendanceStorageService.getSettings());
@@ -576,10 +576,11 @@ export const TeacherClassroomView: React.FC<TeacherClassroomViewProps> = ({
     if (!delegatedStudentCode) return;
     const std = gradeStudents.find(s => s.code === delegatedStudentCode);
     if (!std) return;
+    if (!teacher?.id) return; // R64: sin docente concreto NO hay delegación (el Escudito siempre provee uno)
 
     const del = AttendanceStorageService.createEphemeralDelegation({
-      teacherId: teacher?.id || 'prof-temp',
-      teacherName: teacher?.fullName || teacherName,
+      teacherId: teacher.id,
+      teacherName: teacher.fullName || teacherName,
       studentCode: std.code,
       studentName: `${std.firstName} ${std.lastName}`,
       grade: selectedGrade,
