@@ -404,7 +404,13 @@ export class AttendanceStorageService {
         if (cloudSettings) {
           const local = this.getSettings();
           // Ronda 29 (H-29-1): merge SIN secretos — el token correcto del dispositivo prevalece
-          const safeCloud = this.stripSecretFields(cloudSettings);
+          // R64 (fix del "409 fósil", reproducido en el E2E de cascada): este camino 1
+          // era el ÚNICO que NO aplicaba el doble strip de R60-b (M-4) — el
+          // cloudflareCatalogVersion FÓSIL del espejo Firestore (congelado en v44 el
+          // 09-11) pisaba la versión fresca del Worker tras cada pull → TODOS los
+          // pushes de terminales nuevos rebotaban una vez con 409 (v44 vs v5x) y el
+          // ciclo de auto-recuperación se disparaba en cada sincronización.
+          const safeCloud = this.stripProtocolFields(this.stripSecretFields(cloudSettings));
           // If local has empty or default worker URL but cloud has it, or if local is older
           const merged: SchoolSettings = {
             ...DEFAULT_SCHOOL_SETTINGS,
