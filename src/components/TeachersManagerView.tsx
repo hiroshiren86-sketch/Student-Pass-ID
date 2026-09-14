@@ -122,7 +122,12 @@ export const TeachersManagerView: React.FC = () => {
       assignedGrades: ['10°1', '10°2'],
       directorGrade: '',
       username: '',
-      tempPassword: `Docente${Math.floor(1000 + Math.random() * 9000)}*`
+      // R67 (§9 + REGRESIÓN 12): SIN pre-generación de patrones predecibles
+      // ("Docente1234*" era derivable por clase — misma familia que SJ-últimos4).
+      // El campo nace VACÍO: al guardar se resuelve la política (manual escrita →
+      // esa; vacía → predeterminada configurada → aleatoria segura XXXX-XXXX) y
+      // la clave resultante se MUESTRA en el modal de credenciales.
+      tempPassword: ''
     });
     setShowModal(true);
   };
@@ -232,10 +237,12 @@ export const TeachersManagerView: React.FC = () => {
       }
       showToast(`¡Docente ${formData.fullName} registrado correctamente!`);
 
-      // Ronda 33 (M2): la creación termina en una credencial REAL — se crea la cuenta
-      // de Firebase Auth (correo institucional + contraseña temporal). El docente
-      // será forzado a definir su propia contraseña en su primer ingreso.
-      await provisionAccount(newTeacher, initialTemp, true);
+      // Ronda 33 (M2) → R67 (§9): la creación termina en una credencial REAL — se
+      // crea la cuenta de Firebase Auth y el MODAL DE CREDENCIALES muestra la clave
+      // generada (manual/predeterminada/aleatoria) para comunicarla al docente.
+      // Antes: silentWhenOk=true dejaba la clave SIN mostrar (Rectoría no podía
+      // ver qué se había generado — violación del modelo §9).
+      await provisionAccount(newTeacher, initialTemp, false);
     }
 
     setShowModal(false);
