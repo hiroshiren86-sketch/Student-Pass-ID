@@ -965,16 +965,27 @@ export class CloudflareSyncService {
       }
 
       if (Array.isArray(teachers) && teachers.length > 0) {
+        // R64 (Fix §5 — hallazgo del E2E de cascada): el snapshot JAMÁS transporta la
+        // clave temporal docente (strip del push F-23). Sin preservación, el pull la
+        // borraba del terminal de Rectoría → la eliminación en cascada no podía cerrar
+        // la cuenta Firebase (sin clave vigente conocida) y el editor de fichas perdía
+        // el oldTemp de la sincronización PIN↔cuenta. Mismo fix ya aplicado a estudiantes.
+        const localTeachersByid = new Map(AttendanceStorageService.getTeachers().map(t => [String(t.id), t]));
+        const incomingTeachers = teachers.map((t: any) =>
+          (t && !t.tempPassword && localTeachersByid.has(String(t.id)))
+            ? { ...t, tempPassword: localTeachersByid.get(String(t.id))!.tempPassword }
+            : t
+        );
         if (scopedRole === 'DOCENTE') {
           // Ronda 56: upsert de SU ficha — jamás reemplazar el directorio con teachers:[1].
           const local = AttendanceStorageService.getTeachers();
-          const { result: merged, changed } = CloudflareSyncService.upsertBy(local, teachers, (t: any) => String(t.id));
+          const { result: merged, changed } = CloudflareSyncService.upsertBy(local, incomingTeachers, (t: any) => String(t.id));
           AttendanceStorageService.saveTeachers(merged, 'cloud');
-          importedTeachers = teachers.length;
+          importedTeachers = incomingTeachers.length;
           updatedTeachers = changed;
         } else {
-          AttendanceStorageService.saveTeachers(teachers, 'cloud');
-          importedTeachers = teachers.length;
+          AttendanceStorageService.saveTeachers(incomingTeachers, 'cloud');
+          importedTeachers = incomingTeachers.length;
         }
       }
 
