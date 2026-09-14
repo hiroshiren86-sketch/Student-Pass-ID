@@ -912,8 +912,28 @@ export class CloudflareSyncService {
           importedStudents = incomingStudents.length;
           updatedStudents = changed;
         } else {
-          AttendanceStorageService.saveStudents(incomingStudents, 'cloud');
+          // R64 (fix de pérdida de datos — reproducido en el E2E de cascada): el pull
+          // ADMIN REEMPLAZABA el catálogo local completo. Con ediciones pendientes de
+          // push (sello dirty activo), ese reemplazo DESTRUÍA el trabajo no publicado:
+          // la secuencia real fue push 409 (catálogo obsoleto) → pull de recuperación →
+          // el estudiante recién matriculado (aún no publicado) se BORRÓ del terminal →
+          // el retry publicó la matrícula SIN él. El invariante R57 ("lo local un
+          // poquito más adelantado no se puede pisar") ahora también aplica al camino
+          // ADMIN: UPSERT-MERGE — la nube actualiza cada ficha conocida, pero las fichas
+          // SOLO-LOCALES (creaciones pendientes de push) sobreviven hasta su publicación.
+          // Los borrados de la nube siguen aplicando por TOMBSTONES (los dos caminos
+          // de borrado los generan), y la purga total conserva su semántica documentada
+          // (los dispositivos re-publican su estado local).
+          const local = AttendanceStorageService.getStudents();
+          const localOnly = new Set(local.filter(s => s && s.code).map(s => String(s.code)));
+          for (const inc of incomingStudents) localOnly.delete(String(inc.code));
+          const { result: merged, changed } = CloudflareSyncService.upsertBy(local, incomingStudents, (s: any) => String(s.code));
+          AttendanceStorageService.saveStudents(merged, 'cloud');
           importedStudents = incomingStudents.length;
+          updatedStudents = changed;
+          if (localOnly.size > 0 && AttendanceStorageService.getLocalSyncDirty()) {
+            console.info(`[Sync Pull] ${localOnly.size} ficha(s) local(es) sin publicar preservadas (dirty activo; convergerán con el próximo push).`);
+          }
         }
       }
 
