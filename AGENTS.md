@@ -241,6 +241,20 @@ Esta sección documenta el mapa exhaustivo de comunicaciones, protocolos, plataf
 
 ## 📋 3. Bitácora de Implementaciones y Correcciones Realizadas
 
+### ✅ Ronda 65 (14/09/2026) — AUDITORÍA VISUAL CONSERVADORA (directiva del propietario): formularios de PIN alineados con el requisito real de Firebase ≥6 + mensaje honesto de auth/weak-password
+
+**Mandato del propietario:** auditoría visual conservadora guiada por esta bitácora desde la Ronda 60 en adelante, con una EXCLUSIÓN EXPLÍCITA: las credenciales aprovisionadas por API/método de bajo nivel (R37/R39/R50/R62/R64) FUNCIONAN aunque la UI no refleje su estado — NO es bug, NO se repara, NO se reasigna, NO se sincroniza; el propietario decidirá después si las regulariza desde el flujo normal. Solo se corrigen inconsistencias visuales puras (textos estáticos, labels, placeholders, mensajes de ayuda/error respaldados por validación existente); prohibido tocar lógica, validaciones, backend, Firebase, Worker, D1, KV o credenciales; prohibido hardcodear estados o simular actualizaciones de UI.
+
+**Contexto del hallazgo (confirmado por el propietario):** los formularios de registrar/editar estudiante sugerían un PIN de 4 dígitos ("Ej: 8392") cuando desde R61-b/R62/R64 está documentado que el PIN ES la contraseña de la cuenta de acceso y Firebase exige ≥6 (un PIN de 4 dígitos no puede ser contraseña de cuenta; `0000` rechazado con `auth/weak-password`, demostrado por REST y UI en R64 §3; los 80 estudiantes reales llevan PIN de 6 dígitos `000000` desde R64).
+
+**2 correcciones cosméticas aplicadas (0 lógica):**
+1. `StudentsManagerView.tsx` (form PIN, crear + editar): placeholder `Ej: 8392` → `Ej: 839274 · usa 6 o más caracteres (déjalo vacío si el estudiante no tiene PIN)`; el texto de ayuda ahora indica que si el estudiante tiene o tendrá cuenta, el PIN es también su contraseña y Firebase exige ≥6. El aviso ámbar condicionado a `hasFirebaseAccount` (R61-b.2) queda intacto.
+2. `firebase.ts` — `mapAuthError`: nuevo caso `auth/weak-password` → "La clave es demasiado corta: Firebase exige al menos 6 caracteres…". Antes caía al default "No se pudo iniciar sesión…" (engañoso en flujos de creación/sincronización: Rectoría reintentaba en vano con un PIN de 4). Mensaje respaldado por validación existente (Firebase ≥6; guard explícito en `syncTeacherAccountPassword:545`; mapeo idéntico en `changeOwnPassword:646`).
+
+**Excluidos por la directiva (solo documentados, NO tocados):** (a) indicadores visuales de cuentas aprovisionadas por API — caso conocido y aceptado para el prototipo; (b) `mockData.ts` PIN de demostración de 4 dígitos — son DATOS de semilla, no texto de UI; (c) `syncStudentAccountPassword` sin guard previo de longitud (a diferencia del docente) — alinearlo sería añadir lógica; con el fix del mapeo el error de Firebase ya se muestra honesto; (d) comentario `pdfGenerator.ts:295` "(4-6 dígitos)" — interno y exacto sobre lo que el renderizador tolera (fichas legacy/demo).
+
+**Verificación anti-regresión (protocolo R60-c, TZ=America/Bogota):** `tsc` 0 errores · `vite build` limpio 9.5s (9 chunks) · verify_ronda43 **64/64** · qa-r46-rep **40/40** · qa-r47-guard **18/18** · qa-r58-hardening **68/68** (190/190) · gate anti-regresión del bundle: `DEFAULT_QR_SECRET`/`colegio2026`/`admin2026`/`SJ-` = 0 apariciones · textos nuevos verificados en el bundle.
+
 ### ✅ Ronda 64 (13-14/09/2026) — DIRECTIVA MÁSTER: fixes A/B/C + cascada + IA + 4 bugs reales + re-rotación del legacy + 525 pruebas
 
 **Mandato del propietario (directiva maestra, autonomía total, subir todo a GitHub):** (§3) asignar contraseña `0000` a cada usuario desde la UI de Rectoría verificando persistencia y sincronización automática; (§4A) bug: cambio de contraseña del portal funcionaba en la sesión pero fallaba tras limpiar datos del navegador; (§4B) bug: el selector de roles ("Escudito") se bloqueaba o caía siempre en el mismo estudiante genérico; (§4C) consolidar los accesos duplicados migrándolos al Escudito; (§5) eliminación en cascada completa (D1+Firebase); (§6) auditoría del módulo IA/analíticas; (§7) 500+ pruebas; (§8) ciclo de 10 verificaciones consecutivas.

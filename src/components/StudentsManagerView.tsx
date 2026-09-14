@@ -840,12 +840,12 @@ export const StudentsManagerView: React.FC<StudentsManagerViewProps> = ({ onGene
                     type="text"
                     value={formData.accessPin}
                     onChange={(e) => setFormData({ ...formData, accessPin: e.target.value })}
-                    placeholder="Ej: 8392 (déjalo vacío si el estudiante no tiene PIN)"
+                    placeholder="Ej: 839274 · usa 6 o más caracteres (déjalo vacío si el estudiante no tiene PIN)"
                     className="w-full px-3.5 py-2.5 bg-slate-50 dark:bg-black border border-slate-200 dark:border-zinc-800/50 rounded-2xl text-xs font-mono font-bold text-indigo-600 dark:text-indigo-400 focus:ring-2 focus:ring-indigo-500 focus:outline-none"
                     autoComplete="off"
                   />
                   <p className="text-[10px] text-slate-400 leading-tight">
-                    El PIN es la clave que el estudiante usa para entrar a su portal. Si lo dejas vacío, el carné impreso mostrará "Solicitar en Rectoría" como estado vacío claro. Nunca se deriva automáticamente del documento.
+                    El PIN es la clave que el estudiante usa para entrar a su portal y, si tiene o tendrá cuenta de acceso, es también la contraseña de esa cuenta: Firebase exige 6 o más caracteres (un PIN de 4 dígitos no podrá usarse para crear la cuenta). Si lo dejas vacío, el carné impreso mostrará "Solicitar en Rectoría" como estado vacío claro. Nunca se deriva automáticamente del documento.
                   </p>
                   {editingStudent?.hasFirebaseAccount && (
                     <p className="text-[10px] text-amber-600 dark:text-amber-400 leading-tight font-bold">

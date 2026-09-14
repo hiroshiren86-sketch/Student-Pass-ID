@@ -266,6 +266,10 @@ export class FirebaseService {
         return 'Esta cuenta está deshabilitada. Contacte a Rectoría.';
       case 'auth/email-already-in-use':
         return 'Ya existe una cuenta con ese correo. Use "Crear cuenta" solo para docentes sin acceso.';
+      case 'auth/weak-password':
+        // R64 §3 (demostrado: Firebase rechaza 0000 con auth/weak-password): el mensaje
+        // honesto del requisito real, en lugar del default engañoso de "iniciar sesión".
+        return 'La clave es demasiado corta: Firebase exige al menos 6 caracteres. Use 6 o más caracteres e intente de nuevo.';
       default:
         return 'No se pudo iniciar sesión. Intente de nuevo o contacte a Rectoría.';
     }
