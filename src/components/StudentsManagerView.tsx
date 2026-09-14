@@ -253,6 +253,17 @@ export const StudentsManagerView: React.FC<StudentsManagerViewProps> = ({ onGene
       // clave vieja + login roto en dispositivos limpios + portal sin vía de escape.
       const oldPin = (editingStudent.tempPassword || '').trim();
       const newPin = formData.accessPin.trim();
+      if (newPin && newPin !== oldPin) {
+        // R66 (fix del reverso silencioso): el verifier del PIN nuevo se publica en
+        // la nube YA, por el camino ADMIN del /api/students/credential (CAS directo,
+        // sin esperar al push). Sin esto, el pull de recuperación de un 409 podía
+        // traer un verifier divergente y la regla de credencial fresca del push lo
+        // preservaba — revirtiendo el cambio de Rectoría en la nube (reproducido).
+        // Fire-and-forget honesto: si falla, el push de catálogo lo publica.
+        void CloudflareSyncService.setStudentPinVerifierInCloud(editingStudent.code, newPin).then((r) => {
+          if (!r.ok) console.warn('[R66] Verifier directo no publicado (el push lo publicará):', r.message);
+        });
+      }
       if (editingStudent.hasFirebaseAccount && newPin && newPin !== oldPin) {
         const sync = await FirebaseService.syncStudentAccountPassword(editingStudent.code, oldPin, newPin);
         if (sync.ok) {
@@ -363,6 +374,12 @@ export const StudentsManagerView: React.FC<StudentsManagerViewProps> = ({ onGene
         hasFirebaseAccount: true,
         authEmail: result.email,
         authUid: result.uid
+      });
+      // R66: la cuenta nace con el PIN del carné como contraseña → el verifier de
+      // la ficha en la nube debe ser HMAC(PIN) desde YA (mismo CAS directo del
+      // cambio de PIN — evita la ventana de desfase con el push).
+      void CloudflareSyncService.setStudentPinVerifierInCloud(student.code, accessKey).then((r) => {
+        if (!r.ok) console.warn('[R66] Verifier de cuenta nueva no publicado (el push lo publicará):', r.message);
       });
       refreshList();
       setToastMessage(`Cuenta de acceso creada para ${student.firstName} ${student.lastName}. El estudiante ya puede entrar desde su teléfono con su código y clave del carné.`);

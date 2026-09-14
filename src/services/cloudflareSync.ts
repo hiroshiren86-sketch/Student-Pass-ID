@@ -754,6 +754,42 @@ export class CloudflareSyncService {
   }
 
   /**
+   * R66 (fix del reverso silencioso del PIN de Rectoría): registra en la nube el
+   * VERIFICADOR del PIN que Rectoría acaba de asignar — CAS directo por el camino
+   * ADMIN del /api/students/credential, SIN esperar al push de catálogo. Motivo
+   * (reproducido en E2E): el pull de recuperación de un 409 podía traer un
+   * verifier divergente (p. ej. el de una clave que el estudiante cambió desde el
+   * portal) y la regla de credencial fresca del push lo PRESERVABA — revirtiendo
+   * el cambio de PIN de Rectoría en la nube aunque la cuenta Firebase ya hubiera
+   * quedado sincronizada → ficha desfaseada = la trampa otra vez. Rectoría es la
+   * autoridad de la ficha: este camino no exige la clave anterior.
+   */
+  static async setStudentPinVerifierInCloud(studentCode: string, newPin: string): Promise<{ ok: boolean; message?: string }> {
+    const baseUrl = this.getWorkerBaseUrl();
+    if (!baseUrl) {
+      return { ok: false, message: 'URL del Worker no configurada' };
+    }
+    try {
+      const res = await fetch(`${baseUrl.replace(/\/+$/, '')}/api/students/credential`, {
+        method: 'POST',
+        headers: await this.workerHeaders(true),
+        body: JSON.stringify({
+          schoolCode: AttendanceStorageService.getSettings().schoolCode || 'INAS_2026',
+          studentCode,
+          newPassword: newPin
+        })
+      });
+      const json: any = await res.json().catch(() => null);
+      if (!res.ok) {
+        return { ok: false, message: json?.error || `La nube no aceptó el PIN de la ficha (HTTP ${res.status}).` };
+      }
+      return { ok: true, message: json?.message };
+    } catch {
+      return { ok: false, message: 'Sin conexión con la nube: el push de catálogo publicará el verifier cuando haya red.' };
+    }
+  }
+
+  /**
    * R64 (Fix A): el estudiante actualiza el VERIFICADOR de SU clave en la nube vía
    * /api/students/credential (Worker). Se llama DESPUÉS de que Firebase Auth ya
    * quedó actualizado (changeOwnPassword o provisioner): hace converger el

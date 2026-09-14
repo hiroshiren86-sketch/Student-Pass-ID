@@ -1807,14 +1807,25 @@ async function handleRoute(request: Request, env: Env, ctx: ExecutionContext): P
         //     la prueba de propiedad es conocer la CLAVE ACTUAL (verificación del
         //     verifier abajo + rate limit 10/hora/IP). Conocer la clave vigente es
         //     la prueba definitiva de que el verificador le pertenece a quien lo cambia.
+        // R66 (fix del reverso silencioso): TERCER camino — RECTORÍA (token ADMIN o
+        //   identidad ADMIN con token de terminal, F-5a). Cuando Rectoría cambia el
+        //   PIN de una ficha, el verifier nuevo debe llegar a la nube YA (CAS directo)
+        //   y no esperar al push: el pull de recuperación de un 409 podía traer un
+        //   verifier divergente (p. ej. el de un cambio de clave que el estudiante
+        //   hizo desde el portal) y la regla de credencial fresca del push lo
+        //   PRESERVABA — revirtiendo el cambio de PIN de Rectoría en la nube aunque
+        //   Firebase ya quedara sincronizado (ficha desfaseada = trampa de nuevo).
+        //   Rectoría es la autoridad de la ficha: escribe el verifier sin exigir la
+        //   clave anterior. Sin rate-limit de estudiante (las jornadas de
+        //   matriculación editan fichas en rafaga).
         const isStudentIdentity = authz.source === 'identity' && authz.role === 'ESTUDIANTE_ACUDIENTE' && !!authz.linkedStudentCode;
-        if (!isStudentIdentity && authz.role === 'ADMIN' && authz.source === 'identity' && !authz.linkedStudentCode) {
-          // Una identidad ADMIN (Rectoría) no cambia verificadores por esta vía:
-          // su flujo es el push de catálogo. Se rechaza para evitar ambigüedad.
-          return errorResponse('Rectoría cambia las claves desde el catálogo (push). Esta ruta es del propio estudiante.', 403);
+        const isAdminCredentialSet = !isStudentIdentity && authz.role === 'ADMIN'
+          && (authz.source === 'token' || authz.canWriteCatalog === true);
+        if (!isStudentIdentity && !isAdminCredentialSet) {
+          return errorResponse('Esta ruta es del propio estudiante o de Rectoría (gestión de fichas).', 403);
         }
         const cIp = clientIp(request);
-        if (await d1RateLimited(env, `pwchg:${cIp}`, 10, 60 * 60 * 1000)) {
+        if (!isAdminCredentialSet && await d1RateLimited(env, `pwchg:${cIp}`, 10, 60 * 60 * 1000)) {
           return errorResponse('Demasiados cambios de clave desde esta red. Espera una hora e intenta de nuevo.', 429);
         }
         let cBody: any;
@@ -1826,7 +1837,14 @@ async function handleRoute(request: Request, env: Env, ctx: ExecutionContext): P
         const cSchool = String(cBody?.schoolCode || env.SCHOOL_CODE || 'INAS-ANTONIA-SANTOS-2026');
         const currentPassword = String(cBody?.currentPassword || '');
         const newPassword = String(cBody?.newPassword || '');
-        if (!currentPassword || newPassword.length < 6) {
+        if (isAdminCredentialSet) {
+          // Rectoría: solo necesita la nueva (el PIN de la ficha). Puede ser < 6:
+          // los PINes de fichas SIN cuenta de acceso también tienen verifier (login
+          // local) y no pasan por Firebase.
+          if (!newPassword) {
+            return errorResponse('Falta el PIN nuevo de la ficha (campo newPassword).', 400);
+          }
+        } else if (!currentPassword || newPassword.length < 6) {
           return errorResponse('Se requieren la clave actual y la nueva (mínimo 6 caracteres — límite de Firebase Auth).', 400);
         }
         const selfCode = String(isStudentIdentity ? authz.linkedStudentCode : (cBody?.studentCode || '')).trim();
@@ -1863,9 +1881,10 @@ async function handleRoute(request: Request, env: Env, ctx: ExecutionContext): P
         // acepta la realineación: el cliente solo llama DESPUÉS de que
         // changeOwnPassword validó la clave actual contra Firebase — o sea, el
         // solicitante ya demostró ser el dueño de la cuenta. El CAS estricto se
-        // mantiene íntegro para el camino de token de operador.
+        // mantiene íntegro para el camino de token de operador. RECTORÍA no pasa
+        // por aquí: es la autoridad de la ficha (camino isAdminCredentialSet).
         let realigned = false;
-        if (ficha.tempPasswordVerifier) {
+        if (!isAdminCredentialSet && ficha.tempPasswordVerifier) {
           const currentVerify = await hmacHex(loginKey, currentPassword);
           if (currentVerify !== String(ficha.tempPasswordVerifier)) {
             if (!isStudentIdentity) {
@@ -1876,13 +1895,19 @@ async function handleRoute(request: Request, env: Env, ctx: ExecutionContext): P
         }
         const newVerifier = await hmacHex(loginKey, newPassword);
 
+        // R66: el camino de Rectoría NO toca hasCustomPassword (bandera del cambio
+        // voluntario del estudiante desde el portal); solo fija el verifier del PIN
+        // que la ficha ahora registra. El camino del estudiante la mantiene como
+        // estaba (true — comportamiento R64).
         const writtenAt = await casWriteSnapshot(env, cSchool, (prev, row) => {
           const students = Array.isArray(prev?.students) ? prev.students : [];
           const nextStudents = students.map((s: any) => {
             if (!s || String(s.code) !== selfCode) return s;
             const { tempPassword: _tp, ...rest } = s;
             void _tp;
-            return { ...rest, tempPasswordVerifier: newVerifier, hasCustomPassword: true };
+            return isAdminCredentialSet
+              ? { ...rest, tempPasswordVerifier: newVerifier }
+              : { ...rest, tempPasswordVerifier: newVerifier, hasCustomPassword: true };
           });
           return {
             data: { ...(prev || {}), students: nextStudents },
@@ -1909,12 +1934,15 @@ async function handleRoute(request: Request, env: Env, ctx: ExecutionContext): P
             data: freshSnap
           });
         }
-        const newVer = await bumpCatalogVersion(env, cSchool, `identity-${authz.uid}`, 'ESTUDIANTE_ACUDIENTE');
+        const actorId = isAdminCredentialSet
+          ? (authz.source === 'identity' ? `identity-${authz.uid}` : `terminal-${cIp}`)
+          : `identity-${authz.uid}`;
+        const newVer = await bumpCatalogVersion(env, cSchool, actorId, isAdminCredentialSet ? 'ADMIN' : 'ESTUDIANTE_ACUDIENTE');
         await logDeviceSync(env, {
-          deviceId: `identity-${authz.uid}`,
-          deviceName: 'Portal Estudiantil (cambio de clave)',
-          role: 'ESTUDIANTE_ACUDIENTE',
-          action: 'STUDENT_CREDENTIAL_UPDATE',
+          deviceId: actorId,
+          deviceName: isAdminCredentialSet ? 'Rectoría (asignación de PIN de ficha)' : 'Portal Estudiantil (cambio de clave)',
+          role: isAdminCredentialSet ? 'ADMIN' : 'ESTUDIANTE_ACUDIENTE',
+          action: isAdminCredentialSet ? 'STUDENT_CREDENTIAL_ADMIN_SET' : 'STUDENT_CREDENTIAL_UPDATE',
           schoolCode: cSchool,
           catalogVersion: newVer,
           studentsCount: 0,
@@ -1924,20 +1952,22 @@ async function handleRoute(request: Request, env: Env, ctx: ExecutionContext): P
         try {
           await env.DB.prepare(
             `INSERT INTO audit_logs (id, event_type, performed_by, ip_address, details_json, created_at)
-             VALUES (?, 'STUDENT_CREDENTIAL_UPDATE', ?, ?, ?, datetime('now'))`
+             VALUES (?, ?, ?, ?, ?, datetime('now'))`
           ).bind(
             `pwchg_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
-            `identity-${authz.uid}`,
+            actorId,
             cIp,
-            JSON.stringify({ studentCode: selfCode, catalogVersion: newVer })
+            JSON.stringify({ studentCode: selfCode, catalogVersion: newVer, adminPath: isAdminCredentialSet })
           ).run();
         } catch { /* auditoría best-effort */ }
 
         return jsonResponse({
           success: true,
-          message: realigned
-            ? 'Tu nueva clave quedó alineada con la nube (la ficha tenía una clave desfasada — ya quedó corregida).'
-            : 'Tu nueva clave ya está registrada en la nube: funcionará en cualquier dispositivo, incluso tras limpiar los datos del navegador.',
+          message: isAdminCredentialSet
+            ? 'El PIN nuevo de la ficha quedó registrado en la nube (verifier actualizado por Rectoría).'
+            : realigned
+              ? 'Tu nueva clave quedó alineada con la nube (la ficha tenía una clave desfasada — ya quedó corregida).'
+              : 'Tu nueva clave ya está registrada en la nube: funcionará en cualquier dispositivo, incluso tras limpiar los datos del navegador.',
           realigned,
           catalogVersion: newVer,
           timestamp: new Date().toISOString()
