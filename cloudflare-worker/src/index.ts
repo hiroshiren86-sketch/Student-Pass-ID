@@ -19,6 +19,13 @@ import {
 import { corsBaseHeaders, corsPreflightResponse, withCorsHeaders } from './cors';
 // Ronda 60: verificación server-side de tarjetas de clase (portales sin secret).
 import { verifyClassToken } from './verifyToken';
+// R67: cliente REST de Firebase Identity Toolkit v2 (Admin) con la SA del Worker —
+// SOLO para restablecer contraseña de cuentas existentes, eliminar en cascada e
+// inventario de solo lectura (Regla 7 actualizada por la directiva del 15/09/2026).
+import {
+  getSaAdminAccessToken, itkQueryAccounts, itkGetAccountByEmail,
+  itkUpdateAccountPassword, itkDeleteAccount, type ItkAccount
+} from './firebaseAdmin';
 
 // Re-export de compatibilidad: las suites QA (qa-r49-identity.ts) y herramientas
 // importan estas primitivas desde './index'.
@@ -1063,14 +1070,89 @@ async function handleRoute(request: Request, env: Env, ctx: ExecutionContext): P
                 mergedRecords = stampServerVersion(records); // sin previo: todos los entrantes son ganadores
                 mergedTombstones = Array.isArray(data.tombstones) ? data.tombstones : [];
               }
+              // =====================================================================
+              // R67 (§18/§19) — MERGE LWW DE CREDENCIALES POR TIMESTAMP EXPLÍCITO.
+              // Reemplaza la heurística del cliente ("si el verifier existe y el PIN
+              // local cambió, supongamos que el verifier es más reciente" — R64/R66,
+              // que podía descartar un cambio administrativo legítimo). Ahora la
+              // autoridad es el par credentialUpdatedAt/credentialActor del snapshot:
+              // si la ficha YA PUBLICADA en la nube tiene un sello de credencial MÁS
+              // RECIENTE que el que trae el payload del terminal que empuja, los
+              // campos de credencial de la nube GANAN (un cambio de clave hecho por
+              // Rectoría con reset, o por el estudiante desde el portal, no puede ser
+              // revertido por el push de un terminal con la ficha desfasada).
+              // Regla de desempate: sin sello en el incoming (fichas pre-R67 o
+              // terminales viejos) → el sello de la nube gana SIEMPRE que exista
+              // (las fichas pre-R67 no pueden alegar ser más nuevas que nada).
+              // =====================================================================
+              const prevStudentsByCode = new Map<string, any>(
+                (Array.isArray(prev?.students) ? prev.students : [])
+                  .filter((s: any) => s && s.code)
+                  .map((s: any) => [String(s.code), s])
+              );
+              const CRED_FIELDS = ['tempPasswordVerifier', 'loginKey', 'hasCustomPassword', 'credentialUpdatedAt', 'credentialActor'];
+              const ACCT_FIELDS_S = ['authUid', 'authEmail', 'hasFirebaseAccount'];
+              const mergedStudents = (Array.isArray(data.students) ? data.students : []).map((s: any) => {
+                if (!s || typeof s !== 'object' || !s.code) return s;
+                const cloudFicha = prevStudentsByCode.get(String(s.code));
+                if (!cloudFicha) return s; // ficha nueva: entra tal cual
+                const cloudStamp = typeof cloudFicha.credentialUpdatedAt === 'string' ? cloudFicha.credentialUpdatedAt : '';
+                const inStamp = typeof (s as any).credentialUpdatedAt === 'string' ? (s as any).credentialUpdatedAt : '';
+                const cloudWins = cloudStamp && (!inStamp || cloudStamp > inStamp);
+                let out: any = s;
+                if (cloudWins) {
+                  // La nube tiene una credencial más reciente: preservar SUS campos.
+                  out = { ...s };
+                  for (const f of CRED_FIELDS) {
+                    if (cloudFicha[f] !== undefined) out[f] = cloudFicha[f];
+                    else delete out[f];
+                  }
+                }
+                // Espejo de identidad (igual que docentes): un terminal desfasado no
+                // borra la cuenta provisionada por otra terminal.
+                if (cloudFicha.hasFirebaseAccount === true) {
+                  let mirrorFixed = false;
+                  for (const f of ACCT_FIELDS_S) {
+                    if ((out[f] === undefined || out[f] === false || out[f] === null) && cloudFicha[f] !== undefined) {
+                      if (!mirrorFixed) { out = { ...out }; mirrorFixed = true; }
+                      out[f] = cloudFicha[f];
+                    }
+                  }
+                }
+                return out;
+              });
+              // R67 (espejo de identidad): un push de un terminal desfasado tampoco
+              // puede BORRAR el espejo de cuenta (authUid/authEmail/hasFirebaseAccount)
+              // que otra terminal provisionó — la nube lo conserva si el incoming no
+              // lo tiene o lo trae apagado sin sello de baja.
+              const prevTeachersById = new Map<string, any>(
+                (Array.isArray(prev?.teachers) ? prev.teachers : [])
+                  .filter((t: any) => t && t.id)
+                  .map((t: any) => [String(t.id), t])
+              );
+              const ACCT_FIELDS = ['authUid', 'authEmail', 'hasFirebaseAccount'];
+              const mergedTeachers = (Array.isArray(data.teachers) ? data.teachers : []).map((t: any) => {
+                if (!t || typeof t !== 'object' || !t.id) return t;
+                const cloudFicha = prevTeachersById.get(String(t.id));
+                if (!cloudFicha || cloudFicha.hasFirebaseAccount !== true) return t;
+                const preserved: any = { ...t };
+                for (const f of ACCT_FIELDS) {
+                  if (preserved[f] === undefined || preserved[f] === false || preserved[f] === null) {
+                    if (cloudFicha[f] !== undefined) preserved[f] = cloudFicha[f];
+                  }
+                }
+                return preserved;
+              });
               const snapshotData = stripSnapshotCredentials({   // F-23
                 ...data,
+                ...(Array.isArray(data.students) ? { students: mergedStudents } : {}),
+                ...(Array.isArray(data.teachers) ? { teachers: mergedTeachers } : {}),
                 records: mergedRecords,
                 tombstones: mergedTombstones
               });
               return {
                 data: snapshotData,
-                studentsCount: students.length,
+                studentsCount: Array.isArray(data.students) ? mergedStudents.length : students.length,
                 recordsCount: mergedRecords.length,
                 schoolName: body.schoolName || row?.school_name || env.SCHOOL_NAME || ''
               };
@@ -1894,11 +1976,16 @@ async function handleRoute(request: Request, env: Env, ctx: ExecutionContext): P
           }
         }
         const newVerifier = await hmacHex(loginKey, newPassword);
+        const credStamp = new Date().toISOString();
+        const credActor = isAdminCredentialSet ? 'rectoria-pin-edit' : `student:${selfCode}`;
 
         // R66: el camino de Rectoría NO toca hasCustomPassword (bandera del cambio
         // voluntario del estudiante desde el portal); solo fija el verifier del PIN
         // que la ficha ahora registra. El camino del estudiante la mantiene como
         // estaba (true — comportamiento R64).
+        // R67 (§18/§19): TODO cambio de credencial sella credentialUpdatedAt +
+        // credentialActor — el merge LWW del push usa estos metadatos explícitos
+        // (nunca heurísticas de comparación de HMAC).
         const writtenAt = await casWriteSnapshot(env, cSchool, (prev, row) => {
           const students = Array.isArray(prev?.students) ? prev.students : [];
           const nextStudents = students.map((s: any) => {
@@ -1906,8 +1993,8 @@ async function handleRoute(request: Request, env: Env, ctx: ExecutionContext): P
             const { tempPassword: _tp, ...rest } = s;
             void _tp;
             return isAdminCredentialSet
-              ? { ...rest, tempPasswordVerifier: newVerifier }
-              : { ...rest, tempPasswordVerifier: newVerifier, hasCustomPassword: true };
+              ? { ...rest, tempPasswordVerifier: newVerifier, credentialUpdatedAt: credStamp, credentialActor: credActor }
+              : { ...rest, tempPasswordVerifier: newVerifier, hasCustomPassword: true, credentialUpdatedAt: credStamp, credentialActor: credActor };
           });
           return {
             data: { ...(prev || {}), students: nextStudents },
@@ -1975,6 +2062,297 @@ async function handleRoute(request: Request, env: Env, ctx: ExecutionContext): P
       }
 
       // =========================================================================
+      // RUTA: /api/admin/firebase/inventory (R67 §8/§15 — SOLO LECTURA)
+      //
+      // Inventario forense de TODAS las cuentas Firebase Authentication del
+      // proyecto (identitytoolkit accounts:query paginado) cruzado contra el
+      // catálogo D1 (fichas con cuenta) y los perfiles users/{uid} de Firestore.
+      // Permite a Rectoría (y a la auditoría) ver: cuántas cuentas existen, cuáles
+      // están vinculadas a una ficha, cuáles están huérfanas, proveedores, estado
+      // y última actualización de contraseña. NO modifica NADA.
+      // =========================================================================
+      if (path === '/api/admin/firebase/inventory' && request.method === 'GET') {
+        if (!authz.canWriteCatalog) {
+          return errorResponse('Solo Rectoría (token ADMIN del terminal) puede consultar el inventario de cuentas.', 403);
+        }
+        try {
+          const accounts: ItkAccount[] = [];
+          let pageToken: string | undefined;
+          do {
+            const page = await itkQueryAccounts(env, 200, pageToken);
+            accounts.push(...page.accounts);
+            pageToken = page.nextPageToken;
+          } while (pageToken && accounts.length < 2000);
+          const snap = await loadSnapshotData(env, String(env.SCHOOL_CODE || 'INAS-ANTONIA-SANTOS-2026'));
+          const students = (snap && Array.isArray(snap.students)) ? snap.students : [];
+          const teachers = (snap && Array.isArray(snap.teachers)) ? snap.teachers : [];
+          const studentAccounts = new Map<string, any>();
+          students.forEach((s: any) => { if (s && s.hasFirebaseAccount) studentAccounts.set(String(s.authEmail || '').toLowerCase(), { code: s.code, name: `${s.firstName || ''} ${s.lastName || ''}`, authUid: s.authUid }); });
+          const teacherAccounts = new Map<string, any>();
+          teachers.forEach((t: any) => { if (t && t.hasFirebaseAccount) teacherAccounts.set(String(t.authEmail || t.email || '').toLowerCase(), { id: t.id, name: t.fullName, authUid: t.authUid }); });
+          const rows = accounts.map((a) => {
+            const email = String(a.email || '').toLowerCase();
+            const st = studentAccounts.get(email);
+            const tc = teacherAccounts.get(email);
+            return {
+              uid: a.localId,
+              email: a.email || null,
+              displayName: a.displayName || null,
+              disabled: a.disabled === true,
+              emailVerified: a.emailVerified === true,
+              providers: (a.providerUserInfo || []).map((p: any) => p.providerId),
+              hasPasswordProvider: (a.providerUserInfo || []).some((p: any) => String(p.providerId).includes('password')),
+              createdAt: a.createdAt || null,
+              lastLoginAt: a.lastLoginAt || null,
+              validSince: (a as any).validSince || null,
+              linked: st ? { type: 'student', code: st.code, name: st.name } : tc ? { type: 'teacher', id: tc.id, name: tc.name } : null
+            };
+          });
+          const orphan = rows.filter(r => !r.linked);
+          return jsonResponse({
+            success: true,
+            total: rows.length,
+            linkedStudents: rows.filter(r => r.linked?.type === 'student').length,
+            linkedTeachers: rows.filter(r => r.linked?.type === 'teacher').length,
+            orphan: orphan.length,
+            fichasStudentWithAccount: studentAccounts.size,
+            fichasTeacherWithAccount: teacherAccounts.size,
+            accounts: rows,
+            orphanEmails: orphan.map(o => o.email),
+            timestamp: new Date().toISOString()
+          });
+        } catch (e: any) {
+          return errorResponse('No se pudo leer el inventario de Firebase: ' + (e?.message || e), 502);
+        }
+      }
+
+      // =========================================================================
+      // RUTA: /api/admin/credential/reset (R67 §11/§12 — RESTABLECIMIENTO
+      // ADMINISTRATIVO sin conocer la clave anterior)
+      //
+      // Rectoría (token ADMIN o identidad ADMIN con token de terminal, F-5a)
+      // restablece la clave de acceso de estudiantes/docentes en UNA operación
+      // atómica de dos capas:
+      //   1. Firebase Authentication (la autoridad de la cuenta): identitytoolkit
+      //      accounts:update con la SA — SIN exigir la clave anterior (§11).
+      //   2. El verifier de la ficha en el snapshot D1/KV (el fallback offline):
+      //      CAS con credentialUpdatedAt/credentialActor frescos — el cambio no
+      //      puede ser revertido por un pull/push posterior (§18/§19: LWW por
+      //      timestamp explícito, no heurísticas).
+      //
+      // Para fichas SIN cuenta Firebase, el reset aplica solo la capa 2 (la clave
+      // de ficha del login local). Para docentes sin cuenta, se informa 'no_account'
+      // (su login es únicamente Firebase — la ficha no autentica nada).
+      //
+      // targets: [{code, password}] — máx. 10 por petición (límite de subrequests
+      // del Worker); el cliente itera en fragmentos y reporta progreso. La
+      // contraseña viaja por HTTPS y NUNCA se persiste (solo su HMAC en D1).
+      // =========================================================================
+      if (path === '/api/admin/credential/reset' && request.method === 'POST') {
+        if (!authz.canWriteCatalog) {
+          return errorResponse('Solo Rectoría (token ADMIN del terminal) puede restablecer claves de acceso.', 403);
+        }
+        const rIp = clientIp(request);
+        // Límite generoso: 240 resets/hora por IP (una jornada de matriculación con
+        // fragmentos de 10 → 24 peticiones para 80+ usuarios).
+        if (await d1RateLimited(env, `credreset:${rIp}`, 240, 60 * 60 * 1000)) {
+          return errorResponse('Límite de restablecimientos alcanzado (240 por hora desde esta red). Espera antes de reintentar.', 429);
+        }
+        let rBody: any;
+        try {
+          rBody = await request.json() as any;
+        } catch {
+          return errorResponse('Cuerpo inválido: se espera JSON { schoolCode, type, targets: [{code, password}] }.', 400);
+        }
+        const rSchool = String(rBody?.schoolCode || env.SCHOOL_CODE || 'INAS-ANTONIA-SANTOS-2026');
+        const rType = rBody?.type === 'teacher' ? 'teacher' : rBody?.type === 'student' ? 'student' : null;
+        const rawTargets = Array.isArray(rBody?.targets) ? rBody.targets : [];
+        const actorLabel = (typeof rBody?.performedBy === 'string' && rBody.performedBy.trim()) ? rBody.performedBy.trim().slice(0, 120) : 'RECTORIA';
+        if (!rType) {
+          return errorResponse('Se requiere type ("student"|"teacher").', 400);
+        }
+        if (rawTargets.length === 0 || rawTargets.length > 10) {
+          return errorResponse('targets debe traer entre 1 y 10 objetivos por petición (el cliente itera en fragmentos).', 400);
+        }
+        const targets = rawTargets.map((t: any) => ({ code: String(t?.code || '').trim(), password: String(t?.password || '') }));
+        for (const t of targets) {
+          if (!t.code) return errorResponse('Cada target necesita code.', 400);
+          if (t.password.length < 6 || t.password.length > 4096) {
+            return errorResponse(`La clave de ${t.code} debe tener entre 6 y 4096 caracteres (requisito de Firebase Auth).`, 400);
+          }
+        }
+        const snap = await loadSnapshotData(env, rSchool);
+        if (!snap) {
+          return errorResponse('La nube no tiene catálogo para este colegio.', 404);
+        }
+        const nowIso = new Date().toISOString();
+        const results: Array<{ code: string; ok: boolean; mode?: string; error?: string }> = [];
+        // Resolver uid por target (ficha.authUid o lookup por email).
+        const resolved: Array<{ code: string; password: string; uid: string | null; hasAccount: boolean; email?: string }> = [];
+        if (rType === 'student') {
+          const byCode = new Map<string, any>((Array.isArray(snap.students) ? snap.students : []).filter((s: any) => s && s.hasFirebaseAccount).map((s: any) => [String(s.code), s]));
+          for (const t of targets) {
+            const ficha = byCode.get(t.code);
+            if (!ficha) {
+              // ficha sin cuenta: reset de ficha (login local) — capa 2 solamente.
+              const exists = (Array.isArray(snap.students) ? snap.students : []).some((s: any) => s && String(s.code) === t.code);
+              results.push(exists
+                ? { code: t.code, ok: true, mode: 'verifier-only' }
+                : { code: t.code, ok: false, error: 'La ficha no existe en el catálogo.' });
+              if (exists) resolved.push({ code: t.code, password: t.password, uid: null, hasAccount: false });
+              continue;
+            }
+            let uid = ficha.authUid ? String(ficha.authUid) : null;
+            const email = ficha.authEmail ? String(ficha.authEmail).toLowerCase() : null;
+            if (!uid && email) {
+              try {
+                const acc = await itkGetAccountByEmail(env, email);
+                uid = acc ? acc.localId : null;
+              } catch (e: any) {
+                results.push({ code: t.code, ok: false, error: 'No se pudo resolver la cuenta de Firebase: ' + (e?.message || e) });
+                continue;
+              }
+            }
+            if (!uid) {
+              results.push({ code: t.code, ok: false, error: 'Ficha marcada con cuenta pero sin uid ni correo resoluble.' });
+              continue;
+            }
+            resolved.push({ code: t.code, password: t.password, uid, hasAccount: true, email: email || undefined });
+          }
+        } else {
+          const byId = new Map<string, any>((Array.isArray(snap.teachers) ? snap.teachers : []).filter((t: any) => t && t.hasFirebaseAccount).map((t: any) => [String(t.id), t]));
+          for (const t of targets) {
+            const ficha = byId.get(t.code);
+            if (!ficha) {
+              const exists = (Array.isArray(snap.teachers) ? snap.teachers : []).some((x: any) => x && String(x.id) === t.code);
+              results.push(exists
+                ? { code: t.code, ok: true, mode: 'no_account' }
+                : { code: t.code, ok: false, error: 'La ficha del docente no existe en el catálogo.' });
+              continue;
+            }
+            let uid = ficha.authUid ? String(ficha.authUid) : null;
+            const email = String(ficha.authEmail || ficha.email || '').toLowerCase();
+            if (!uid && email) {
+              try {
+                const acc = await itkGetAccountByEmail(env, email);
+                uid = acc ? acc.localId : null;
+              } catch (e: any) {
+                results.push({ code: t.code, ok: false, error: 'No se pudo resolver la cuenta de Firebase: ' + (e?.message || e) });
+                continue;
+              }
+            }
+            if (!uid) {
+              results.push({ code: t.code, ok: false, error: 'Ficha marcada con cuenta pero sin uid ni correo resoluble.' });
+              continue;
+            }
+            resolved.push({ code: t.code, password: t.password, uid, hasAccount: true, email: email || undefined });
+          }
+        }
+        // Capa 1 — Firebase Auth (solo cuentas existentes).
+        for (const t of resolved) {
+          if (!t.hasAccount || !t.uid) continue;
+          try {
+            await itkUpdateAccountPassword(env, t.uid, t.password);
+            results.push({ code: t.code, ok: true, mode: 'account+verifier' });
+          } catch (e: any) {
+            const msg = String(e?.message || e);
+            const userNotFound = /USER_NOT_FOUND|not found/i.test(msg);
+            if (userNotFound) {
+              results.push({ code: t.code, ok: false, error: 'La cuenta de Firebase ya no existe (huérfana): reprovisiona la cuenta desde la ficha.' });
+            } else {
+              results.push({ code: t.code, ok: false, error: 'Firebase rechazó el restablecimiento: ' + msg });
+            }
+          }
+        }
+        // Capa 2 — verifier CAS para los targets que quedaron OK (estudiantes con
+        // ficha; incluye los verifier-only). Los docentes sin cuenta no tocan nada.
+        const okStudentTargets = resolved.filter(t => !results.find(r => r.code === t.code && !r.ok));
+        let newVer: number | null = null;
+        const stamped = okStudentTargets.filter(t => rType === 'student');
+        if (stamped.length > 0) {
+          // Pre-cómputo FUERA del CAS (la mutación debe ser síncrona): verifier
+          // por código usando la loginKey de la ficha (R59) o la derivada del
+          // qrSecret del snapshot. La loginKey es estable (solo rota con el
+          // qrSecret), así que el valor pre-computado sigue siendo válido en los
+          // reintentos del CAS.
+          const verifierByCode = new Map<string, { loginKey: string; verifier: string }>();
+          const snapStudents = Array.isArray(snap.students) ? snap.students : [];
+          const snapQrSecret = snap.settings?.qrSecret ? String(snap.settings.qrSecret) : '';
+          for (const t of stamped) {
+            const ficha = snapStudents.find((s: any) => s && String(s.code) === t.code);
+            if (!ficha) continue;
+            const loginKey = String(ficha.loginKey || '') || (snapQrSecret ? await hmacHex(snapQrSecret, `loginkey:v1:${t.code}`) : '');
+            if (!loginKey) continue;
+            verifierByCode.set(t.code, { loginKey, verifier: await hmacHex(loginKey, t.password) });
+          }
+          const writtenAt = await casWriteSnapshot(env, rSchool, (prev, row) => {
+            const students = Array.isArray(prev?.students) ? prev.students : [];
+            const nextStudents = students.map((s: any) => {
+              const v = s ? verifierByCode.get(String(s.code)) : undefined;
+              if (!s || !v) return s;
+              const { tempPassword: _tp, ...rest } = s;
+              void _tp;
+              return {
+                ...rest,
+                loginKey: v.loginKey,
+                tempPasswordVerifier: v.verifier,
+                credentialUpdatedAt: nowIso,
+                credentialActor: actorLabel
+              };
+            });
+            return {
+              data: { ...(prev || {}), students: nextStudents },
+              studentsCount: nextStudents.length,
+              recordsCount: Array.isArray(prev?.records) ? prev.records.length : 0,
+              schoolName: row?.school_name || env.SCHOOL_NAME || ''
+            };
+          });
+          if (!writtenAt) {
+            return errorResponse('Firebase quedó actualizado pero el snapshot no (contención D1). Reintenta SOLO los fallidos: los ya aplicados están en Firebase.', 503, { partial: true, results });
+          }
+          const snapRow = await env.DB.prepare(
+            `SELECT data_json, updated_at FROM sync_snapshots WHERE id = ?`
+          ).bind(`snapshot_${rSchool}`).first<{ data_json: string; updated_at: string }>();
+          const freshSnap = safeJsonParse(snapRow?.data_json || 'null') || snap;
+          if (env.ATTENDANCE_KV) {
+            await reflectSnapshotToKV(env, rSchool, {
+              syncedAt: snapRow?.updated_at || writtenAt,
+              studentsCount: Array.isArray(freshSnap.students) ? freshSnap.students.length : 0,
+              recordsCount: Array.isArray(freshSnap.records) ? freshSnap.records.length : 0,
+              data: freshSnap
+            });
+          }
+          newVer = await bumpCatalogVersion(env, rSchool, `rectoria-credreset`, 'ADMIN');
+        }
+        try {
+          await env.DB.prepare(
+            `INSERT INTO audit_logs (id, event_type, performed_by, ip_address, details_json, created_at)
+             VALUES (?, 'CREDENTIAL_ADMIN_RESET', ?, ?, ?, datetime('now'))`
+          ).bind(
+            `credreset_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+            actorLabel, rIp,
+            JSON.stringify({ type: rType, count: targets.length, ok: results.filter(r => r.ok).length, failed: results.filter(r => !r.ok).map(r => r.code), catalogVersion: newVer })
+          ).run();
+        } catch { /* auditoría best-effort */ }
+        await logDeviceSync(env, {
+          deviceId: `rectoria-credreset`, deviceName: 'Rectoría (restablecimiento de claves)', role: 'ADMIN',
+          action: 'CREDENTIAL_ADMIN_RESET', schoolCode: rSchool, catalogVersion: newVer || undefined,
+          studentsCount: 0, recordsCount: 0,
+          details: { type: rType, count: targets.length, ok: results.filter(r => r.ok).length }
+        });
+        const allOk = results.every(r => r.ok);
+        return jsonResponse({
+          success: allOk,
+          message: allOk
+            ? `${results.length} clave(s) restablecida(s) correctamente (Firebase + nube alineadas).`
+            : `${results.filter(r => r.ok).length}/${results.length} restablecida(s); revisa los fallidos (nunca se reporta éxito total con fallos presentes).`,
+          results,
+          catalogVersion: newVer,
+          timestamp: new Date().toISOString()
+        });
+      }
+
+      // =========================================================================
       // RUTA: ADMIN ENTITY DELETE (R64 — Fix §5: eliminación en cascada)
       //
       // Rectoría (terminal con token ADMIN) purga TODA la huella de un estudiante
@@ -2021,6 +2399,39 @@ async function handleRoute(request: Request, env: Env, ctx: ExecutionContext): P
 
         const changes: Record<string, number> = {};
         let auditDetails: any = { type: dType, code: dCode, performedBy };
+
+        // R67 — capturar el espejo de cuenta ANTES de que el CAS borre la ficha:
+        // la cuenta Firebase se cierra con la SA (identitytoolkit accounts:delete)
+        // de forma DETERMINISTA, sin necesitar la clave vigente (cerró la limitación
+        // R64: el provisioner cliente fallaba cuando la clave era desconocida).
+        // Regla 7 (actualizada por la directiva del 15/09/2026): eliminar cuentas
+        // EXISTENTES a petición explícita de Rectoría vía el flujo de la app está
+        // autorizado; crear cuentas con la SA sigue PROHIBIDO.
+        const preSnap = await loadSnapshotData(env, dSchool);
+        let accountUid: string | null = null;
+        let accountEmail: string | null = null;
+        if (preSnap) {
+          if (dType === 'student') {
+            const f = (Array.isArray(preSnap.students) ? preSnap.students : []).find((s: any) => s && String(s.code) === dCode);
+            if (f && f.hasFirebaseAccount) {
+              accountUid = f.authUid ? String(f.authUid) : null;
+              accountEmail = f.authEmail ? String(f.authEmail).toLowerCase() : null;
+            }
+          } else {
+            const f = (Array.isArray(preSnap.teachers) ? preSnap.teachers : []).find((t: any) => t && String(t.id) === dCode);
+            if (f && f.hasFirebaseAccount) {
+              accountUid = f.authUid ? String(f.authUid) : null;
+              accountEmail = String(f.authEmail || f.email || '').toLowerCase() || null;
+            }
+          }
+        }
+        if (!accountUid && accountEmail) {
+          try {
+            const acc = await itkGetAccountByEmail(env, accountEmail);
+            accountUid = acc ? acc.localId : null;
+          } catch { /* sin cuenta resoluble: la cascada sigue (D1/snapshot) */ }
+        }
+        auditDetails = { ...auditDetails, firebaseAccount: accountUid ? { uid: accountUid, email: accountEmail } : null };
 
         if (dType === 'student') {
           // 1. Inventario previo (para el backup forense del evento de auditoría).
@@ -2111,12 +2522,26 @@ async function handleRoute(request: Request, env: Env, ctx: ExecutionContext): P
             ).run();
           } catch { /* auditoría best-effort */ }
 
+          // R67 — cierre de la cuenta Firebase con la SA (determinista, sin clave).
+          let accountNote = '';
+          if (accountUid) {
+            try {
+              await itkDeleteAccount(env, accountUid);
+              accountNote = ' La cuenta de acceso Firebase quedó ELIMINADA.';
+            } catch (e: any) {
+              const msg = String(e?.message || e);
+              accountNote = /USER_NOT_FOUND|not found/i.test(msg)
+                ? ' La cuenta de Firebase ya no existía (huérfana — nada que cerrar).'
+                : ` ATENCIÓN: la cuenta Firebase NO se pudo cerrar (${msg.slice(0, 120)}). D1/snapshot sí quedaron purgados: reprovisiona o cierra la cuenta manualmente.`;
+            }
+          }
+
           return jsonResponse({
             success: true,
-            message: `Estudiante ${dCode} eliminado en cascada: ${changes['attendance_records'] || 0} registro(s) de asistencia, ${changes['student_excuses'] || 0} excusa(s), ${changes['push_subscriptions'] || 0} suscripción(es) push y la fila del catálogo D1. El snapshot, el índice KV y la versión de catálogo quedaron actualizados.`,
+            message: `Estudiante ${dCode} eliminado en cascada: ${changes['attendance_records'] || 0} registro(s) de asistencia, ${changes['student_excuses'] || 0} excusa(s), ${changes['push_subscriptions'] || 0} suscripción(es) push y la fila del catálogo D1. El snapshot, el índice KV y la versión de catálogo quedaron actualizados.${accountNote}`,
             d1: changes,
+            firebaseAccountClosed: !!accountUid,
             catalogVersion: newVer,
-            note: 'La cuenta de acceso Firebase debe eliminarse desde el cliente (provisioner con la clave conocida) — el Worker no usa la Service Account (Regla 7).',
             timestamp: new Date().toISOString()
           });
         }
@@ -2177,12 +2602,26 @@ async function handleRoute(request: Request, env: Env, ctx: ExecutionContext): P
             ).run();
           } catch { /* auditoría best-effort */ }
 
+          // R67 — cierre de la cuenta Firebase con la SA (determinista, sin clave).
+          let accountNote = '';
+          if (accountUid) {
+            try {
+              await itkDeleteAccount(env, accountUid);
+              accountNote = ' La cuenta de acceso Firebase quedó ELIMINADA.';
+            } catch (e: any) {
+              const msg = String(e?.message || e);
+              accountNote = /USER_NOT_FOUND|not found/i.test(msg)
+                ? ' La cuenta de Firebase ya no existía (huérfana — nada que cerrar).'
+                : ` ATENCIÓN: la cuenta Firebase NO se pudo cerrar (${msg.slice(0, 120)}). D1/snapshot sí quedaron purgados.`;
+            }
+          }
+
           return jsonResponse({
             success: true,
-            message: `Docente ${dCode} eliminado en cascada: ${changes['schedule_assignments'] || 0} cátedra(s) y su ficha del catálogo. El snapshot y la versión quedaron actualizados.`,
+            message: `Docente ${dCode} eliminado en cascada: ${changes['schedule_assignments'] || 0} cátedra(s) y su ficha del catálogo. El snapshot y la versión quedaron actualizados.${accountNote}`,
             d1: changes,
+            firebaseAccountClosed: !!accountUid,
             catalogVersion: newVer,
-            note: 'La cuenta de acceso Firebase debe eliminarse desde el cliente (provisioner con la clave conocida) — el Worker no usa la Service Account (Regla 7).',
             timestamp: new Date().toISOString()
           });
         }
@@ -2324,6 +2763,8 @@ const KNOWN_ROUTE_METHODS: Record<string, string[]> = {
   '/api/sync/purge': ['POST'],
   '/api/verify/class-token': ['POST'],
   '/api/students/credential': ['POST'], // R64 (Fix A): el estudiante persiste su nueva clave en la nube
+  '/api/admin/credential/reset': ['POST'], // R67 (§11/§12): restablecimiento administrativo sin clave anterior
+  '/api/admin/firebase/inventory': ['GET'], // R67 (§8/§15): inventario forense de cuentas (solo lectura)
   '/api/admin/entity/delete': ['POST'], // R64 (Fix §5): eliminación en cascada (Rectoría)
   '/api/attendance': ['POST'],
   '/api/excuses': ['GET', 'POST'],
