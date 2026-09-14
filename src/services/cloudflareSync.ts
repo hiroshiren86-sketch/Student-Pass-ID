@@ -331,21 +331,17 @@ export class CloudflareSyncService {
         if (entry.tempPassword) {
           const loginKey = await deriveStudentLoginKey(secretForVerifier, entry.code);
           const verifier = await generateHmacSignature(entry.tempPassword, loginKey);
-          // R64 (Fix A — regla de credencial fresca): si la ficha ya trae un
-          // verifier que NO coincide con el HMAC del PIN en claro local, ese
-          // verifier es MÁS NUEVO (el estudiante cambió su clave desde el portal
-          // vía /api/students/credential y llegó aquí por un pull). NO se recompute
-          // (pisaría la clave nueva del estudiante con la vieja que Rectoría tenía
-          // en claro) y el PIN local obsoleto se retira también del dispositivo
-          // (ya no corresponde a la clave real de la cuenta).
-          if (entry.tempPasswordVerifier && entry.tempPasswordVerifier !== verifier) {
-            out = { ...out, loginKey, tempPasswordVerifier: entry.tempPasswordVerifier };
-            try {
-              AttendanceStorageService.updateStudent(entry.code, { tempPassword: undefined, hasCustomPassword: true });
-            } catch { /* limpieza best-effort */ }
-          } else {
-            out = { ...out, loginKey, tempPasswordVerifier: verifier };
-          }
+          // R67 (§18 — determinismo): la heurística anterior ("verifier existe y ≠
+          // HMAC(pin) → suponer que la nube es más reciente y preservarlo,
+          // descartando el PIN local") fue ELIMINADA: podía revertir un cambio
+          // administrativo legítimo. Ahora el cliente sube el verifier que le
+          // corresponde a SU estado local (recomputado del plaintext cuando existe)
+          // junto con el sello credentialUpdatedAt de la ficha, y el MERGE LWW del
+          // WORKER decide con autoridad explícita cuál gana (la nube gana solo si
+          // su credentialUpdatedAt es más reciente). El plaintext obsoleto se
+          // limpia en el PULL (ver abajo), donde el estado de la nube ya es el
+          // fusionado y autoritativo.
+          out = { ...out, loginKey, tempPasswordVerifier: verifier };
         }
       } else if (entry.tempPassword) {
         // Sin secret local no se puede calcular el verificador: JAMÁS se sube la clave
@@ -754,39 +750,59 @@ export class CloudflareSyncService {
   }
 
   /**
-   * R66 (fix del reverso silencioso del PIN de Rectoría): registra en la nube el
-   * VERIFICADOR del PIN que Rectoría acaba de asignar — CAS directo por el camino
-   * ADMIN del /api/students/credential, SIN esperar al push de catálogo. Motivo
-   * (reproducido en E2E): el pull de recuperación de un 409 podía traer un
-   * verifier divergente (p. ej. el de una clave que el estudiante cambió desde el
-   * portal) y la regla de credencial fresca del push lo PRESERVABA — revirtiendo
-   * el cambio de PIN de Rectoría en la nube aunque la cuenta Firebase ya hubiera
-   * quedado sincronizada → ficha desfaseada = la trampa otra vez. Rectoría es la
-   * autoridad de la ficha: este camino no exige la clave anterior.
+   * R67 (§11/§12 — restablecimiento administrativo SIN clave anterior): llama al
+   * endpoint /api/admin/credential/reset del Worker, que (1) actualiza la
+   * contraseña de la cuenta Firebase con la Service Account (identitytoolkit
+   * setAccountInfo — autorizado por la directiva del 15/09/2026 sobre cuentas
+   * EXISTENTES) y (2) escribe el verifier de la ficha en el snapshot D1/KV por
+   * CAS con credentialUpdatedAt/credentialActor frescos. Reemplaza el patrón
+   * R66 (AccountSyncModal pidiendo la clave anterior): Rectoría es la autoridad
+   * administrativa y NO necesita conocer la clave previa para restablecer.
+   * `targets` se envía en fragmentos de ≤10 (límite del endpoint).
    */
-  static async setStudentPinVerifierInCloud(studentCode: string, newPin: string): Promise<{ ok: boolean; message?: string }> {
+  static async adminCredentialReset(
+    type: 'student' | 'teacher',
+    targets: Array<{ code: string; password: string }>,
+    performedBy?: string
+  ): Promise<{ ok: boolean; message?: string; results?: Array<{ code: string; ok: boolean; mode?: string; error?: string }>; catalogVersion?: number }> {
     const baseUrl = this.getWorkerBaseUrl();
     if (!baseUrl) {
-      return { ok: false, message: 'URL del Worker no configurada' };
+      return { ok: false, message: 'URL del Worker no configurada (Ajustes → Sync y Seguridad).' };
     }
-    try {
-      const res = await fetch(`${baseUrl.replace(/\/+$/, '')}/api/students/credential`, {
-        method: 'POST',
-        headers: await this.workerHeaders(true),
-        body: JSON.stringify({
-          schoolCode: AttendanceStorageService.getSettings().schoolCode || 'INAS_2026',
-          studentCode,
-          newPassword: newPin
-        })
-      });
-      const json: any = await res.json().catch(() => null);
-      if (!res.ok) {
-        return { ok: false, message: json?.error || `La nube no aceptó el PIN de la ficha (HTTP ${res.status}).` };
+    const allResults: Array<{ code: string; ok: boolean; mode?: string; error?: string }> = [];
+    let lastVersion: number | undefined;
+    for (let i = 0; i < targets.length; i += 10) {
+      const chunk = targets.slice(i, i + 10);
+      try {
+        const res = await fetch(`${baseUrl.replace(/\/+$/, '')}/api/admin/credential/reset`, {
+          method: 'POST',
+          headers: await this.workerHeaders(true),
+          body: JSON.stringify({
+            schoolCode: AttendanceStorageService.getSettings().schoolCode || 'INAS_2026',
+            type,
+            targets: chunk,
+            performedBy
+          })
+        });
+        const json: any = await res.json().catch(() => null);
+        if (!res.ok) {
+          // Fallo del fragmento completo: se reporta por-usuario como fallido.
+          for (const t of chunk) allResults.push({ code: t.code, ok: false, error: json?.error || `HTTP ${res.status}` });
+          continue;
+        }
+        if (Array.isArray(json?.results)) allResults.push(...json.results);
+        if (typeof json?.catalogVersion === 'number') lastVersion = json.catalogVersion;
+      } catch {
+        for (const t of chunk) allResults.push({ code: t.code, ok: false, error: 'Sin conexión con la nube.' });
       }
-      return { ok: true, message: json?.message };
-    } catch {
-      return { ok: false, message: 'Sin conexión con la nube: el push de catálogo publicará el verifier cuando haya red.' };
     }
+    const okCount = allResults.filter(r => r.ok).length;
+    return {
+      ok: allResults.length > 0 && okCount === allResults.length,
+      message: `${okCount}/${allResults.length} restablecida(s).`,
+      results: allResults,
+      catalogVersion: lastVersion
+    };
   }
 
   /**
@@ -923,22 +939,45 @@ export class CloudflareSyncService {
         // filtrara; aquí se filtra también, para que el estudiante NO RESUCITE en este pull.
         const tombStudents = new Set(AttendanceStorageService.getTombstones().filter(t => t.type === 'student').map(t => t.id));
         // R64 (Fix A — preservación de credencial local): el snapshot JAMÁS transporta
-        // tempPassword (se strippea en ambos extremos por diseño F-23). Antes el pull
+        // tempPassword (se strippea en ambos extremos por diseño F-23). El pull
         // REEMPLAZABA la ficha y BORRABA la clave en claro local: (a) el terminal de
-        // Rectoría perdía los PIN ("sin PIN asignado" en el directorio y sin oldPin para
-        // realinear cuentas con el provisioner), y (b) el portal del estudiante perdía su
-        // clave recién cambiada ANTES de que nada la publicara. Ahora el valor local se
-        // preserva cuando el entrante no lo trae (que es SIEMPRE). Si el PIN local está
-        // obsoleto (el estudiante cambió su clave desde el portal), la regla del sanitize
-        // del push lo detecta (verifier ≠ HMAC(pin)) y lo retira sin pisar el verifier nuevo.
+        // Rectoría perdía los PIN ("sin PIN asignado" en el directorio y sin oldPin
+        // para realinear cuentas), y (b) el portal del estudiante perdía su clave
+        // recién cambiada ANTES de que nada la publicara. El valor local se conserva
+        // cuando el entrante no lo trae (que es SIEMPRE), salvo que el verifier de
+        // la nube demuestre que ese plaintext quedó obsoleto (dropStalePlaintext).
         const localByCode = new Map(AttendanceStorageService.getStudents().map(s => [String(s.code), s]));
         const preserveLocalPin = (s: any) =>
           (s && !s.tempPassword && localByCode.has(String(s.code)))
             ? { ...s, tempPassword: localByCode.get(String(s.code))!.tempPassword }
             : s;
-        const incomingStudents = students
-          .filter((s: any) => s && !tombStudents.has(String(s.code)))
-          .map(preserveLocalPin);
+        // R67 (§18 — limpieza de plaintext obsoleto en el origen autoritativo):
+        // el snapshot que baja YA pasó por el merge LWW del Worker (su credencial
+        // es la ganadora). Si la ficha entrante trae verifier y el plaintext local
+        // no le corresponde (HMAC distinto), el plaintext local quedó obsoleto
+        // (otro terminal/actor cambió la clave) y NO se conserva al aplicar el pull:
+        // la UI queda en "clave no conocida en este terminal" y Rectoría consulta o
+        // restablece si necesita verla. La escritura es la del propio pull (una
+        // sola, origen 'cloud' — jamás sella dirty). REPLAZA la limpieza que hacía
+        // el sanitize del push sobre datos aún no fusionados.
+        const dropStalePlaintext = async (s: any) => {
+          if (!s || !s.tempPasswordVerifier || !s.loginKey) return s;
+          const local = localByCode.get(String(s.code));
+          if (!local || !local.tempPassword) return s;
+          try {
+            const localVerifier = await generateHmacSignature(local.tempPassword, String(s.loginKey));
+            if (localVerifier !== String(s.tempPasswordVerifier)) {
+              return { ...s, tempPassword: undefined };
+            }
+          } catch { /* sin crypto: conservar */ }
+          return s;
+        };
+        const incomingStudents = await Promise.all(
+          students
+            .filter((s: any) => s && !tombStudents.has(String(s.code)))
+            .map(preserveLocalPin)
+            .map(dropStalePlaintext)
+        );
         if (scopedRole) {
           // Ronda 56: upsert — la porción del grado pisa/añade; el resto de la matrícula
           // local se CONSERVA (el snapshot scopeado jamás destruye el catálogo del teléfono).

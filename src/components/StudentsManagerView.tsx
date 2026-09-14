@@ -30,9 +30,11 @@ import { matchStudentFuzzy, normalizeDocumentOrCode } from '../utils/searchHelpe
 import { generateBarcodeDataUrl } from '../utils/barcode';
 import { DocumentUploadModal } from './DocumentUploadModal';
 import { ConfirmDialog } from './ConfirmDialog';
-import AccountSyncModal from './AccountSyncModal';
+// R67: el AccountSyncModal de R66 fue ELIMINADO (reemplazado por el restablecimiento
+// administrativo sin clave anterior — ver bitácora R67).
 import { normalizeGradeName, isValidGrade } from '../utils/documentParser';
 import { compressImageFile } from '../utils/imageCompressor';
+import { resolveAccessPassword } from '../utils/credentialGen'; // R67 §9: política de generación de claves
 import { KeyRound, Copy } from 'lucide-react'; // Ronda 34 (H-34-2): clave de acceso visible en la matrícula
 
 interface StudentsManagerViewProps {
@@ -64,16 +66,15 @@ export const StudentsManagerView: React.FC<StudentsManagerViewProps> = ({ onGene
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   // Ronda 18 (H4): confirmación propia para eliminar estudiante (antes confirm() nativo)
   const [deleteConfirm, setDeleteConfirm] = useState<{ title: string; message: string; requireText?: string; action: () => void } | null>(null);
-  // R66 (fix de la cuenta "pegada"): modal de sincronización de cuenta cuando el
-  // provisioner no puede firmar con la clave anterior (terminal nuevo o desfasado).
-  const [syncModal, setSyncModal] = useState<{
-    student: Student;
-    newPin: string;
-    reason: 'unknown_old' | 'mismatch' | 'error';
-    detail?: string;
-  } | null>(null);
-  const [syncBusy, setSyncBusy] = useState(false);
-  const [syncError, setSyncError] = useState<string | null>(null);
+  // R67 (§12A — reset individual): estado del modal de restablecimiento de clave.
+  // Reemplaza el AccountSyncModal de R66 (que pedía la clave anterior — ya innecesario:
+  // el endpoint admin resetea Firebase con la SA sin conocerla, §11).
+  const [resetState, setResetState] = useState<{ who: string; code: string; hasAccount: boolean } | null>(null);
+  const [resetStrategy, setResetStrategy] = useState<'manual' | 'default' | 'random'>('default');
+  const [resetManualPw, setResetManualPw] = useState('');
+  const [resetGenerated, setResetGenerated] = useState<string | null>(null);
+  const [resetError, setResetError] = useState<string | null>(null);
+  const [resetBusy, setResetBusy] = useState(false);
   const singlePhotoInputRef = useRef<HTMLInputElement>(null);
 
   const uniqueGrades = AttendanceStorageService.getUniqueGrades();
@@ -211,18 +212,23 @@ export const StudentsManagerView: React.FC<StudentsManagerViewProps> = ({ onGene
       return;
     }
 
-    // R66 (fix de la cuenta "pegada"): si el estudiante tiene cuenta de acceso y
-    // el PIN cambia, la nueva clave SERÁ también la contraseña de su cuenta
-    // Firebase → debe cumplir el mínimo de 6 caracteres que Firebase exige
-    // (auth/weak-password, demostrado en R64 §3). Se bloquea ANTES de guardar para
-    // no crear fichas con claves que la cuenta jamás podrá adoptar.
+    // R66→R67: si el estudiante tiene cuenta de acceso y la clave cambia, la nueva
+    // clave SERÁ también la contraseña de su cuenta Firebase → mínimo 6 caracteres
+    // (auth/weak-password). Para fichas SIN cuenta, la clave puede ser más corta
+    // (es solo la clave del login local del carné).
     const pinForAccount = formData.accessPin.trim();
     if (editingStudent?.hasFirebaseAccount && pinForAccount && pinForAccount.length < 6) {
-      setFormError('Este estudiante tiene cuenta de acceso: la clave debe tener 6 o más caracteres (requisito de Firebase). Si solo quiere un PIN de 4 dígitos para el carné, primero elimine la cuenta de acceso o use 6 caracteres.');
+      setFormError('Este estudiante tiene cuenta de acceso: la clave debe tener 6 o más caracteres (requisito de Firebase).');
       return;
     }
 
     if (editingStudent) {
+      // R67 (§9 — política de edición): campo vacío = NO cambiar la clave actual
+      // (se conserva la que la ficha ya tiene; para cambiarla, escríbela o usa el
+      // botón "Restablecer clave" del menú de acciones). Llena = cambiarla.
+      const oldPin = (editingStudent.tempPassword || '').trim();
+      const newPin = formData.accessPin.trim();
+      const pinChanged = newPin !== '' && newPin !== oldPin;
       AttendanceStorageService.updateStudent(editingStudent.code, {
         firstName,
         lastName,
@@ -230,9 +236,9 @@ export const StudentsManagerView: React.FC<StudentsManagerViewProps> = ({ onGene
         documentType: formData.documentType,
         grade,
         photoUrl: formData.photoUrl || undefined,
-        // Ronda 60-g: el PIN se actualiza si Rectoría lo modificó. Vacío = sin PIN
-        // asignado (el carné muestra 'Solicitar en Rectoría').
-        tempPassword: formData.accessPin.trim() || undefined,
+        // R67: vacío conserva (undefined NO pisa el plaintext existente — el pull
+        // ya cuida la coherencia con el verifier de la nube).
+        ...(pinChanged ? { tempPassword: newPin } : {}),
         // Ronda 22 (P4): el consentimiento art. 7 también se actualiza en la ficha
         excuseDataConsent: formData.excuseDataConsent,
         excuseDataConsentAt: formData.excuseDataConsent
@@ -243,42 +249,31 @@ export const StudentsManagerView: React.FC<StudentsManagerViewProps> = ({ onGene
       setShowDrawer(false);
       setToastMessage(`Estudiante ${firstName} ${lastName} actualizado correctamente.`);
       setTimeout(() => setToastMessage(null), 3500);
-      // R61 (fix PIN↔cuenta): si el estudiante TIENE cuenta de acceso y Rectoría cambió
-      // su PIN, la CONTRASEÑA de la cuenta se sincroniza en el mismo guardado (patrón
-      // del provisioner: firma con el PIN anterior y aplica el nuevo).
-      // R66 (fix del bug "la clave queda pegada", reproducido en E2E): las FALLAS ya no
-      // son un toast efímero de 7 s que Rectoría pierde de vista — abren el
-      // AccountSyncModal, que pide la clave ACTUAL de la cuenta y reintenta la
-      // sincronización sin cerrar la sesión. Antes: ficha con PIN nuevo + cuenta con
-      // clave vieja + login roto en dispositivos limpios + portal sin vía de escape.
-      const oldPin = (editingStudent.tempPassword || '').trim();
-      const newPin = formData.accessPin.trim();
-      if (newPin && newPin !== oldPin) {
-        // R66 (fix del reverso silencioso): el verifier del PIN nuevo se publica en
-        // la nube YA, por el camino ADMIN del /api/students/credential (CAS directo,
-        // sin esperar al push). Sin esto, el pull de recuperación de un 409 podía
-        // traer un verifier divergente y la regla de credencial fresca del push lo
-        // preservaba — revirtiendo el cambio de Rectoría en la nube (reproducido).
-        // Fire-and-forget honesto: si falla, el push de catálogo lo publica.
-        void CloudflareSyncService.setStudentPinVerifierInCloud(editingStudent.code, newPin).then((r) => {
-          if (!r.ok) console.warn('[R66] Verifier directo no publicado (el push lo publicará):', r.message);
-        });
-      }
-      if (editingStudent.hasFirebaseAccount && newPin && newPin !== oldPin) {
-        const sync = await FirebaseService.syncStudentAccountPassword(editingStudent.code, oldPin, newPin);
-        if (sync.ok) {
-          setToastMessage(`Cuenta de acceso actualizada: el nuevo PIN de ${firstName} ya funciona también en su teléfono.`);
+      // R67 (§11 — restablecimiento administrativo SIN clave anterior): si la clave
+      // cambió y el estudiante tiene cuenta, el endpoint /api/admin/credential/reset
+      // actualiza Firebase (SA) + verifier de la nube en UNA operación atómica.
+      // Esto reemplaza el patrón R61/R66 (provisioner con la clave vieja + modal
+      // pidiéndola): Rectoría es la autoridad administrativa.
+      if (pinChanged && editingStudent.hasFirebaseAccount) {
+        setToastMessage(`Restableciendo la cuenta de acceso de ${firstName}…`);
+        const res = await CloudflareSyncService.adminCredentialReset('student', [{ code: editingStudent.code, password: newPin }], 'rectoria-editar-ficha');
+        if (res.ok) {
+          setToastMessage(`Clave de acceso actualizada: el nuevo PIN de ${firstName} ya funciona también en su teléfono.`);
           setTimeout(() => setToastMessage(null), 5000);
         } else {
-          setSyncModal({
-            student: editingStudent,
-            newPin,
-            reason: !oldPin || sync.reason === 'error' ? (!oldPin ? 'unknown_old' : 'error') : 'mismatch',
-            detail: sync.message
-          });
+          const r = res.results?.[0];
+          setToastMessage(`⚠ La ficha quedó con la clave nueva, pero la CUENTA de ${firstName} no: ${r?.error || res.message}. Usa "Restablecer clave" del menú de acciones para reintentarlo.`);
+          setTimeout(() => setToastMessage(null), 9000);
         }
+      } else if (pinChanged) {
+        // sin cuenta: el verifier viaja con el push (sello R67 ya aplicado por
+        // updateStudent) — nada más que hacer aquí.
       }
     } else {
+      // R67 (§9 — registro): campo vacío = GENERAR según política (predeterminada
+      // configurada → aleatoria). El estudiante siempre nace con clave coherente
+      // y se muestra en el modal de éxito (copia incluida).
+      const resolved = resolveAccessPassword(formData.accessPin.trim(), settings.defaultAccessPassword);
       const newStudent: Student = {
         code: cleanDocumentId,
         documentId: cleanDocumentId,
@@ -290,10 +285,10 @@ export const StudentsManagerView: React.FC<StudentsManagerViewProps> = ({ onGene
         photoUrl: formData.photoUrl || undefined,
         active: true,
         createdAt: new Date().toISOString(),
-        // Ronda 60-g: el PIN / Clave de Acceso Portal es asignado EXPLÍCITAMENTE por
-        // Rectoría. Si se deja vacío, el carné impreso mostrará 'Solicitar en Rectoría'.
-        // Se elimina la derivación automática 'SJ-' + últimos 4 del documento (F-18).
-        tempPassword: formData.accessPin.trim() || undefined,
+        // R67 (§9): manual → esa; vacío → predeterminada configurada → aleatoria.
+        // La clave mostrada en el modal de éxito es EXACTAMENTE esta (misma que el
+        // verifier y que la cuenta si se crea). Jamás se deriva del documento (F-18).
+        tempPassword: resolved.password,
         // Ronda 22 (P4): consentimiento específico del representante legal (Ley 1581 arts. 7 y 9)
         excuseDataConsent: formData.excuseDataConsent,
         excuseDataConsentAt: formData.excuseDataConsent ? new Date().toISOString() : undefined
@@ -308,8 +303,8 @@ export const StudentsManagerView: React.FC<StudentsManagerViewProps> = ({ onGene
       refreshList();
       setShowDrawer(false);
       setJustSavedStudent(newStudent);
-      setToastMessage(`Estudiante ${firstName} ${lastName} matriculado en grado ${grade}.`);
-      setTimeout(() => setToastMessage(null), 3500);
+      setToastMessage(`Estudiante ${firstName} ${lastName} matriculado en grado ${grade}.${resolved.origin !== 'manual' ? ` Clave de acceso generada (${resolved.origin === 'default' ? 'predeterminada' : 'aleatoria'}): ${resolved.password}` : ''}`);
+      setTimeout(() => setToastMessage(null), 6000);
     }
   };
 
@@ -323,29 +318,155 @@ export const StudentsManagerView: React.FC<StudentsManagerViewProps> = ({ onGene
     }
   };
 
-  // R66 (fix de la cuenta "pegada"): reintento de sincronización desde el modal con
-  // la clave ACTUAL de la cuenta que Rectoría escribe. Si logra firmar, la cuenta
-  // queda con el PIN nuevo y el terminal queda realineado (su clave local en claro
-  // = la clave real de la cuenta de nuevo). Sin cerrar la sesión de Rectoría.
-  const handleSyncModalSubmit = async (currentPassword: string) => {
-    if (!syncModal) return;
-    setSyncBusy(true);
-    setSyncError(null);
+  // R67 (§12A — restablecimiento INDIVIDUAL): abre el modal de estrategia
+  // (manual / predeterminada / aleatoria) para UN estudiante. La operación usa
+  // /api/admin/credential/reset (Firebase con SA + verifier CAS) — Rectoría NO
+  // necesita conocer la clave anterior (§11: es una operación administrativa).
+  const openResetModal = (student: Student) => {
+    setResetState({
+      who: `${student.firstName} ${student.lastName}`,
+      code: student.code,
+      hasAccount: !!student.hasFirebaseAccount
+    });
+    setResetStrategy('default');
+    setResetManualPw('');
+    setResetGenerated(null);
+    setResetError(null);
+  };
+
+  const executeReset = async () => {
+    if (!resetState) return;
+    const resolved = resolveAccessPassword(
+      resetStrategy === 'manual' ? resetManualPw : '',
+      resetStrategy === 'default' ? settings.defaultAccessPassword : ''
+    );
+    if (resetStrategy === 'manual' && resolved.password.length < 6) {
+      setResetError('La clave manual debe tener 6 o más caracteres (requisito de Firebase).');
+      return;
+    }
+    if (resetStrategy === 'random') {
+      // mostrar la clave generada ANTES de aplicarla (confirmación explícita)
+      if (resetGenerated !== resolved.password) {
+        setResetGenerated(resolved.password);
+        setResetError(null);
+        return;
+      }
+    }
+    setResetBusy(true);
+    setResetError(null);
     try {
-      const sync = await FirebaseService.syncStudentAccountPassword(
-        syncModal.student.code, currentPassword, syncModal.newPin);
-      if (sync.ok) {
-        setSyncModal(null);
-        setToastMessage(`Cuenta de acceso actualizada: el nuevo PIN de ${syncModal.student.firstName} ya funciona también en su teléfono.`);
-        setTimeout(() => setToastMessage(null), 5000);
-      } else if (sync.reason === 'old_password_mismatch') {
-        setSyncError('Esa tampoco es la clave actual de la cuenta. Inténtelo de nuevo con la clave con la que el estudiante entra hoy (la última que se le entregó).');
+      const res = await CloudflareSyncService.adminCredentialReset(
+        'student', [{ code: resetState.code, password: resolved.password }], 'rectoria-reset-individual');
+      const r = res.results?.[0];
+      if (r?.ok) {
+        // Ficha local alineada (plaintext + verifier con sello fresco).
+        AttendanceStorageService.updateStudent(resetState.code, {
+          tempPassword: resolved.password,
+          hasCustomPassword: true
+        } as any);
+        refreshList();
+        setResetState(null);
+        setToastMessage(`Clave de ${resetState.who} restablecida: ${resolved.password}${r.mode === 'account+verifier' ? ' (cuenta Firebase + nube alineadas)' : r.mode === 'verifier-only' ? ' (ficha sin cuenta — clave del carné)' : ''}.`);
+        setTimeout(() => setToastMessage(null), 8000);
       } else {
-        setSyncError(sync.message || 'No se pudo actualizar la contraseña de la cuenta. Verifique la conexión e inténtelo de nuevo.');
+        setResetError(r?.error || res.message || 'No se pudo restablecer la clave.');
       }
     } finally {
-      setSyncBusy(false);
+      setResetBusy(false);
     }
+  };
+
+  // R67 (§12B — restablecimiento MASIVO): sobre el conjunto DINÁMICO de
+  // estudiantes (jamás una lista fija). Confirmación con conteo real, estrategia
+  // elegible, ejecución en fragmentos con progreso, resultados por-usuario y
+  // descarga CSV de credenciales para su reparto. Los fallos se listan
+  // explícitamente — nunca "éxito total" con fallos presentes.
+  const [bulkState, setBulkState] = useState<{ running: boolean; done: number; total: number; results: Array<{ code: string; name: string; password: string; ok: boolean; error?: string }> } | null>(null);
+  const [bulkStrategy, setBulkStrategy] = useState<'default' | 'random' | 'manual'>('default');
+  const [bulkManualPw, setBulkManualPw] = useState('');
+
+  const openBulkReset = () => {
+    const targets = students.filter(s => s && s.active !== false);
+    const withAccount = targets.filter(s => s.hasFirebaseAccount);
+    const withoutAccount = targets.filter(s => !s.hasFirebaseAccount);
+    if (withAccount.length === 0 && withoutAccount.length === 0) {
+      setToastMessage('No hay estudiantes en la matrícula.');
+      setTimeout(() => setToastMessage(null), 4000);
+      return;
+    }
+    setBulkConfirmOpen({ total: targets.length, withAccount: withAccount.length, withoutAccount: withoutAccount.length });
+    setBulkStrategy(settings.defaultAccessPassword ? 'default' : 'random');
+    setBulkManualPw('');
+  };
+  const [bulkConfirmOpen, setBulkConfirmOpen] = useState<{ total: number; withAccount: number; withoutAccount: number } | null>(null);
+
+  const executeBulkReset = async () => {
+    if (!bulkConfirmOpen) return;
+    const targets = students.filter(s => s && s.active !== false);
+    const resolvedFor = () => resolveAccessPassword(
+      bulkStrategy === 'manual' ? bulkManualPw : '',
+      bulkStrategy === 'default' ? settings.defaultAccessPassword : ''
+    );
+    if (bulkStrategy === 'manual') {
+      const chk = resolveAccessPassword(bulkManualPw, '');
+      if (chk.origin === 'manual' && chk.password.length < 6) {
+        setToastMessage('⚠ La clave manual debe tener 6 o más caracteres (requisito de Firebase).');
+        setTimeout(() => setToastMessage(null), 5000);
+        return;
+      }
+    }
+    setBulkConfirmOpen(null);
+    setBulkState({ running: true, done: 0, total: targets.length, results: [] });
+    const results: Array<{ code: string; name: string; password: string; ok: boolean; error?: string }> = [];
+    const CHUNK = 10;
+    for (let i = 0; i < targets.length; i += CHUNK) {
+      const chunk = targets.slice(i, i + CHUNK).map(s => {
+        const r = resolvedFor();
+        return { s, password: r.password };
+      });
+      const res = await CloudflareSyncService.adminCredentialReset(
+        'student',
+        chunk.map(c => ({ code: c.s.code, password: c.password })),
+        'rectoria-reset-masivo'
+      );
+      chunk.forEach(c => {
+        const r = res.results?.find(x => x.code === c.s.code);
+        results.push({
+          code: c.s.code,
+          name: `${c.s.firstName} ${c.s.lastName}`,
+          password: c.password,
+          ok: !!r?.ok,
+          error: r?.error
+        });
+        // ficha local alineada para los exitosos
+        if (r?.ok) {
+          AttendanceStorageService.updateStudent(c.s.code, { tempPassword: c.password, hasCustomPassword: true } as any);
+        }
+      });
+      setBulkState({ running: true, done: Math.min(i + CHUNK, targets.length), total: targets.length, results: [...results] });
+    }
+    setBulkState({ running: false, done: results.length, total: targets.length, results });
+    refreshList();
+    const okCount = results.filter(r => r.ok).length;
+    setToastMessage(okCount === results.length
+      ? `Claves restablecidas para ${okCount} estudiantes. Descarga la lista de credenciales en el panel de resultados.`
+      : `⚠ ${okCount}/${results.length} restablecidas — revisa los fallos en el panel de resultados.`);
+    setTimeout(() => setToastMessage(null), 10000);
+  };
+
+  const downloadBulkCsv = () => {
+    if (!bulkState) return;
+    const rows = [
+      'Codigo,Nombre,ClaveNueva,Resultado,Detalle',
+      ...bulkState.results.map(r => `${r.code},"${r.name}","${r.password}",${r.ok ? 'OK' : 'FALLO'},"${(r.error || '').replace(/"/g, "'")}"`)
+    ].join('\n');
+    const blob = new Blob(['\ufeff' + rows], { type: 'text/csv;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `claves_acceso_estudiantes_${new Date().toISOString().slice(0, 10)}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
   };
 
   // Ronda 50 (M3): provee la cuenta REAL de Firebase Auth del estudiante (acceso por
@@ -353,19 +474,26 @@ export const StudentsManagerView: React.FC<StudentsManagerViewProps> = ({ onGene
   // inicial y el rol ESTUDIANTE_ACUDIENTE. Si ya hay cuenta, se informa que existe.
   // Ronda 60-g: si el estudiante no tiene PIN asignado, se le pide a Rectoría que lo asigne
   // antes de crear la cuenta de acceso (sin PIN no hay credencial que usar como contraseña).
+  // R67: la cuenta nace con la clave del carné como contraseña (flujo REAL de
+  // Rectoría — Regla 7: la provisión de cuentas SIGUE en el cliente). El verifier
+  // de la ficha en la nube se publica con el CAS directo del cambio de PIN vía el
+  // endpoint admin de credenciales (modo verifier — la cuenta la acaba de crear
+  // este flujo con la MISMA clave, así que la operación es convergente).
   const handleCreateStudentAccount = async (student: Student) => {
     const accessKey = student.tempPassword;
     if (!accessKey) {
-      setToastMessage(`${student.firstName} ${student.lastName} no tiene PIN / Clave de Acceso Portal asignado. Asígnele uno desde "Editar ficha" antes de crear la cuenta de acceso.`);
+      setToastMessage(`${student.firstName} ${student.lastName} no tiene Clave de Acceso asignada. Genere o escriba una desde "Editar ficha" (o "Restablecer clave") antes de crear la cuenta de acceso.`);
       setTimeout(() => setToastMessage(null), 5000);
+      return;
+    }
+    if (accessKey.length < 6) {
+      setToastMessage(`La clave de ${student.firstName} debe tener 6 o más caracteres para poder ser contraseña de su cuenta (Firebase). Use "Restablecer clave" para asignar una válida.`);
+      setTimeout(() => setToastMessage(null), 6000);
       return;
     }
     try {
       if (student.hasFirebaseAccount) {
-        // R61: el mensaje anterior remitía a "Gestión Docentes" — pero el
-        // restablecimiento de la contraseña de ESTUDIANTES vive aquí: editar la
-        // ficha y cambiar el PIN sincroniza la cuenta (R61 fix PIN↔cuenta).
-        setToastMessage(`Este estudiante ya tiene cuenta de acceso (${student.authEmail || 'identidad'}). Si olvidó su clave, edite la ficha y asigne un PIN nuevo: la cuenta se sincroniza automáticamente al guardar.`);
+        setToastMessage(`Este estudiante ya tiene cuenta de acceso (${student.authEmail || 'identidad'}). Para cambiar su clave use "Restablecer clave" del menú de acciones.`);
         setTimeout(() => setToastMessage(null), 5000);
         return;
       }
@@ -375,16 +503,18 @@ export const StudentsManagerView: React.FC<StudentsManagerViewProps> = ({ onGene
         authEmail: result.email,
         authUid: result.uid
       });
-      // R66: la cuenta nace con el PIN del carné como contraseña → el verifier de
-      // la ficha en la nube debe ser HMAC(PIN) desde YA (mismo CAS directo del
-      // cambio de PIN — evita la ventana de desfase con el push).
-      void CloudflareSyncService.setStudentPinVerifierInCloud(student.code, accessKey).then((r) => {
-        if (!r.ok) console.warn('[R66] Verifier de cuenta nueva no publicado (el push lo publicará):', r.message);
-      });
       refreshList();
       setToastMessage(`Cuenta de acceso creada para ${student.firstName} ${student.lastName}. El estudiante ya puede entrar desde su teléfono con su código y clave del carné.`);
       setTimeout(() => setToastMessage(null), 5000);
     } catch (err: any) {
+      const code = String(err?.code || '');
+      if (code === 'auth/email-already-in-use') {
+        // R67 (huérfanas): la cuenta existe pero sin ficha vinculada — el camino
+        // determinista es restablecer la clave (SA) y re-vincular el espejo.
+        setToastMessage(`Ya existe una cuenta con la identidad de ${student.firstName} (huérfana de una ficha anterior). Use "Restablecer clave" para tomar el control de esa cuenta y alinearla.`);
+        setTimeout(() => setToastMessage(null), 9000);
+        return;
+      }
       setToastMessage(`No se pudo crear la cuenta de acceso (${FirebaseService.mapAuthError(err)}). Reintente con "Crear Cuenta de Acceso".`);
       setTimeout(() => setToastMessage(null), 5000);
     }
@@ -502,6 +632,19 @@ export const StudentsManagerView: React.FC<StudentsManagerViewProps> = ({ onGene
               <Upload className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />
               <span>Cargar Archivo(s)</span>
             </button>
+
+            {/* R67 (§12B — restablecimiento MASIVO): sobre el conjunto dinámico de
+                estudiantes, con confirmación, estrategia y resultados honestos. */}
+            {currentRole === 'ADMIN' && (
+              <button
+                onClick={openBulkReset}
+                className="flex-1 sm:flex-initial px-4 py-2.5 bg-amber-50 hover:bg-amber-100 dark:bg-amber-950/40 dark:hover:bg-amber-900/40 text-amber-700 dark:text-amber-300 rounded-2xl text-xs font-bold transition-all border border-amber-200 dark:border-amber-800/60 shadow-xs flex items-center justify-center gap-2"
+                title="Restablecer la clave de acceso de TODOS los estudiantes (operación administrativa masiva con confirmación)"
+              >
+                <KeyRound className="w-4 h-4" />
+                <span>Restablecer claves (todos)</span>
+              </button>
+            )}
 
             {/* Botón Nuevo Estudiante */}
             <button
@@ -726,6 +869,17 @@ export const StudentsManagerView: React.FC<StudentsManagerViewProps> = ({ onGene
                             <>
                               <button
                                 role="menuitem"
+                                onClick={() => { setActionsMenuFor(null); openResetModal(std); }}
+                                className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl bg-slate-50 dark:bg-black/40 border border-slate-100 dark:border-zinc-800/60 hover:border-indigo-300 dark:hover:border-indigo-800 hover:shadow-sm transition-all"
+                              >
+                                <KeyRound className="w-3.5 h-3.5 text-indigo-600 dark:text-indigo-400 shrink-0" />
+                                <span className="min-w-0">
+                                  <span className="block text-[11px] font-black text-slate-800 dark:text-slate-100">Restablecer clave</span>
+                                  <span className="block text-[9px] text-slate-400">Sin conocer la anterior</span>
+                                </span>
+                              </button>
+                              <button
+                                role="menuitem"
                                 onClick={() => { setActionsMenuFor(null); handleOpenEdit(std); }}
                                 className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl bg-slate-50 dark:bg-black/40 border border-slate-100 dark:border-zinc-800/60 hover:border-indigo-300 dark:hover:border-indigo-800 hover:shadow-sm transition-all"
                               >
@@ -896,26 +1050,30 @@ export const StudentsManagerView: React.FC<StudentsManagerViewProps> = ({ onGene
                   <div className="flex items-center justify-between">
                     <label className="text-xs font-bold text-slate-700 dark:text-slate-300 flex items-center gap-1.5">
                       <KeyRound className="w-3.5 h-3.5 text-indigo-500" />
-                      <span>5. PIN / Clave de Acceso Portal</span>
+                      <span>5. Clave de Acceso (contraseña del portal y de la cuenta)</span>
                     </label>
                     <span className="text-[10px] text-slate-400 font-medium">
-                      Opcional — vacío muestra "Solicitar en Rectoría" en el carné
+                      {editingStudent ? 'Vacío = conservar la actual' : 'Vacío = se genera una'}
                     </span>
                   </div>
                   <input
                     type="text"
                     value={formData.accessPin}
                     onChange={(e) => setFormData({ ...formData, accessPin: e.target.value })}
-                    placeholder="Ej: 839274 · usa 6 o más caracteres (déjalo vacío si el estudiante no tiene PIN)"
+                    placeholder={editingStudent
+                      ? (editingStudent.tempPassword || 'Ej: 839274 — déjalo vacío para NO cambiar la clave actual')
+                      : 'Ej: 839274 · vacío = se genera automáticamente (6+ caracteres)'}
                     className="w-full px-3.5 py-2.5 bg-slate-50 dark:bg-black border border-slate-200 dark:border-zinc-800/50 rounded-2xl text-xs font-mono font-bold text-indigo-600 dark:text-indigo-400 focus:ring-2 focus:ring-indigo-500 focus:outline-none"
                     autoComplete="off"
                   />
                   <p className="text-[10px] text-slate-400 leading-tight">
-                    El PIN es la clave que el estudiante usa para entrar a su portal y, si tiene o tendrá cuenta de acceso, es también la contraseña de esa cuenta: Firebase exige 6 o más caracteres (un PIN de 4 dígitos no podrá usarse para crear la cuenta). Si lo dejas vacío, el carné impreso mostrará "Solicitar en Rectoría" como estado vacío claro. Nunca se deriva automáticamente del documento.
+                    {editingStudent
+                      ? 'Esta es la contraseña con la que el estudiante entra a su portal (y a su cuenta de acceso si tiene una). Déjala VACÍA para conservar la actual sin cambios; escríbela para cambiarla; o usa «Restablecer clave» en el menú de acciones para generar una. Firebase exige 6 o más caracteres cuando hay cuenta.'
+                      : 'La clave con la que el estudiante entrará a su portal. Si la dejas vacía se genera una automáticamente (predeterminada configurada o aleatoria segura) y se muestra al guardar. Con cuenta de acceso, Firebase exige 6 o más caracteres. Jamás se deriva del documento.'}
                   </p>
                   {editingStudent?.hasFirebaseAccount && (
                     <p className="text-[10px] text-amber-600 dark:text-amber-400 leading-tight font-bold">
-                      Este estudiante tiene cuenta de acceso: al cambiar y guardar el PIN, la contraseña de su cuenta se sincroniza automáticamente. Firebase exige 6 o más caracteres (un PIN de 4 dígitos no puede ser contraseña de la cuenta).
+                      Este estudiante tiene cuenta de acceso: al cambiar y guardar la clave, la contraseña de su cuenta se actualiza en la misma operación (sin necesidad de conocer la anterior).
                     </p>
                   )}
                 </div>
@@ -1388,20 +1546,160 @@ export const StudentsManagerView: React.FC<StudentsManagerViewProps> = ({ onGene
         onCancel={() => setDeleteConfirm(null)}
       />
 
-      {/* R66 (fix de la cuenta "pegada"): sincronización de cuenta con la clave
-          actual escrita por Rectoría — nada de éxitos falsos ni toasts efímeros. */}
-      <AccountSyncModal
-        open={!!syncModal}
-        who={syncModal ? `${syncModal.student.firstName} ${syncModal.student.lastName}` : ''}
-        ident={syncModal?.student.code || ''}
-        kind="estudiante"
-        reason={syncModal?.reason || 'error'}
-        detail={syncModal?.detail}
-        busy={syncBusy}
-        error={syncError}
-        onSubmit={handleSyncModalSubmit}
-        onSkip={() => { setSyncModal(null); setSyncError(null); }}
-      />
+      {/* R67 (§12A — modal de restablecimiento INDIVIDUAL): estrategia manual /
+          predeterminada / aleatoria. El endpoint admin cambia Firebase con la SA
+          SIN conocer la clave anterior (§11) + verifier CAS en la misma operación. */}
+      {resetState && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-md animate-fadeIn">
+          <div className="p-6 rounded-3xl bg-white dark:bg-zinc-950 border border-slate-200 dark:border-zinc-800/50 shadow-2xl max-w-lg w-full space-y-4">
+            <div className="flex items-center justify-between border-b border-slate-100 dark:border-zinc-800/50 pb-3">
+              <div className="flex items-center gap-2">
+                <KeyRound className="w-4 h-4 text-indigo-600" />
+                <h3 className="text-xs font-bold uppercase tracking-wider text-slate-700 dark:text-slate-300">
+                  Restablecer clave de acceso
+                </h3>
+              </div>
+              <button onClick={() => setResetState(null)} className="p-1.5 text-slate-400 hover:text-slate-700 dark:hover:text-white rounded-xl hover:bg-slate-100 dark:hover:bg-slate-800" aria-label="Cerrar">
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+            <div className="space-y-2 text-xs text-slate-600 dark:text-slate-400 leading-relaxed">
+              <p>
+                <span className="font-bold text-slate-800 dark:text-slate-200">{resetState.who}</span> ({resetState.code})
+                {resetState.hasAccount
+                  ? ' — la nueva clave se aplica a su CUENTA de acceso (Firebase) y a la ficha de la nube en una sola operación. No necesita conocer la clave anterior.'
+                  : ' — este estudiante no tiene cuenta de acceso: se restablece la clave de su ficha (la del carné / login local).'}
+              </p>
+            </div>
+            <div className="space-y-2">
+              {(resetStrategy !== 'manual' && settings.defaultAccessPassword
+                ? [['default', `Predeterminada (${settings.defaultAccessPassword})`], ['random', 'Aleatoria segura'], ['manual', 'Escribir manualmente']] as const
+                : [['random', 'Aleatoria segura'], ['manual', 'Escribir manualmente']] as const
+              ).map(([val, label]) => (
+                <label key={val} className={`flex items-center gap-2.5 px-3.5 py-2.5 rounded-2xl border cursor-pointer transition-all ${resetStrategy === val ? 'border-indigo-400 bg-indigo-50/60 dark:bg-indigo-950/40' : 'border-slate-200 dark:border-zinc-800 hover:border-indigo-200'}`}>
+                  <input type="radio" name="reset-strategy" checked={resetStrategy === val} onChange={() => { setResetStrategy(val); setResetGenerated(null); setResetError(null); }} className="accent-indigo-600" />
+                  <span className="text-xs font-bold text-slate-700 dark:text-slate-200">{label}</span>
+                </label>
+              ))}
+              {resetStrategy === 'manual' && (
+                <input
+                  type="text"
+                  value={resetManualPw}
+                  onChange={(e) => setResetManualPw(e.target.value)}
+                  placeholder="La nueva clave (6 o más caracteres)…"
+                  className="w-full px-3.5 py-2.5 bg-slate-50 dark:bg-black border border-slate-200 dark:border-zinc-800/50 rounded-2xl text-xs font-mono font-bold text-slate-900 dark:text-white focus:ring-2 focus:ring-indigo-500 outline-none"
+                  autoComplete="off"
+                />
+              )}
+              {resetStrategy === 'random' && resetGenerated && (
+                <div className="p-3 rounded-2xl bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800/60">
+                  <p className="text-[10px] font-bold text-emerald-700 dark:text-emerald-300 uppercase tracking-wider">Clave generada (cópiala ahora — se aplica al confirmar)</p>
+                  <div className="flex items-center gap-2 mt-1">
+                    <code className="text-lg font-black font-mono text-emerald-800 dark:text-emerald-200">{resetGenerated}</code>
+                    <button type="button" onClick={() => navigator.clipboard?.writeText(resetGenerated)} className="px-2 py-1 rounded-lg bg-white dark:bg-black border border-emerald-300 dark:border-emerald-800 text-[10px] font-black text-emerald-700 dark:text-emerald-300">COPIAR</button>
+                  </div>
+                </div>
+              )}
+              {resetError && (
+                <div className="p-2.5 rounded-xl bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-900/60 text-[11px] font-bold text-rose-700 dark:text-rose-300 leading-relaxed">{resetError}</div>
+              )}
+            </div>
+            <div className="flex items-center justify-end gap-2 pt-1">
+              <button type="button" disabled={resetBusy} onClick={() => setResetState(null)} className="px-4 py-2.5 bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 rounded-xl text-xs font-bold hover:bg-slate-200 dark:hover:bg-slate-700 disabled:opacity-50">Cancelar</button>
+              <button type="button" disabled={resetBusy} onClick={executeReset} className="px-5 py-2.5 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white rounded-xl text-xs font-bold shadow-md shadow-indigo-600/25 flex items-center gap-1.5">
+                <KeyRound className="w-3.5 h-3.5" />
+                {resetBusy ? 'Restableciendo…' : resetStrategy === 'random' && resetGenerated ? 'Confirmar y aplicar' : 'Restablecer clave'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* R67 (§12B — confirmación del restablecimiento MASIVO y panel de resultados) */}
+      {bulkConfirmOpen && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-md animate-fadeIn">
+          <div className="p-6 rounded-3xl bg-white dark:bg-zinc-950 border border-slate-200 dark:border-zinc-800/50 shadow-2xl max-w-lg w-full space-y-4">
+            <div className="flex items-center gap-2 border-b border-slate-100 dark:border-zinc-800/50 pb-3">
+              <KeyRound className="w-4 h-4 text-amber-500" />
+              <h3 className="text-xs font-bold uppercase tracking-wider text-slate-700 dark:text-slate-300">Restablecer claves de TODOS los estudiantes</h3>
+            </div>
+            <div className="space-y-2 text-xs text-slate-600 dark:text-slate-400 leading-relaxed">
+              <p>Se restablecerá la clave de acceso de <span className="font-bold text-slate-900 dark:text-white">{bulkConfirmOpen.total} estudiantes</span>:</p>
+              <ul className="list-disc pl-5 space-y-0.5">
+                <li><span className="font-bold">{bulkConfirmOpen.withAccount}</span> con cuenta Firebase (la clave de SU cuenta cambia — no se necesita la anterior).</li>
+                <li><span className="font-bold">{bulkConfirmOpen.withoutAccount}</span> sin cuenta (solo la clave de su ficha/carné).</li>
+              </ul>
+              <p className="text-amber-600 dark:text-amber-400 font-bold">Los estudiantes deberán usar la clave nueva desde este momento: comunícala con la lista descargable al terminar.</p>
+            </div>
+            <div className="space-y-2">
+              {(settings.defaultAccessPassword
+                ? [['default', `Predeterminada para todos (${settings.defaultAccessPassword})`], ['random', 'Aleatoria distinta para cada uno'], ['manual', 'La misma escrita a mano']] as const
+                : [['random', 'Aleatoria distinta para cada uno'], ['manual', 'La misma escrita a mano']] as const
+              ).map(([val, label]) => (
+                <label key={val} className={`flex items-center gap-2.5 px-3.5 py-2.5 rounded-2xl border cursor-pointer transition-all ${bulkStrategy === val ? 'border-amber-400 bg-amber-50/60 dark:bg-amber-950/40' : 'border-slate-200 dark:border-zinc-800 hover:border-amber-200'}`}>
+                  <input type="radio" name="bulk-strategy" checked={bulkStrategy === val} onChange={() => setBulkStrategy(val)} className="accent-amber-600" />
+                  <span className="text-xs font-bold text-slate-700 dark:text-slate-200">{label}</span>
+                </label>
+              ))}
+              {bulkStrategy === 'manual' && (
+                <input type="text" value={bulkManualPw} onChange={(e) => setBulkManualPw(e.target.value)} placeholder="La misma clave para todos (6 o más caracteres)…" className="w-full px-3.5 py-2.5 bg-slate-50 dark:bg-black border border-slate-200 dark:border-zinc-800/50 rounded-2xl text-xs font-mono font-bold text-slate-900 dark:text-white focus:ring-2 focus:ring-amber-500 outline-none" autoComplete="off" />
+              )}
+            </div>
+            <div className="flex items-center justify-end gap-2 pt-1">
+              <button type="button" onClick={() => setBulkConfirmOpen(null)} className="px-4 py-2.5 bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 rounded-xl text-xs font-bold hover:bg-slate-200 dark:hover:bg-slate-700">Cancelar</button>
+              <button type="button" onClick={executeBulkReset} className="px-5 py-2.5 bg-amber-600 hover:bg-amber-500 text-white rounded-xl text-xs font-bold shadow-md shadow-amber-600/25">Sí, restablecer todas</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {bulkState && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-md animate-fadeIn">
+          <div className="p-6 rounded-3xl bg-white dark:bg-zinc-950 border border-slate-200 dark:border-zinc-800/50 shadow-2xl max-w-2xl w-full space-y-4 max-h-[85vh] overflow-y-auto">
+            <div className="flex items-center justify-between border-b border-slate-100 dark:border-zinc-800/50 pb-3">
+              <h3 className="text-xs font-bold uppercase tracking-wider text-slate-700 dark:text-slate-300">
+                {bulkState.running ? 'Restableciendo claves…' : 'Resultado del restablecimiento masivo'}
+              </h3>
+              {!bulkState.running && (
+                <button onClick={() => setBulkState(null)} className="p-1.5 text-slate-400 hover:text-slate-700 dark:hover:text-white rounded-xl hover:bg-slate-100 dark:hover:bg-slate-800" aria-label="Cerrar"><X className="w-4 h-4" /></button>
+              )}
+            </div>
+            {bulkState.running && (
+              <div className="space-y-2">
+                <div className="h-2.5 rounded-full bg-slate-100 dark:bg-zinc-800 overflow-hidden">
+                  <div className="h-full bg-indigo-600 transition-all" style={{ width: `${Math.round((bulkState.done / Math.max(1, bulkState.total)) * 100)}%` }} />
+                </div>
+                <p className="text-xs font-bold text-slate-600 dark:text-slate-300">{bulkState.done}/{bulkState.total} estudiantes…</p>
+              </div>
+            )}
+            {!bulkState.running && (
+              <>
+                <p className={`text-xs font-bold ${bulkState.results.every(r => r.ok) ? 'text-emerald-600 dark:text-emerald-400' : 'text-rose-600 dark:text-rose-400'}`}>
+                  {bulkState.results.filter(r => r.ok).length}/{bulkState.results.length} restablecidas correctamente.
+                  {bulkState.results.some(r => !r.ok) && ' Los fallos se listan abajo — reintentarlos es seguro (los exitosos ya quedaron aplicados).'}
+                </p>
+                <div className="max-h-56 overflow-y-auto rounded-2xl border border-slate-200 dark:border-zinc-800 divide-y divide-slate-100 dark:divide-zinc-800/60">
+                  {bulkState.results.map(r => (
+                    <div key={r.code} className="flex items-center justify-between gap-2 px-3.5 py-2">
+                      <div className="min-w-0">
+                        <p className="text-[11px] font-black text-slate-800 dark:text-slate-100 truncate">{r.name}</p>
+                        <p className="text-[10px] font-mono text-slate-400">{r.code} · {r.password}</p>
+                      </div>
+                      <span className={`text-[10px] font-black shrink-0 ${r.ok ? 'text-emerald-600 dark:text-emerald-400' : 'text-rose-600 dark:text-rose-400'}`}>{r.ok ? 'OK' : (r.error || 'FALLO').slice(0, 40)}</span>
+                    </div>
+                  ))}
+                </div>
+                <div className="flex items-center justify-between gap-2 pt-1">
+                  <button type="button" onClick={downloadBulkCsv} className="px-4 py-2.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-bold shadow-md shadow-emerald-600/25 flex items-center gap-1.5">
+                    <Download className="w-3.5 h-3.5" /> Descargar credenciales (CSV)
+                  </button>
+                  <button type="button" onClick={() => setBulkState(null)} className="px-4 py-2.5 bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 rounded-xl text-xs font-bold hover:bg-slate-200 dark:hover:bg-slate-700">Cerrar</button>
+                </div>
+              </>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 };

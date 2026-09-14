@@ -156,6 +156,12 @@ export interface Student {
   // el estudiante solo puede verificar SU PROPIA clave, no la de sus compañeros).
   // La verificación FUERTE sigue siendo Firebase Auth.
   tempPasswordVerifier?: string;
+  // R67 (§18/§19 — determinismo de credenciales): sello de la ÚLTIMA operación de
+  // credencial sobre esta ficha (ISO) + quién la hizo. El merge LWW del push y los
+  // endpoints CAS del Worker los usan como AUTORIDAD EXPLÍCITA (reemplazo de la
+  // heurística "verifier ≠ HMAC(pin) → suponer que la nube es más reciente").
+  credentialUpdatedAt?: string;
+  credentialActor?: string;
   // Ronda 59: llave de login DERIVADA por estudiante (HMAC(qrSecret, `loginkey:v1:${code}`)).
   // Viaja SOLO en la PROPIA ficha del estudiante (el Worker la elimina de las fichas
   // de sus compañeros de grado): permite al portal del estudiante verificar su clave
@@ -379,6 +385,11 @@ export interface SchoolSettings {
   cloudflareAutoSync?: boolean;
   cloudflareSyncIntervalMinutes?: number;
   lastCloudflareSync?: string;
+  // R67 (§9 Caso 3): contraseña PREDETERMINADA institucional para generar claves de
+  // acceso cuando Rectoría deja el campo vacío (registro/restablecimiento). Configurable
+  // desde Ajustes; si está vacía, la generación es ALEATORIA segura. Debe tener ≥6
+  // caracteres (Firebase) — validado al guardarla.
+  defaultAccessPassword?: string;
   // Ronda 47 (Fase 2 — Flanco 3): versión de catálogo conocida por este terminal. Se
   // actualiza en cada Pull y se envía en cada push de catálogo para el CAS (409 si obsoleta).
   cloudflareCatalogVersion?: number;

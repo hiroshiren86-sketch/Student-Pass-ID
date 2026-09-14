@@ -23,6 +23,7 @@ import {
   Server,
   Globe,
   BrainCircuit,
+  KeyRound,
   School as SchoolIcon
 } from 'lucide-react';
 import { SchoolSettings } from '../types/attendance';
@@ -277,7 +278,16 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ onClose }) => {
 
   const handleSave = (e: React.FormEvent) => {
     e.preventDefault();
-    AttendanceStorageService.saveSettings(settings);
+    // R67 (§9 Caso 3): validación de la contraseña predeterminada institucional —
+    // si está definida debe cumplir el mínimo de Firebase (≥6), porque las claves
+    // generadas con ella serán contraseñas de cuentas.
+    const dap = (settings.defaultAccessPassword || '').trim();
+    if (dap && dap.length < 6) {
+      setSettings({ ...settings, defaultAccessPassword: dap });
+      alert('La contraseña predeterminada debe tener 6 o más caracteres (requisito de Firebase para las cuentas de acceso). Corrígela o déjala vacía para usar generación aleatoria.');
+      return;
+    }
+    AttendanceStorageService.saveSettings({ ...settings, defaultAccessPassword: dap || undefined });
     // R61 (fix H-5): NO se re-aplica la plantilla activa al guardar ajustes.
     // Antes, este handleSave llamaba applyDayTemplate(settings.activeDayTemplate)
     // en CADA guardado, lo que REGENERABA los slots desde la plantilla y BORRABA
@@ -378,6 +388,29 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ onClose }) => {
                 required
               />
             </div>
+          </div>
+
+          {/* R67 (§9 Caso 3 — contraseña predeterminada institucional): se usa al
+              GENERAR claves (registro con campo vacío y restablecimientos con
+              estrategia "predeterminada"). Vacía → generación aleatoria segura. */}
+          <div>
+            <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 uppercase tracking-wider mb-1.5">
+              Contraseña Predeterminada de Acceso (opcional)
+            </label>
+            <div className="relative">
+              <KeyRound className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+              <input
+                type="text"
+                value={settings.defaultAccessPassword || ''}
+                onChange={(e) => handleChange('defaultAccessPassword', e.target.value)}
+                placeholder="Ej: INAS-2026 — vacía = generación aleatoria segura"
+                className="w-full bg-white dark:bg-black border border-slate-300 dark:border-zinc-800 focus:border-indigo-500 text-slate-900 dark:text-white text-xs pl-9 pr-3 py-2.5 rounded-xl outline-none shadow-xs font-mono"
+                autoComplete="off"
+              />
+            </div>
+            <p className="text-[10px] text-slate-500 dark:text-slate-400 mt-1 leading-relaxed">
+              Se usará al registrar estudiantes/docentes con el campo de clave vacío y en los restablecimientos con estrategia «predeterminada». Debe tener 6 o más caracteres (Firebase). Con ella vacía, toda clave generada es aleatoria y única (nunca derivada del documento).
+            </p>
           </div>
 
           {/* Ronda 55: el selector de Plantilla de Jornada se RETIRÓ de Configuración —

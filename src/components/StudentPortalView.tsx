@@ -325,13 +325,18 @@ export const StudentPortalView: React.FC<StudentPortalViewProps> = ({ onLogout, 
             tempPassword: next,
             hasCustomPassword: true,
             loginKey,
-            tempPasswordVerifier: newVerifier
+            tempPasswordVerifier: newVerifier,
+            // R67 (§18): sello explícito de la operación (el merge LWW del push lo usa).
+            credentialUpdatedAt: new Date().toISOString(),
+            credentialActor: `student:${activeStudent.code}`
           } as any);
         } else {
           AttendanceStorageService.updateStudent(activeStudent.code, {
             tempPassword: next,
-            hasCustomPassword: true
-          });
+            hasCustomPassword: true,
+            credentialUpdatedAt: new Date().toISOString(),
+            credentialActor: `student:${activeStudent.code}`
+          } as any);
         }
       } catch {
         AttendanceStorageService.updateStudent(activeStudent.code, {

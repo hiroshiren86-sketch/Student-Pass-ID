@@ -716,6 +716,10 @@ export class AttendanceStorageService {
             if (i >= 0 && (fresh[i] as any).tempPassword === newPin) {
               (fresh[i] as any).loginKey = loginKey;
               (fresh[i] as any).tempPasswordVerifier = verifier;
+              // R67 (§18): sello explícito de la operación de credencial — el merge
+              // LWW del Worker usa este timestamp como autoridad (nunca heurísticas).
+              (fresh[i] as any).credentialUpdatedAt = new Date().toISOString();
+              (fresh[i] as any).credentialActor = 'rectoria-edit';
               this.saveStudents(fresh, isAdminSession ? 'local' : 'cloud');
             }
           }).catch(() => { /* sin secret/red: el sanitize del push computa */ });

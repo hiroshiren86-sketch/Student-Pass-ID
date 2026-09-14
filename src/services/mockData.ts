@@ -164,10 +164,13 @@ export function generateSeedStudents(): Student[] {
     const grade = SCHOOL_GRADES_LIST[gradeIdx];
     const section = grade.includes('1') ? '1' : (grade.includes('2') ? '2' : 'A');
 
-    // Ronda 60-g: el PIN / Clave de Acceso Portal NO se deriva del documento. Los datos
-    // mock generan un PIN aleatorio de 4 dígitos (no 'SJ-' + algo) para los estudiantes
-    // de demostración. Vacío también es válido (el carné muestra "Solicitar en Rectoría").
-    const tempPassword = String(1000 + (i * 137) % 9000);
+    // R67 (§4 — REGRESIÓN 12 cerrada por diseño): los datos demo ya NO generan
+    // claves deterministas derivadas del código (el patrón anterior 1000+(i*137)%9000
+    // era predecible de datos públicos — la misma CLASE de vulnerabilidad que la
+    // vieja derivación 'SJ-'+últimos4, eliminada en R58-F18). Los estudiantes demo
+    // nacen SIN clave: el carné muestra "Solicitar en Rectoría" y la demo se usa
+    // con la acción explícita "Reiniciar datos de prueba" (SEED_DEMO_ON_FIRST_LAUNCH=false).
+    const tempPassword = undefined;
 
     // Representantes titulares y suplentes para jerarquía de 3 niveles
     const isTitularRep = code === '1000000002' || code === '1000000001'; // Valentina Gómez (6°1), Santiago Gómez (10°1)
@@ -205,7 +208,7 @@ export const INITIAL_TEACHERS: Teacher[] = [
     subjects: ['Matemáticas', 'Física', 'Geometría'],
     assignedGrades: ['10°1', '10°2', '11°1', '11°2'],
     username: 'jperez',
-    tempPassword: 'Profe2026*Mat',
+    tempPassword: undefined, // R67 §4: sin credencial demo predecible (carné muestra estado vacío claro)
     active: true,
     createdAt: '2026-01-10T08:00:00.000Z',
     isGroupDirector: true,
@@ -220,7 +223,7 @@ export const INITIAL_TEACHERS: Teacher[] = [
     subjects: ['Lengua Castellana', 'Literatura', 'Comprensión Lectora'],
     assignedGrades: ['6°1', '6°2', '7°1', '7°2'],
     username: 'mrestrepo',
-    tempPassword: 'Profe2026*Esp',
+    tempPassword: undefined, // R67 §4: sin credencial demo predecible (carné muestra estado vacío claro)
     active: true,
     createdAt: '2026-01-10T08:00:00.000Z',
     isGroupDirector: true,
@@ -235,7 +238,7 @@ export const INITIAL_TEACHERS: Teacher[] = [
     subjects: ['Sociales', 'Filosofía', 'Ciencias Económicas y Políticas'],
     assignedGrades: ['8°1', '8°2', '9°1', '10°1', '11°2'],
     username: 'cmendoza',
-    tempPassword: 'Profe2026*Soc',
+    tempPassword: undefined, // R67 §4: sin credencial demo predecible (carné muestra estado vacío claro)
     active: true,
     createdAt: '2026-01-10T08:00:00.000Z',
     isGroupDirector: true,
@@ -250,7 +253,7 @@ export const INITIAL_TEACHERS: Teacher[] = [
     subjects: ['Ciencias Naturales (Biología)', 'Química', 'Física'],
     assignedGrades: ['9°1', '9°2', '10°1', '10°2', '11°2'],
     username: 'dvalencia',
-    tempPassword: 'Profe2026*Nat',
+    tempPassword: undefined, // R67 §4: sin credencial demo predecible (carné muestra estado vacío claro)
     active: true,
     createdAt: '2026-01-10T08:00:00.000Z'
   },
@@ -263,7 +266,7 @@ export const INITIAL_TEACHERS: Teacher[] = [
     subjects: ['Inglés', 'Bilingüismo'],
     assignedGrades: ['6°1', '8°1', '10°1', '11°1'],
     username: 'agiraldo',
-    tempPassword: 'Profe2026*Ing',
+    tempPassword: undefined, // R67 §4: sin credencial demo predecible (carné muestra estado vacío claro)
     active: true,
     createdAt: '2026-01-10T08:00:00.000Z'
   },
@@ -276,7 +279,7 @@ export const INITIAL_TEACHERS: Teacher[] = [
     subjects: ['Informática', 'Educación Física', 'Artística'],
     assignedGrades: ['7°1', '9°1', '10°1', '11°2'],
     username: 'smorales',
-    tempPassword: 'Profe2026*Tec',
+    tempPassword: undefined, // R67 §4: sin credencial demo predecible (carné muestra estado vacío claro)
     active: true,
     createdAt: '2026-01-10T08:00:00.000Z'
   }

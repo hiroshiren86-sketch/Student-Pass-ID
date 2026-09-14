@@ -1,6 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import { ConfirmDialog } from './ConfirmDialog';
-import AccountSyncModal from './AccountSyncModal';
+// R67: el AccountSyncModal de R66 fue ELIMINADO (reemplazado por el restablecimiento
+// administrativo sin clave anterior — ver bitácora R67).
+import { resolveAccessPassword } from '../utils/credentialGen'; // R67 §9: política de generación de claves
 import { CloudflareSyncService } from '../services/cloudflareSync';
 import { 
   Users, 
@@ -77,17 +79,19 @@ export const TeachersManagerView: React.FC = () => {
   const [resetModalTeacher, setResetModalTeacher] = useState<Teacher | null>(null);
   const [newGeneratedPass, setNewGeneratedPass] = useState<string | null>(null);
   const [copiedPass, setCopiedPass] = useState(false);
-  // R66 (fix de la cuenta "pegada", espejo docente): modal de sincronización cuando
-  // el provisioner no puede firmar con la clave temporal anterior del terminal.
-  const [syncModal, setSyncModal] = useState<{
-    teacher: Teacher;
-    email: string;
-    newTemp: string;
-    reason: 'unknown_old' | 'mismatch' | 'error';
-    detail?: string;
-  } | null>(null);
-  const [syncBusy, setSyncBusy] = useState(false);
-  const [syncError, setSyncError] = useState<string | null>(null);
+  // R67 (§12A — reset individual docente): reemplaza el syncModal de R66 (ya no se
+  // necesita la clave anterior — el endpoint admin usa la SA, §11).
+  const [tReset, setTReset] = useState<{ who: string; id: string; email: string; hasAccount: boolean } | null>(null);
+  const [tResetStrategy, setTResetStrategy] = useState<'manual' | 'default' | 'random'>('default');
+  const [tResetManualPw, setTResetManualPw] = useState('');
+  const [tResetGenerated, setTResetGenerated] = useState<string | null>(null);
+  const [tResetError, setTResetError] = useState<string | null>(null);
+  const [tResetBusy, setTResetBusy] = useState(false);
+  // R67 (§12B — reset masivo docente)
+  const [tBulkConfirm, setTBulkConfirm] = useState<{ total: number } | null>(null);
+  const [tBulkStrategy, setTBulkStrategy] = useState<'default' | 'random' | 'manual'>('default');
+  const [tBulkManualPw, setTBulkManualPw] = useState('');
+  const [tBulkState, setTBulkState] = useState<{ running: boolean; done: number; total: number; results: Array<{ code: string; name: string; password: string; ok: boolean; error?: string }> } | null>(null);
 
   useEffect(() => {
     const unsubscribe = AttendanceStorageService.subscribe(() => {
@@ -171,6 +175,10 @@ export const TeachersManagerView: React.FC = () => {
         setSubjectsError('Este docente tiene cuenta de acceso: la clave temporal debe tener 6 o más caracteres (requisito de Firebase).');
         return;
       }
+      // R67 (§9 — política de edición docente): campo vacío = NO cambiar la clave
+      // (conservar); llena y distinta = cambiar (con cuenta → reset admin sin clave
+      // anterior; sin cuenta → solo ficha, informativa — el login docente es Firebase).
+      const tempChanged = newTemp !== '' && newTemp !== oldTemp;
       AttendanceStorageService.updateTeacher(editingTeacher.id, {
         documentId: formData.documentId,
         fullName: formData.fullName,
@@ -181,34 +189,26 @@ export const TeachersManagerView: React.FC = () => {
         isGroupDirector,
         directorGrade: isGroupDirector ? formData.directorGrade : undefined,
         username: generatedUsername,
-        tempPassword: formData.tempPassword
+        ...(tempChanged ? { tempPassword: newTemp } : {})
       });
       showToast(`¡Docente ${formData.fullName} actualizado con éxito!`);
-      // R64 (Fix A — gap docente): si el docente TIENE cuenta real y Rectoría cambió
-      // su clave temporal, la CONTRASEÑA de la cuenta se sincroniza en el mismo
-      // guardado (espejo del fix PIN↔cuenta de estudiantes, R61). Antes la ficha
-      // local cambiaba y la cuenta quedaba con la clave previa → el docente no
-      // podía entrar con la clave que Rectoría le comunicó.
-      if (editingTeacher.hasFirebaseAccount && newTemp && newTemp !== oldTemp) {
-        const target = (editingTeacher.authEmail || formData.email || `${generatedUsername}@inas.edu.co`).trim().toLowerCase();
-        const sync = await FirebaseService.syncTeacherAccountPassword(target, oldTemp, newTemp);
-        if (sync.ok) {
-          showToast(`Cuenta de acceso actualizada: la nueva clave temporal de ${formData.fullName} ya funciona para entrar.`);
+      // R67 (§11): el cambio de clave con cuenta va por el endpoint admin (SA) —
+      // SIN conocer la clave anterior. Reemplaza el provisioner+modal de R61/R66.
+      if (tempChanged && editingTeacher.hasFirebaseAccount) {
+        showToast(`Restableciendo la cuenta de ${formData.fullName}…`);
+        const res = await CloudflareSyncService.adminCredentialReset(
+          'teacher', [{ code: editingTeacher.id, password: newTemp }], 'rectoria-editar-docente');
+        const r = res.results?.[0];
+        if (r?.ok) {
+          showToast(`Cuenta de acceso actualizada: la nueva clave de ${formData.fullName} ya funciona para entrar.`);
         } else {
-          // R66: la falla abre el modal (con reintento con la clave actual escrita por
-          // Rectoría) en lugar del toast efímero que se perdía — mismo fix del lado
-          // estudiante. La ficha ya quedó con la nueva clave: el modal lo informa.
-          setSyncModal({
-            teacher: editingTeacher,
-            email: target,
-            newTemp,
-            reason: !oldTemp || sync.reason === 'error' ? (!oldTemp ? 'unknown_old' : 'error') : 'mismatch',
-            detail: sync.message
-          });
+          showToast(`⚠ La ficha quedó con la clave nueva, pero la CUENTA de ${formData.fullName} no: ${r?.error || res.message}. Usa "Restablecer clave" en su tarjeta para reintentarlo.`);
         }
       }
     } else {
-      const initialTemp = formData.tempPassword || `Docente${Math.floor(1000 + Math.random() * 9000)}*`;
+      // R67 (§9 registro docente): vacío = generar según política.
+      const resolved = resolveAccessPassword(formData.tempPassword, AttendanceStorageService.getSettings().defaultAccessPassword);
+      const initialTemp = resolved.password;
       const newTeacher: Teacher = {
         id: `prof-${Date.now()}`,
         documentId: formData.documentId,
@@ -241,26 +241,124 @@ export const TeachersManagerView: React.FC = () => {
     setShowModal(false);
   };
 
-  // R66 (fix de la cuenta "pegada", espejo docente): reintento de sincronización
-  // desde el modal con la clave ACTUAL de la cuenta que Rectoría escribe.
-  const handleSyncModalSubmit = async (currentPassword: string) => {
-    if (!syncModal) return;
-    setSyncBusy(true);
-    setSyncError(null);
+  // R67 (§12A — restablecimiento INDIVIDUAL docente): modal de estrategia igual
+  // al de estudiantes. Con cuenta → endpoint admin (SA, sin clave anterior).
+  const openTeacherReset = (t: Teacher) => {
+    setTReset({
+      who: t.fullName,
+      id: t.id,
+      email: (t.authEmail || t.email || '').trim().toLowerCase(),
+      hasAccount: !!t.hasFirebaseAccount
+    });
+    setTResetStrategy(AttendanceStorageService.getSettings().defaultAccessPassword ? 'default' : 'random');
+    setTResetManualPw('');
+    setTResetGenerated(null);
+    setTResetError(null);
+  };
+
+  const executeTeacherReset = async () => {
+    if (!tReset) return;
+    const settings = AttendanceStorageService.getSettings();
+    const resolved = resolveAccessPassword(
+      tResetStrategy === 'manual' ? tResetManualPw : '',
+      tResetStrategy === 'default' ? settings.defaultAccessPassword : ''
+    );
+    if (tResetStrategy === 'manual' && resolved.password.length < 6) {
+      setTResetError('La clave manual debe tener 6 o más caracteres (requisito de Firebase).');
+      return;
+    }
+    if (tResetStrategy === 'random' && tResetGenerated !== resolved.password) {
+      setTResetGenerated(resolved.password);
+      setTResetError(null);
+      return;
+    }
+    setTResetBusy(true);
+    setTResetError(null);
     try {
-      const sync = await FirebaseService.syncTeacherAccountPassword(
-        syncModal.email, currentPassword, syncModal.newTemp);
-      if (sync.ok) {
-        setSyncModal(null);
-        showToast(`Cuenta de acceso actualizada: la nueva clave temporal de ${syncModal.teacher.fullName} ya funciona para entrar.`);
-      } else if (sync.reason === 'old_password_mismatch') {
-        setSyncError('Esa tampoco es la clave actual de la cuenta. Inténtelo de nuevo con la clave con la que el docente entra hoy (o la última que se le entregó).');
+      const res = await CloudflareSyncService.adminCredentialReset(
+        'teacher', [{ code: tReset.id, password: resolved.password }], 'rectoria-reset-docente');
+      const r = res.results?.[0];
+      if (r?.ok) {
+        AttendanceStorageService.updateTeacher(tReset.id, { tempPassword: resolved.password } as any);
+        setTReset(null);
+        showToast(r.mode === 'no_account'
+          ? `Ficha de ${tReset.who} sin cuenta Firebase: nada que restablecer (el login docente es únicamente por cuenta). Clave de ficha registrada: ${resolved.password}`
+          : `Clave de ${tReset.who} restablecida: ${resolved.password} (cuenta Firebase actualizada — ya funciona para entrar).`);
       } else {
-        setSyncError(sync.message || 'No se pudo actualizar la contraseña de la cuenta. Verifique la conexión e inténtelo de nuevo.');
+        setTResetError(r?.error || res.message || 'No se pudo restablecer la clave.');
       }
     } finally {
-      setSyncBusy(false);
+      setTResetBusy(false);
     }
+  };
+
+  // R67 (§12B — restablecimiento MASIVO docente): conjunto dinámico de docentes
+  // CON cuenta (los sin cuenta no autentican nada por ficha).
+  const openTeacherBulkReset = () => {
+    const withAccount = teachers.filter(t => t && t.hasFirebaseAccount && t.active !== false);
+    if (withAccount.length === 0) {
+      showToast('No hay docentes con cuenta de acceso.');
+      return;
+    }
+    setTBulkConfirm({ total: withAccount.length });
+    setTBulkStrategy(AttendanceStorageService.getSettings().defaultAccessPassword ? 'default' : 'random');
+    setTBulkManualPw('');
+  };
+
+  const executeTeacherBulkReset = async () => {
+    if (!tBulkConfirm) return;
+    const settings = AttendanceStorageService.getSettings();
+    const targets = teachers.filter(t => t && t.hasFirebaseAccount && t.active !== false);
+    if (tBulkStrategy === 'manual') {
+      const chk = resolveAccessPassword(tBulkManualPw, '');
+      if (chk.origin === 'manual' && chk.password.length < 6) {
+        showToast('⚠ La clave manual debe tener 6 o más caracteres (requisito de Firebase).');
+        return;
+      }
+    }
+    setTBulkConfirm(null);
+    setTBulkState({ running: true, done: 0, total: targets.length, results: [] });
+    const results: Array<{ code: string; name: string; password: string; ok: boolean; error?: string }> = [];
+    const CHUNK = 10;
+    for (let i = 0; i < targets.length; i += CHUNK) {
+      const chunk = targets.slice(i, i + CHUNK).map(t => ({
+        t,
+        password: resolveAccessPassword(
+          tBulkStrategy === 'manual' ? tBulkManualPw : '',
+          tBulkStrategy === 'default' ? settings.defaultAccessPassword : ''
+        ).password
+      }));
+      const res = await CloudflareSyncService.adminCredentialReset(
+        'teacher', chunk.map(c => ({ code: c.t.id, password: c.password })), 'rectoria-reset-masivo-docentes');
+      chunk.forEach(c => {
+        const r = res.results?.find(x => x.code === c.t.id);
+        results.push({ code: c.t.id, name: c.t.fullName, password: c.password, ok: !!r?.ok, error: r?.error });
+        if (r?.ok) {
+          AttendanceStorageService.updateTeacher(c.t.id, { tempPassword: c.password } as any);
+        }
+      });
+      setTBulkState({ running: true, done: Math.min(i + CHUNK, targets.length), total: targets.length, results: [...results] });
+    }
+    setTBulkState({ running: false, done: results.length, total: targets.length, results });
+    const okCount = results.filter(r => r.ok).length;
+    showToast(okCount === results.length
+      ? `Claves restablecidas para ${okCount} docentes.`
+      : `⚠ ${okCount}/${results.length} restablecidas — revisa los fallos.`);
+  };
+
+  const downloadTeacherBulkCsv = () => {
+    if (!tBulkState) return;
+    const rows = [
+      'Id,Nombre,ClaveNueva,Resultado,Detalle',
+      ...tBulkState.results.map(r => `${r.code},"${r.name}","${r.password}",${r.ok ? 'OK' : 'FALLO'},"${(r.error || '').replace(/"/g, "'")}"`)
+    ].join('\n');
+    const blob = new Blob(['\ufeff' + rows], { type: 'text/csv;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `claves_acceso_docentes_${new Date().toISOString().slice(0, 10)}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
   };
 
   /**
@@ -356,18 +454,12 @@ export const TeachersManagerView: React.FC = () => {
   };
 
   const handleResetPassword = (t: Teacher) => {
-    // Ronda 33 (M2): para docentes CON cuenta real, la contraseña se gestiona en
-    // Firebase Auth — el restablecimiento local solo aplica a fichas sin cuenta.
-    if (t.hasFirebaseAccount) {
-      handleSendResetEmail(t);
-      return;
-    }
-    const res = AttendanceStorageService.resetTeacherPassword(t.id);
-    if (res.success && res.newPassword) {
-      setResetModalTeacher(t);
-      setNewGeneratedPass(res.newPassword);
-      setCopiedPass(false);
-    }
+    // R67 (§11/§13): dos vías administrativas — restablecimiento directo (SA, sin
+    // clave anterior) desde el modal, o el enlace oficial por correo. El correo se
+    // conserva como vía INDEPENDIENTE (sirve si el docente tiene un correo real
+    // entregable); el reset administrativo es el camino que NO depende del correo.
+    // Para fichas sin cuenta, el reset de ficha sigue siendo local (informativo).
+    openTeacherReset(t);
   };
 
   /**
@@ -519,6 +611,7 @@ export const TeachersManagerView: React.FC = () => {
           </p>
         </div>
 
+        <div className="flex flex-col md:flex-row items-stretch md:items-center gap-2.5">
         <button
           onClick={handleOpenAdd}
           className="px-4 py-2.5 bg-indigo-600 dark:bg-white hover:bg-indigo-500 dark:hover:bg-zinc-200 text-white dark:text-black rounded-2xl text-xs font-bold transition-all shadow-md shadow-indigo-600/20 flex items-center gap-2 self-stretch md:self-auto justify-center"
@@ -526,6 +619,16 @@ export const TeachersManagerView: React.FC = () => {
           <UserPlus className="w-4 h-4" />
           <span>Registrar Nuevo Docente</span>
         </button>
+        {/* R67 (§12B — reset masivo docente): conjunto dinámico con cuenta. */}
+        <button
+          onClick={openTeacherBulkReset}
+          className="px-4 py-2.5 bg-amber-50 hover:bg-amber-100 dark:bg-amber-950/40 dark:hover:bg-amber-900/40 text-amber-700 dark:text-amber-300 rounded-2xl text-xs font-bold transition-all border border-amber-200 dark:border-amber-800/60 shadow-xs flex items-center gap-2 self-stretch md:self-auto justify-center"
+          title="Restablecer la clave de TODOS los docentes con cuenta (operación administrativa masiva con confirmación)"
+        >
+          <Key className="w-4 h-4" />
+          <span>Restablecer claves (todos)</span>
+        </button>
+        </div>
       </div>
 
       {/* Search and Summary Counter */}
@@ -691,12 +794,12 @@ export const TeachersManagerView: React.FC = () => {
             <div className="pt-2 border-t border-slate-100 dark:border-zinc-800/50 flex items-center justify-between gap-1.5">
               {teacher.hasFirebaseAccount ? (
                 <button
-                  onClick={() => handleSendResetEmail(teacher)}
+                  onClick={() => openTeacherReset(teacher)}
                   className="px-2.5 py-1.5 rounded-xl bg-amber-50 hover:bg-amber-100 dark:bg-amber-950/60 dark:hover:bg-amber-900/60 text-amber-700 dark:text-amber-300 text-[11px] font-bold transition-all border border-amber-200 dark:border-amber-800 flex items-center gap-1"
-                  title="Enviar enlace de restablecimiento al correo institucional (Firebase Auth)"
+                  title="Restablecer la clave de acceso SIN conocer la anterior (operación administrativa) — o enviar el enlace por correo"
                 >
                   <Key className="w-3.5 h-3.5" />
-                  <span>Reset por Correo</span>
+                  <span>Restablecer clave</span>
                 </button>
               ) : (
                 <button
@@ -1062,19 +1165,147 @@ export const TeachersManagerView: React.FC = () => {
         onCancel={() => setDeleteConfirm(null)}
       />
 
-      {/* R66 (fix de la cuenta "pegada", espejo docente) */}
-      <AccountSyncModal
-        open={!!syncModal}
-        who={syncModal?.teacher.fullName || ''}
-        ident={syncModal?.email || ''}
-        kind="docente"
-        reason={syncModal?.reason || 'error'}
-        detail={syncModal?.detail}
-        busy={syncBusy}
-        error={syncError}
-        onSubmit={handleSyncModalSubmit}
-        onSkip={() => { setSyncModal(null); setSyncError(null); }}
-      />
+      {/* R67 (§12A — modal de restablecimiento INDIVIDUAL docente, con la vía
+          correo como alternativa independiente §13). */}
+      {tReset && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-md animate-fadeIn">
+          <div className="p-6 rounded-3xl bg-white dark:bg-zinc-950 border border-slate-200 dark:border-zinc-800/50 shadow-2xl max-w-lg w-full space-y-4">
+            <div className="flex items-center justify-between border-b border-slate-100 dark:border-zinc-800/50 pb-3">
+              <div className="flex items-center gap-2">
+                <Key className="w-4 h-4 text-indigo-600" />
+                <h3 className="text-xs font-bold uppercase tracking-wider text-slate-700 dark:text-slate-300">Restablecer clave del docente</h3>
+              </div>
+              <button onClick={() => setTReset(null)} className="p-1.5 text-slate-400 hover:text-slate-700 dark:hover:text-white rounded-xl hover:bg-slate-100 dark:hover:bg-slate-800" aria-label="Cerrar">
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+            <div className="space-y-1 text-xs text-slate-600 dark:text-slate-400 leading-relaxed">
+              <p><span className="font-bold text-slate-800 dark:text-slate-200">{tReset.who}</span>{tReset.email ? <> · <span className="font-mono">{tReset.email}</span></> : null}</p>
+              <p>{tReset.hasAccount
+                ? 'La nueva clave se aplica a su CUENTA de acceso (Firebase) sin necesidad de conocer la anterior.'
+                : 'Este docente no tiene cuenta de acceso: la clave queda solo como registro de la ficha (el login docente es únicamente por cuenta Firebase).'}</p>
+            </div>
+            <div className="space-y-2">
+              {(tResetStrategy !== 'manual' && AttendanceStorageService.getSettings().defaultAccessPassword
+                ? [['default', `Predeterminada (${AttendanceStorageService.getSettings().defaultAccessPassword})`], ['random', 'Aleatoria segura'], ['manual', 'Escribir manualmente']] as const
+                : [['random', 'Aleatoria segura'], ['manual', 'Escribir manualmente']] as const
+              ).map(([val, label]) => (
+                <label key={val} className={`flex items-center gap-2.5 px-3.5 py-2.5 rounded-2xl border cursor-pointer transition-all ${tResetStrategy === val ? 'border-indigo-400 bg-indigo-50/60 dark:bg-indigo-950/40' : 'border-slate-200 dark:border-zinc-800 hover:border-indigo-200'}`}>
+                  <input type="radio" name="treset-strategy" checked={tResetStrategy === val} onChange={() => { setTResetStrategy(val); setTResetGenerated(null); setTResetError(null); }} className="accent-indigo-600" />
+                  <span className="text-xs font-bold text-slate-700 dark:text-slate-200">{label}</span>
+                </label>
+              ))}
+              {tResetStrategy === 'manual' && (
+                <input type="text" value={tResetManualPw} onChange={(e) => setTResetManualPw(e.target.value)} placeholder="La nueva clave (6 o más caracteres)…" className="w-full px-3.5 py-2.5 bg-slate-50 dark:bg-black border border-slate-200 dark:border-zinc-800/50 rounded-2xl text-xs font-mono font-bold text-slate-900 dark:text-white focus:ring-2 focus:ring-indigo-500 outline-none" autoComplete="off" />
+              )}
+              {tResetStrategy === 'random' && tResetGenerated && (
+                <div className="p-3 rounded-2xl bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800/60">
+                  <p className="text-[10px] font-bold text-emerald-700 dark:text-emerald-300 uppercase tracking-wider">Clave generada (cópiala ahora — se aplica al confirmar)</p>
+                  <div className="flex items-center gap-2 mt-1">
+                    <code className="text-lg font-black font-mono text-emerald-800 dark:text-emerald-200">{tResetGenerated}</code>
+                    <button type="button" onClick={() => navigator.clipboard?.writeText(tResetGenerated)} className="px-2 py-1 rounded-lg bg-white dark:bg-black border border-emerald-300 dark:border-emerald-800 text-[10px] font-black text-emerald-700 dark:text-emerald-300">COPIAR</button>
+                  </div>
+                </div>
+              )}
+              {tResetError && (
+                <div className="p-2.5 rounded-xl bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-900/60 text-[11px] font-bold text-rose-700 dark:text-rose-300 leading-relaxed">{tResetError}</div>
+              )}
+            </div>
+            <div className="flex items-center justify-between gap-2 pt-1">
+              <button type="button" onClick={() => { const t = teachers.find(x => x.id === tReset.id); if (t) handleSendResetEmail(t); }} className="px-3 py-2.5 text-[10px] font-bold text-slate-500 dark:text-slate-400 hover:text-indigo-600 underline underline-offset-2" title="Enviar el enlace oficial de Firebase al correo del docente (vía independiente)">
+                Prefiero enviarle un enlace por correo
+              </button>
+              <div className="flex items-center gap-2">
+                <button type="button" disabled={tResetBusy} onClick={() => setTReset(null)} className="px-4 py-2.5 bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 rounded-xl text-xs font-bold hover:bg-slate-200 dark:hover:bg-slate-700 disabled:opacity-50">Cancelar</button>
+                <button type="button" disabled={tResetBusy} onClick={executeTeacherReset} className="px-5 py-2.5 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white rounded-xl text-xs font-bold shadow-md shadow-indigo-600/25 flex items-center gap-1.5">
+                  <Key className="w-3.5 h-3.5" />
+                  {tResetBusy ? 'Restableciendo…' : tResetStrategy === 'random' && tResetGenerated ? 'Confirmar y aplicar' : 'Restablecer clave'}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* R67 (§12B — confirmación masiva docente + resultados) */}
+      {tBulkConfirm && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-md animate-fadeIn">
+          <div className="p-6 rounded-3xl bg-white dark:bg-zinc-950 border border-slate-200 dark:border-zinc-800/50 shadow-2xl max-w-lg w-full space-y-4">
+            <div className="flex items-center gap-2 border-b border-slate-100 dark:border-zinc-800/50 pb-3">
+              <Key className="w-4 h-4 text-amber-500" />
+              <h3 className="text-xs font-bold uppercase tracking-wider text-slate-700 dark:text-slate-300">Restablecer claves de TODOS los docentes</h3>
+            </div>
+            <div className="space-y-2 text-xs text-slate-600 dark:text-slate-400 leading-relaxed">
+              <p>Se restablecerá la clave de <span className="font-bold text-slate-900 dark:text-white">{tBulkConfirm.total} docentes con cuenta</span> (sin necesidad de conocer las claves anteriores).</p>
+              <p className="text-amber-600 dark:text-amber-400 font-bold">Comunica las claves nuevas con la lista descargable al terminar.</p>
+            </div>
+            <div className="space-y-2">
+              {(AttendanceStorageService.getSettings().defaultAccessPassword
+                ? [['default', `Predeterminada para todos (${AttendanceStorageService.getSettings().defaultAccessPassword})`], ['random', 'Aleatoria distinta para cada uno'], ['manual', 'La misma escrita a mano']] as const
+                : [['random', 'Aleatoria distinta para cada uno'], ['manual', 'La misma escrita a mano']] as const
+              ).map(([val, label]) => (
+                <label key={val} className={`flex items-center gap-2.5 px-3.5 py-2.5 rounded-2xl border cursor-pointer transition-all ${tBulkStrategy === val ? 'border-amber-400 bg-amber-50/60 dark:bg-amber-950/40' : 'border-slate-200 dark:border-zinc-800 hover:border-amber-200'}`}>
+                  <input type="radio" name="tbulk-strategy" checked={tBulkStrategy === val} onChange={() => setTBulkStrategy(val)} className="accent-amber-600" />
+                  <span className="text-xs font-bold text-slate-700 dark:text-slate-200">{label}</span>
+                </label>
+              ))}
+              {tBulkStrategy === 'manual' && (
+                <input type="text" value={tBulkManualPw} onChange={(e) => setTBulkManualPw(e.target.value)} placeholder="La misma clave para todos (6 o más caracteres)…" className="w-full px-3.5 py-2.5 bg-slate-50 dark:bg-black border border-slate-200 dark:border-zinc-800/50 rounded-2xl text-xs font-mono font-bold text-slate-900 dark:text-white focus:ring-2 focus:ring-amber-500 outline-none" autoComplete="off" />
+              )}
+            </div>
+            <div className="flex items-center justify-end gap-2 pt-1">
+              <button type="button" onClick={() => setTBulkConfirm(null)} className="px-4 py-2.5 bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 rounded-xl text-xs font-bold hover:bg-slate-200 dark:hover:bg-slate-700">Cancelar</button>
+              <button type="button" onClick={executeTeacherBulkReset} className="px-5 py-2.5 bg-amber-600 hover:bg-amber-500 text-white rounded-xl text-xs font-bold shadow-md shadow-amber-600/25">Sí, restablecer todas</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {tBulkState && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-md animate-fadeIn">
+          <div className="p-6 rounded-3xl bg-white dark:bg-zinc-950 border border-slate-200 dark:border-zinc-800/50 shadow-2xl max-w-2xl w-full space-y-4 max-h-[85vh] overflow-y-auto">
+            <div className="flex items-center justify-between border-b border-slate-100 dark:border-zinc-800/50 pb-3">
+              <h3 className="text-xs font-bold uppercase tracking-wider text-slate-700 dark:text-slate-300">
+                {tBulkState.running ? 'Restableciendo claves de docentes…' : 'Resultado del restablecimiento masivo'}
+              </h3>
+              {!tBulkState.running && (
+                <button onClick={() => setTBulkState(null)} className="p-1.5 text-slate-400 hover:text-slate-700 dark:hover:text-white rounded-xl hover:bg-slate-100 dark:hover:bg-slate-800" aria-label="Cerrar"><X className="w-4 h-4" /></button>
+              )}
+            </div>
+            {tBulkState.running && (
+              <div className="space-y-2">
+                <div className="h-2.5 rounded-full bg-slate-100 dark:bg-zinc-800 overflow-hidden">
+                  <div className="h-full bg-indigo-600 transition-all" style={{ width: `${Math.round((tBulkState.done / Math.max(1, tBulkState.total)) * 100)}%` }} />
+                </div>
+                <p className="text-xs font-bold text-slate-600 dark:text-slate-300">{tBulkState.done}/{tBulkState.total} docentes…</p>
+              </div>
+            )}
+            {!tBulkState.running && (
+              <>
+                <p className={`text-xs font-bold ${tBulkState.results.every(r => r.ok) ? 'text-emerald-600 dark:text-emerald-400' : 'text-rose-600 dark:text-rose-400'}`}>
+                  {tBulkState.results.filter(r => r.ok).length}/{tBulkState.results.length} restablecidas correctamente.
+                  {tBulkState.results.some(r => !r.ok) && ' Los fallos se listan abajo.'}
+                </p>
+                <div className="max-h-56 overflow-y-auto rounded-2xl border border-slate-200 dark:border-zinc-800 divide-y divide-slate-100 dark:divide-zinc-800/60">
+                  {tBulkState.results.map(r => (
+                    <div key={r.code} className="flex items-center justify-between gap-2 px-3.5 py-2">
+                      <div className="min-w-0">
+                        <p className="text-[11px] font-black text-slate-800 dark:text-slate-100 truncate">{r.name}</p>
+                        <p className="text-[10px] font-mono text-slate-400">{r.password}</p>
+                      </div>
+                      <span className={`text-[10px] font-black shrink-0 ${r.ok ? 'text-emerald-600 dark:text-emerald-400' : 'text-rose-600 dark:text-rose-400'}`}>{r.ok ? 'OK' : (r.error || 'FALLO').slice(0, 40)}</span>
+                    </div>
+                  ))}
+                </div>
+                <div className="flex items-center justify-between gap-2 pt-1">
+                  <button type="button" onClick={downloadTeacherBulkCsv} className="px-4 py-2.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-bold shadow-md shadow-emerald-600/25">Descargar credenciales (CSV)</button>
+                  <button type="button" onClick={() => setTBulkState(null)} className="px-4 py-2.5 bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 rounded-xl text-xs font-bold hover:bg-slate-200 dark:hover:bg-slate-700">Cerrar</button>
+                </div>
+              </>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 };

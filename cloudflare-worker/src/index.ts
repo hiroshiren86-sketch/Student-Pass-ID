@@ -2188,14 +2188,29 @@ async function handleRoute(request: Request, env: Env, ctx: ExecutionContext): P
         const nowIso = new Date().toISOString();
         const results: Array<{ code: string; ok: boolean; mode?: string; error?: string }> = [];
         // Resolver uid por target (ficha.authUid o lookup por email).
-        const resolved: Array<{ code: string; password: string; uid: string | null; hasAccount: boolean; email?: string }> = [];
+        const resolved: Array<{ code: string; password: string; uid: string | null; hasAccount: boolean; email?: string; relink?: boolean }> = [];
         if (rType === 'student') {
           const byCode = new Map<string, any>((Array.isArray(snap.students) ? snap.students : []).filter((s: any) => s && s.hasFirebaseAccount).map((s: any) => [String(s.code), s]));
+          const anyByCode = new Map<string, any>((Array.isArray(snap.students) ? snap.students : []).map((s: any) => [String(s.code), s]));
           for (const t of targets) {
             const ficha = byCode.get(t.code);
             if (!ficha) {
-              // ficha sin cuenta: reset de ficha (login local) — capa 2 solamente.
-              const exists = (Array.isArray(snap.students) ? snap.students : []).some((s: any) => s && String(s.code) === t.code);
+              // R67 (recuperación de huérfanas): ficha SIN espejo de cuenta, pero la
+              // identidad determinista (estudiante-<code>@inas.edu.co) puede existir
+              // como cuenta huérfana de una ficha anterior. Si existe, el reset la
+              // TOMA (cambia su clave) y escribe el espejo en la ficha — camino
+              // determinista de re-vinculación (reemplaza el recovery del provisioner).
+              const internalEmail = `estudiante-${t.code.replace(/[^a-zA-Z0-9]/g, '')}@inas.edu.co`;
+              let orphan: ItkAccount | null = null;
+              try {
+                orphan = await itkGetAccountByEmail(env, internalEmail);
+              } catch { /* lookup best-effort */ }
+              if (orphan) {
+                resolved.push({ code: t.code, password: t.password, uid: orphan.localId, hasAccount: true, email: internalEmail, relink: true });
+                continue;
+              }
+              // ficha sin cuenta real: reset de ficha (login local) — capa 2 solamente.
+              const exists = anyByCode.has(t.code);
               results.push(exists
                 ? { code: t.code, ok: true, mode: 'verifier-only' }
                 : { code: t.code, ok: false, error: 'La ficha no existe en el catálogo.' });
@@ -2290,6 +2305,7 @@ async function handleRoute(request: Request, env: Env, ctx: ExecutionContext): P
             const nextStudents = students.map((s: any) => {
               const v = s ? verifierByCode.get(String(s.code)) : undefined;
               if (!s || !v) return s;
+              const t2 = stamped.find(x => x.code === String(s.code));
               const { tempPassword: _tp, ...rest } = s;
               void _tp;
               return {
@@ -2297,7 +2313,10 @@ async function handleRoute(request: Request, env: Env, ctx: ExecutionContext): P
                 loginKey: v.loginKey,
                 tempPasswordVerifier: v.verifier,
                 credentialUpdatedAt: nowIso,
-                credentialActor: actorLabel
+                credentialActor: actorLabel,
+                // R67 (re-vinculación de huérfanas): al recuperar una cuenta
+                // huérfana se escribe también el espejo en la ficha.
+                ...(t2?.relink && t2.email ? { hasFirebaseAccount: true, authEmail: t2.email, authUid: t2.uid } : {})
               };
             });
             return {
