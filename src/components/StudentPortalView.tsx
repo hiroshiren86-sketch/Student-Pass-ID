@@ -256,23 +256,39 @@ export const StudentPortalView: React.FC<StudentPortalViewProps> = ({ onLogout, 
       return;
     }
     if (next === current) {
-      setPwError('La nueva clave debe ser distinta de la actual.');
+      // R66: mensaje sin ambigüedad — compara las DOS ENTRADAS del formulario, no
+      // "lo que el sistema cree que tienes" (el dueño leyó el texto anterior como
+      // que la base de datos conocía su clave y no correspondía a la realidad).
+      setPwError('La nueva clave debe ser distinta de la clave actual que escribiste arriba.');
       return;
     }
 
-    // Paso 1 — validar la clave ACTUAL (prueba de propiedad antes de tocar nada).
-    const cred = await AttendanceStorageService.verifyStudentCredential(activeStudent, current);
-    if (!cred.ok) {
-      setPwError(cred.message || 'La clave actual no es correcta.');
-      return;
+    // R66 (fix de la trampa "la clave queda pegada"): la sesión de IDENTIDAD
+    // (login por Firebase Auth) ya probó quién eres — la prueba de la clave ACTUAL
+    // es la re-autenticación de Firebase dentro de changeOwnPassword (paso 2).
+    // Antes, este paso 1 comparaba la clave contra la FICHA local, que puede estar
+    // desfasada respecto de la cuenta (Rectoría cambió el PIN y la cuenta quedó con
+    // la clave anterior): con la ficha desfasada NINGUNA combinación pasaba — ni la
+    // clave real de la cuenta (rechazada por la ficha) ni la de la ficha (rechazada
+    // por Firebase) → el estudiante quedaba encerrado sin poder realinear.
+    const session = AttendanceStorageService.getCurrentSession();
+    const isOwnRealSession = session?.role === 'ESTUDIANTE_ACUDIENTE'
+      && session.studentCode === activeStudent.code
+      && !!session.uid;
+
+    if (!isOwnRealSession) {
+      // Camino LOCAL (sin identidad Firebase): la verificación de la clave actual
+      // sigue siendo contra la ficha (en claro o verifier HMAC) — es la única
+      // autoridad disponible en modo sin conexión.
+      const cred = await AttendanceStorageService.verifyStudentCredential(activeStudent, current);
+      if (!cred.ok) {
+        setPwError(cred.message || 'La clave actual no es correcta.');
+        return;
+      }
     }
 
     setPwBusy(true);
     try {
-      const session = AttendanceStorageService.getCurrentSession();
-      const isOwnRealSession = session?.role === 'ESTUDIANTE_ACUDIENTE'
-        && session.studentCode === activeStudent.code
-        && !!session.uid;
       const steps: string[] = [];
 
       // Paso 2 — Firebase Auth (autoridad). Identidad propia → changeOwnPassword

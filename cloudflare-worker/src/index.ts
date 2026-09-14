@@ -1853,10 +1853,25 @@ async function handleRoute(request: Request, env: Env, ctx: ExecutionContext): P
         // Verificación de la clave ACTUAL contra el verifier vigente (defensa en
         // profundidad — la identidad Firebase ya autenticó al solicitante, pero el
         // cambio del verifier exige conocer la clave vigente del snapshot).
+        // R66 (fix de la trampa "la clave queda pegada"): la ficha puede quedar con
+        // el verifier de un PIN que Rectoría cambió mientras la CUENTA Firebase
+        // conservaba otra clave (el provisioner necesita la clave anterior y un
+        // terminal nuevo/desfasado no la conoce). En ese estado divergente, el
+        // estudiante auténtico NO podía realinear NADA: la clave real de la cuenta
+        // rebota aquí (no coincide con el verifier de la ficha) y la clave de la
+        // ficha rebota en Firebase (re-autenticación). Para la IDENTIDAD PROPIA se
+        // acepta la realineación: el cliente solo llama DESPUÉS de que
+        // changeOwnPassword validó la clave actual contra Firebase — o sea, el
+        // solicitante ya demostró ser el dueño de la cuenta. El CAS estricto se
+        // mantiene íntegro para el camino de token de operador.
+        let realigned = false;
         if (ficha.tempPasswordVerifier) {
           const currentVerify = await hmacHex(loginKey, currentPassword);
           if (currentVerify !== String(ficha.tempPasswordVerifier)) {
-            return errorResponse('La clave actual no coincide con la registrada en la nube. Usa la clave impresa en tu carné o la última que Rectoría te asignó.', 403, { reason: 'CURRENT_MISMATCH' });
+            if (!isStudentIdentity) {
+              return errorResponse('La clave actual no coincide con la registrada en la nube. Usa la clave impresa en tu carné o la última que Rectoría te asignó.', 403, { reason: 'CURRENT_MISMATCH' });
+            }
+            realigned = true;
           }
         }
         const newVerifier = await hmacHex(loginKey, newPassword);
@@ -1920,7 +1935,10 @@ async function handleRoute(request: Request, env: Env, ctx: ExecutionContext): P
 
         return jsonResponse({
           success: true,
-          message: 'Tu nueva clave ya está registrada en la nube: funcionará en cualquier dispositivo, incluso tras limpiar los datos del navegador.',
+          message: realigned
+            ? 'Tu nueva clave quedó alineada con la nube (la ficha tenía una clave desfasada — ya quedó corregida).'
+            : 'Tu nueva clave ya está registrada en la nube: funcionará en cualquier dispositivo, incluso tras limpiar los datos del navegador.',
+          realigned,
           catalogVersion: newVer,
           timestamp: new Date().toISOString()
         });

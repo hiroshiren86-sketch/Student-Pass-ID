@@ -30,6 +30,7 @@ import { matchStudentFuzzy, normalizeDocumentOrCode } from '../utils/searchHelpe
 import { generateBarcodeDataUrl } from '../utils/barcode';
 import { DocumentUploadModal } from './DocumentUploadModal';
 import { ConfirmDialog } from './ConfirmDialog';
+import AccountSyncModal from './AccountSyncModal';
 import { normalizeGradeName, isValidGrade } from '../utils/documentParser';
 import { compressImageFile } from '../utils/imageCompressor';
 import { KeyRound, Copy } from 'lucide-react'; // Ronda 34 (H-34-2): clave de acceso visible en la matrícula
@@ -63,6 +64,16 @@ export const StudentsManagerView: React.FC<StudentsManagerViewProps> = ({ onGene
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   // Ronda 18 (H4): confirmación propia para eliminar estudiante (antes confirm() nativo)
   const [deleteConfirm, setDeleteConfirm] = useState<{ title: string; message: string; requireText?: string; action: () => void } | null>(null);
+  // R66 (fix de la cuenta "pegada"): modal de sincronización de cuenta cuando el
+  // provisioner no puede firmar con la clave anterior (terminal nuevo o desfasado).
+  const [syncModal, setSyncModal] = useState<{
+    student: Student;
+    newPin: string;
+    reason: 'unknown_old' | 'mismatch' | 'error';
+    detail?: string;
+  } | null>(null);
+  const [syncBusy, setSyncBusy] = useState(false);
+  const [syncError, setSyncError] = useState<string | null>(null);
   const singlePhotoInputRef = useRef<HTMLInputElement>(null);
 
   const uniqueGrades = AttendanceStorageService.getUniqueGrades();
@@ -200,6 +211,17 @@ export const StudentsManagerView: React.FC<StudentsManagerViewProps> = ({ onGene
       return;
     }
 
+    // R66 (fix de la cuenta "pegada"): si el estudiante tiene cuenta de acceso y
+    // el PIN cambia, la nueva clave SERÁ también la contraseña de su cuenta
+    // Firebase → debe cumplir el mínimo de 6 caracteres que Firebase exige
+    // (auth/weak-password, demostrado en R64 §3). Se bloquea ANTES de guardar para
+    // no crear fichas con claves que la cuenta jamás podrá adoptar.
+    const pinForAccount = formData.accessPin.trim();
+    if (editingStudent?.hasFirebaseAccount && pinForAccount && pinForAccount.length < 6) {
+      setFormError('Este estudiante tiene cuenta de acceso: la clave debe tener 6 o más caracteres (requisito de Firebase). Si solo quiere un PIN de 4 dígitos para el carné, primero elimine la cuenta de acceso o use 6 caracteres.');
+      return;
+    }
+
     if (editingStudent) {
       AttendanceStorageService.updateStudent(editingStudent.code, {
         firstName,
@@ -223,24 +245,26 @@ export const StudentsManagerView: React.FC<StudentsManagerViewProps> = ({ onGene
       setTimeout(() => setToastMessage(null), 3500);
       // R61 (fix PIN↔cuenta): si el estudiante TIENE cuenta de acceso y Rectoría cambió
       // su PIN, la CONTRASEÑA de la cuenta se sincroniza en el mismo guardado (patrón
-      // del provisioner: firma con el PIN anterior y aplica el nuevo). Antes el PIN
-      // local cambiaba y la cuenta quedaba con la clave vieja → el estudiante no podía
-      // entrar desde su teléfono con el PIN impreso en su carné.
+      // del provisioner: firma con el PIN anterior y aplica el nuevo).
+      // R66 (fix del bug "la clave queda pegada", reproducido en E2E): las FALLAS ya no
+      // son un toast efímero de 7 s que Rectoría pierde de vista — abren el
+      // AccountSyncModal, que pide la clave ACTUAL de la cuenta y reintenta la
+      // sincronización sin cerrar la sesión. Antes: ficha con PIN nuevo + cuenta con
+      // clave vieja + login roto en dispositivos limpios + portal sin vía de escape.
       const oldPin = (editingStudent.tempPassword || '').trim();
       const newPin = formData.accessPin.trim();
       if (editingStudent.hasFirebaseAccount && newPin && newPin !== oldPin) {
-        setToastMessage(`Sincronizando la contraseña de la cuenta de ${firstName} ${lastName}…`);
-        setTimeout(() => setToastMessage(null), 3000);
         const sync = await FirebaseService.syncStudentAccountPassword(editingStudent.code, oldPin, newPin);
         if (sync.ok) {
           setToastMessage(`Cuenta de acceso actualizada: el nuevo PIN de ${firstName} ya funciona también en su teléfono.`);
           setTimeout(() => setToastMessage(null), 5000);
-        } else if (sync.reason === 'old_password_mismatch') {
-          setToastMessage(`⚠ La ficha quedó con el nuevo PIN, pero la contraseña de la CUENTA de ${firstName} no coincide con el PIN anterior (divergencia histórica). El acceso desde su teléfono sigue con la última clave que la cuenta tenía. Para realinearla: edite el PIN de nuevo desde un terminal donde la cuenta aún verifique, o reprovisione la cuenta.`);
-          setTimeout(() => setToastMessage(null), 9000);
         } else {
-          setToastMessage(`⚠ La ficha quedó con el nuevo PIN, pero no se pudo actualizar la contraseña de la cuenta (${sync.message || 'error de red'}). Reintente más tarde desde "Editar ficha" re-guardando.`);
-          setTimeout(() => setToastMessage(null), 7000);
+          setSyncModal({
+            student: editingStudent,
+            newPin,
+            reason: !oldPin || sync.reason === 'error' ? (!oldPin ? 'unknown_old' : 'error') : 'mismatch',
+            detail: sync.message
+          });
         }
       }
     } else {
@@ -285,6 +309,31 @@ export const StudentsManagerView: React.FC<StudentsManagerViewProps> = ({ onGene
     } catch (err) {
       console.error(err);
       alert('Error al generar el carné.');
+    }
+  };
+
+  // R66 (fix de la cuenta "pegada"): reintento de sincronización desde el modal con
+  // la clave ACTUAL de la cuenta que Rectoría escribe. Si logra firmar, la cuenta
+  // queda con el PIN nuevo y el terminal queda realineado (su clave local en claro
+  // = la clave real de la cuenta de nuevo). Sin cerrar la sesión de Rectoría.
+  const handleSyncModalSubmit = async (currentPassword: string) => {
+    if (!syncModal) return;
+    setSyncBusy(true);
+    setSyncError(null);
+    try {
+      const sync = await FirebaseService.syncStudentAccountPassword(
+        syncModal.student.code, currentPassword, syncModal.newPin);
+      if (sync.ok) {
+        setSyncModal(null);
+        setToastMessage(`Cuenta de acceso actualizada: el nuevo PIN de ${syncModal.student.firstName} ya funciona también en su teléfono.`);
+        setTimeout(() => setToastMessage(null), 5000);
+      } else if (sync.reason === 'old_password_mismatch') {
+        setSyncError('Esa tampoco es la clave actual de la cuenta. Inténtelo de nuevo con la clave con la que el estudiante entra hoy (la última que se le entregó).');
+      } else {
+        setSyncError(sync.message || 'No se pudo actualizar la contraseña de la cuenta. Verifique la conexión e inténtelo de nuevo.');
+      }
+    } finally {
+      setSyncBusy(false);
     }
   };
 
@@ -1320,6 +1369,21 @@ export const StudentsManagerView: React.FC<StudentsManagerViewProps> = ({ onGene
         requireText={deleteConfirm?.requireText}
         onConfirm={() => { const a = deleteConfirm?.action; setDeleteConfirm(null); a?.(); }}
         onCancel={() => setDeleteConfirm(null)}
+      />
+
+      {/* R66 (fix de la cuenta "pegada"): sincronización de cuenta con la clave
+          actual escrita por Rectoría — nada de éxitos falsos ni toasts efímeros. */}
+      <AccountSyncModal
+        open={!!syncModal}
+        who={syncModal ? `${syncModal.student.firstName} ${syncModal.student.lastName}` : ''}
+        ident={syncModal?.student.code || ''}
+        kind="estudiante"
+        reason={syncModal?.reason || 'error'}
+        detail={syncModal?.detail}
+        busy={syncBusy}
+        error={syncError}
+        onSubmit={handleSyncModalSubmit}
+        onSkip={() => { setSyncModal(null); setSyncError(null); }}
       />
     </div>
   );

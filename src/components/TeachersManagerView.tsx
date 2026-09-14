@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { ConfirmDialog } from './ConfirmDialog';
+import AccountSyncModal from './AccountSyncModal';
 import { CloudflareSyncService } from '../services/cloudflareSync';
 import { 
   Users, 
@@ -76,6 +77,17 @@ export const TeachersManagerView: React.FC = () => {
   const [resetModalTeacher, setResetModalTeacher] = useState<Teacher | null>(null);
   const [newGeneratedPass, setNewGeneratedPass] = useState<string | null>(null);
   const [copiedPass, setCopiedPass] = useState(false);
+  // R66 (fix de la cuenta "pegada", espejo docente): modal de sincronización cuando
+  // el provisioner no puede firmar con la clave temporal anterior del terminal.
+  const [syncModal, setSyncModal] = useState<{
+    teacher: Teacher;
+    email: string;
+    newTemp: string;
+    reason: 'unknown_old' | 'mismatch' | 'error';
+    detail?: string;
+  } | null>(null);
+  const [syncBusy, setSyncBusy] = useState(false);
+  const [syncError, setSyncError] = useState<string | null>(null);
 
   useEffect(() => {
     const unsubscribe = AttendanceStorageService.subscribe(() => {
@@ -152,6 +164,13 @@ export const TeachersManagerView: React.FC = () => {
     if (editingTeacher) {
       const oldTemp = (editingTeacher.tempPassword || '').trim();
       const newTemp = (formData.tempPassword || '').trim();
+      // R66 (fix de la cuenta "pegada", espejo docente): la clave temporal de un
+      // docente CON cuenta real es también su contraseña Firebase → mínimo 6
+      // caracteres (auth/weak-password). Se bloquea ANTES de guardar.
+      if (editingTeacher.hasFirebaseAccount && newTemp && newTemp !== oldTemp && newTemp.length < 6) {
+        setSubjectsError('Este docente tiene cuenta de acceso: la clave temporal debe tener 6 o más caracteres (requisito de Firebase).');
+        return;
+      }
       AttendanceStorageService.updateTeacher(editingTeacher.id, {
         documentId: formData.documentId,
         fullName: formData.fullName,
@@ -175,10 +194,17 @@ export const TeachersManagerView: React.FC = () => {
         const sync = await FirebaseService.syncTeacherAccountPassword(target, oldTemp, newTemp);
         if (sync.ok) {
           showToast(`Cuenta de acceso actualizada: la nueva clave temporal de ${formData.fullName} ya funciona para entrar.`);
-        } else if (sync.reason === 'old_password_mismatch') {
-          showToast(`⚠ La ficha quedó con la nueva clave, pero la CUENTA de ${formData.fullName} no coincide con la temporal anterior (divergencia histórica o el docente ya la cambió). Para realinearla use "Reset por Correo" o comuníquele la clave vigente.`);
         } else {
-          showToast(`⚠ La ficha quedó con la nueva clave, pero no se pudo sincronizar la cuenta (${sync.message || 'error de red'}). Reintente re-guardando más tarde.`);
+          // R66: la falla abre el modal (con reintento con la clave actual escrita por
+          // Rectoría) en lugar del toast efímero que se perdía — mismo fix del lado
+          // estudiante. La ficha ya quedó con la nueva clave: el modal lo informa.
+          setSyncModal({
+            teacher: editingTeacher,
+            email: target,
+            newTemp,
+            reason: !oldTemp || sync.reason === 'error' ? (!oldTemp ? 'unknown_old' : 'error') : 'mismatch',
+            detail: sync.message
+          });
         }
       }
     } else {
@@ -213,6 +239,28 @@ export const TeachersManagerView: React.FC = () => {
     }
 
     setShowModal(false);
+  };
+
+  // R66 (fix de la cuenta "pegada", espejo docente): reintento de sincronización
+  // desde el modal con la clave ACTUAL de la cuenta que Rectoría escribe.
+  const handleSyncModalSubmit = async (currentPassword: string) => {
+    if (!syncModal) return;
+    setSyncBusy(true);
+    setSyncError(null);
+    try {
+      const sync = await FirebaseService.syncTeacherAccountPassword(
+        syncModal.email, currentPassword, syncModal.newTemp);
+      if (sync.ok) {
+        setSyncModal(null);
+        showToast(`Cuenta de acceso actualizada: la nueva clave temporal de ${syncModal.teacher.fullName} ya funciona para entrar.`);
+      } else if (sync.reason === 'old_password_mismatch') {
+        setSyncError('Esa tampoco es la clave actual de la cuenta. Inténtelo de nuevo con la clave con la que el docente entra hoy (o la última que se le entregó).');
+      } else {
+        setSyncError(sync.message || 'No se pudo actualizar la contraseña de la cuenta. Verifique la conexión e inténtelo de nuevo.');
+      }
+    } finally {
+      setSyncBusy(false);
+    }
   };
 
   /**
@@ -1012,6 +1060,20 @@ export const TeachersManagerView: React.FC = () => {
         requireText={deleteConfirm?.requireText}
         onConfirm={() => { const a = deleteConfirm?.action; setDeleteConfirm(null); a?.(); }}
         onCancel={() => setDeleteConfirm(null)}
+      />
+
+      {/* R66 (fix de la cuenta "pegada", espejo docente) */}
+      <AccountSyncModal
+        open={!!syncModal}
+        who={syncModal?.teacher.fullName || ''}
+        ident={syncModal?.email || ''}
+        kind="docente"
+        reason={syncModal?.reason || 'error'}
+        detail={syncModal?.detail}
+        busy={syncBusy}
+        error={syncError}
+        onSubmit={handleSyncModalSubmit}
+        onSkip={() => { setSyncModal(null); setSyncError(null); }}
       />
     </div>
   );
