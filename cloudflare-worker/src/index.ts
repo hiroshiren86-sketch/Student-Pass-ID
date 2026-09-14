@@ -1907,8 +1907,17 @@ async function handleRoute(request: Request, env: Env, ctx: ExecutionContext): P
           return errorResponse('Esta ruta es del propio estudiante o de Rectoría (gestión de fichas).', 403);
         }
         const cIp = clientIp(request);
-        if (!isAdminCredentialSet && await d1RateLimited(env, `pwchg:${cIp}`, 10, 60 * 60 * 1000)) {
+        // R67 (hallazgo E2E): el rate limit pwchg:10/h/IP alcanzó al camino del
+        // PROPIO estudiante autenticado por identidad Firebase en jornadas de
+        // pruebas, dejando Firebase-nueva + verifier-viejo (divergencia §22-R4).
+        // El límite estricto protege el camino por TOKEN (operador anónimo); la
+        // IDENTIDAD ya está autenticada por Firebase y solo puede tocar SU ficha
+        // → límite generoso propio (60/h/IP).
+        if (!isStudentIdentity && !isAdminCredentialSet && await d1RateLimited(env, `pwchg:${cIp}`, 10, 60 * 60 * 1000)) {
           return errorResponse('Demasiados cambios de clave desde esta red. Espera una hora e intenta de nuevo.', 429);
+        }
+        if (isStudentIdentity && await d1RateLimited(env, `pwchg-id:${cIp}`, 60, 60 * 60 * 1000)) {
+          return errorResponse('Has cambiado tu clave demasiadas veces en la última hora. Espera un poco e intenta de nuevo.', 429);
         }
         let cBody: any;
         try {

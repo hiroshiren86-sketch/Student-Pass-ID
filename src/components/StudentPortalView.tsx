@@ -346,10 +346,19 @@ export const StudentPortalView: React.FC<StudentPortalViewProps> = ({ onLogout, 
       }
 
       const cloud = await CloudflareSyncService.updateOwnCredentialInCloud(activeStudent.code, current, next);
-      if (cloud.ok) {
+      let cloud2: { ok: boolean; message?: string } = { ok: false };
+      if (!cloud.ok) {
+        // R67 (hallazgo E2E §22-R4): si el registro en la nube falla (red/429
+        // transitorio), Firebase ya quedó con la clave nueva — se reintenta UNA
+        // vez antes de avisar, para no dejar la divergencia ficha/cuenta.
+        await new Promise(r => setTimeout(r, 2500));
+        cloud2 = await CloudflareSyncService.updateOwnCredentialInCloud(activeStudent.code, current, next);
+      }
+      if (cloud.ok || cloud2.ok) {
         steps.push('verificación sin conexión');
       }
 
+      const cloudFinal = cloud.ok ? cloud : cloud2;
       const fresh = AttendanceStorageService.getStudentByCodeOrDoc(activeStudent.code) || { ...activeStudent, tempPassword: next, hasCustomPassword: true };
       setActiveStudent(fresh);
       setPasswordUpdated(true);
@@ -357,7 +366,7 @@ export const StudentPortalView: React.FC<StudentPortalViewProps> = ({ onLogout, 
       setShowPasswordModal(false);
       setPwCurrentInput(''); setPwNewInput(''); setPwConfirmInput('');
       // Mensaje honesto de qué se actualizó y dónde (Regla 6).
-      alert(`Contraseña actualizada correctamente (${steps.join(' + ') || 'este dispositivo'}).${cloud.ok ? ' Ya funciona en cualquier dispositivo, incluso tras limpiar los datos del navegador.' : (cloud.message ? ` Nota: ${cloud.message}` : '')}`);
+      alert(`Contraseña actualizada correctamente (${steps.join(' + ') || 'este dispositivo'}).${cloudFinal.ok ? ' Ya funciona en cualquier dispositivo, incluso tras limpiar los datos del navegador.' : ` ATENCIÓN: tu cuenta quedó con la clave nueva, pero la nube NO quedó alineada (${cloudFinal.message || 'sin conexión'}) — la verificación sin conexión usará la clave anterior hasta que se sincronice. Pide a Rectoría un restablecimiento si el problema persiste.`}`);
     } finally {
       setPwBusy(false);
     }
