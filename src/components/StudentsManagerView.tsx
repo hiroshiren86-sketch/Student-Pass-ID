@@ -504,8 +504,22 @@ export const StudentsManagerView: React.FC<StudentsManagerViewProps> = ({ onGene
         authUid: result.uid
       });
       refreshList();
-      setToastMessage(`Cuenta de acceso creada para ${student.firstName} ${student.lastName}. El estudiante ya puede entrar desde su teléfono con su código y clave del carné.`);
-      setTimeout(() => setToastMessage(null), 5000);
+      setToastMessage(`Cuenta de acceso creada para ${student.firstName} ${student.lastName}. Publicando la ficha en la nube para que pueda entrar desde cualquier dispositivo…`);
+      setTimeout(() => setToastMessage(null), 4000);
+      // R67 (§36): publicación INMEDIATA de la ficha — sin esto, el estudiante no
+      // podía entrar desde otro dispositivo hasta el próximo push (5 min o manual).
+      // El push también sella el verifier de la clave con la que la cuenta nació.
+      try {
+        const sync = await CloudflareSyncService.performCloudflareSync();
+        if (sync.success) {
+          setToastMessage(`Cuenta creada y ficha publicada: ${student.firstName} ya puede entrar desde su teléfono con su código y clave (${accessKey}).`);
+        } else {
+          setToastMessage(`Cuenta creada. La ficha se publicará con la próxima sincronización (${sync.message || 'pendiente'}). El estudiante podrá entrar desde su teléfono entonces.`);
+        }
+      } catch {
+        setToastMessage(`Cuenta creada. La ficha se publicará con la próxima sincronización. El estudiante podrá entrar desde su teléfono entonces.`);
+      }
+      setTimeout(() => setToastMessage(null), 9000);
     } catch (err: any) {
       const code = String(err?.code || '');
       if (code === 'auth/email-already-in-use') {
