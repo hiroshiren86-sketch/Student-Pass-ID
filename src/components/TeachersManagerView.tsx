@@ -384,6 +384,16 @@ export const TeachersManagerView: React.FC = () => {
         authUid: result.uid
       });
       setTeachers(AttendanceStorageService.getTeachers());
+      // R67 (§36 — mismo fix que estudiantes): publicación INMEDIATA de la ficha
+      // tras crear la cuenta — sin push, el docente nuevo no puede entrar desde
+      // otro dispositivo (el pull por identidad necesita su ficha en la nube).
+      try {
+        void CloudflareSyncService.performCloudflareSync().then((syncRes) => {
+          if (!syncRes.success) {
+            console.warn('[R67] Push tras crear cuenta docente pendiente (se publicará con la próxima sincronización):', syncRes.message);
+          }
+        });
+      } catch { /* el push diferido no bloquea el flujo de provisión */ }
       if (!silentWhenOk) {
         setResetModalTeacher({ ...t, authEmail: result.email });
         setNewGeneratedPass(tempPassword);
