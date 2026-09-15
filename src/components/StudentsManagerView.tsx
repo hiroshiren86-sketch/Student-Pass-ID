@@ -26,7 +26,9 @@ import { AttendanceStorageService } from '../services/attendanceStorage';
 import { FirebaseService } from '../services/firebase';
 import { CloudflareSyncService } from '../services/cloudflareSync';
 import { generateStudentCardPdf, downloadPdfBlob } from '../utils/pdfGenerator';
-import { matchStudentFuzzy, normalizeDocumentOrCode } from '../utils/searchHelper';
+import { matchStudentFuzzy, matchesGradeFilter, normalizeDocumentOrCode } from '../utils/searchHelper';
+// R69 (RC-7a/RC-7b): catálogo de cursos derivado de los datos reales + comparación canónica.
+import { gradeOptionLabel, resolveGradeSelection } from '../utils/gradeCatalog';
 import { generateBarcodeDataUrl } from '../utils/barcode';
 import { DocumentUploadModal } from './DocumentUploadModal';
 import { ConfirmDialog } from './ConfirmDialog';
@@ -78,6 +80,15 @@ export const StudentsManagerView: React.FC<StudentsManagerViewProps> = ({ onGene
   const singlePhotoInputRef = useRef<HTMLInputElement>(null);
 
   const uniqueGrades = AttendanceStorageService.getUniqueGrades();
+  // R69 (RC-7a) — CAUSA RAÍZ del "filtro por grado sale vacío": el <select> se
+  // construía con `getUniqueGrades()`, que mezclaba la matrícula real con el catálogo
+  // demo estático de mockData (`SCHOOL_GRADES_LIST`: 6°1, 6°2, 7°1 … 11°2) y los
+  // ordenaba alfabéticamente. En producción la matrícula real vive en 6°4/7°4/8°4/
+  // 9°3/10°3/11°3, así que las 12 primeras opciones no tenían UN SOLO estudiante:
+  // elegir "6°1" filtraba correctamente… sobre un conjunto vacío, mientras "Todos los
+  // grados" sí mostraba los 80. Ahora el selector de FILTRO usa el catálogo derivado
+  // de los datos (con conteo por curso) y la comparación es canónica en ambos lados.
+  const gradeCatalog = useMemo(() => AttendanceStorageService.getGradeCatalog(), [students]);
 
   useEffect(() => {
     const unsubscribe = AttendanceStorageService.subscribe(() => {
@@ -137,21 +148,30 @@ export const StudentsManagerView: React.FC<StudentsManagerViewProps> = ({ onGene
     setStudents(AttendanceStorageService.getStudents());
   };
 
+  // R69 (RC-7b): si el curso seleccionado deja de existir en el catálogo (pull que
+  // cambió la matrícula, localStorage viejo, variante de escritura), el filtro vuelve
+  // a "Todos" en vez de quedarse clavado en una selección huérfana → tabla vacía.
+  const effectiveGrade = resolveGradeSelection(selectedGrade, gradeCatalog);
+  useEffect(() => {
+    if (effectiveGrade !== selectedGrade) setSelectedGrade(effectiveGrade);
+  }, [effectiveGrade, selectedGrade]);
+
   // Smart fuzzy & suggestion search
   const filteredStudents = useMemo(() => {
     return students.filter(s => {
-      const matchesGrade = selectedGrade === 'all' || s.grade === selectedGrade;
+      const matchesGrade = matchesGradeFilter(s?.grade, effectiveGrade);
       const matchesSearch = matchStudentFuzzy(s, searchQuery);
       return matchesGrade && matchesSearch;
     });
-  }, [students, selectedGrade, searchQuery]);
+  }, [students, effectiveGrade, searchQuery]);
 
   const handleOpenAdd = () => {
     setEditingStudent(null);
     setFormData({
       firstName: '',
       lastName: '',
-      grade: uniqueGrades[0] || '6°3',
+      // R69: si Rectoría viene de filtrar un curso, la alta nace en ese curso.
+      grade: (effectiveGrade !== 'all' ? effectiveGrade : uniqueGrades[0]) || '6°3',
       documentType: 'TI',
       documentId: '',
       photoUrl: '',
@@ -644,6 +664,7 @@ export const StudentsManagerView: React.FC<StudentsManagerViewProps> = ({ onGene
       {currentRole === 'ADMIN' && (
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-3" role="group" aria-label="Acciones de matrícula y credenciales">
           <button
+            data-testid="accion-cargar-archivos"
             onClick={() => setShowUploadModal(true)}
             className="group flex flex-col items-start gap-1.5 min-h-[84px] p-4 rounded-3xl bg-white/70 dark:bg-zinc-950/70 border border-slate-200/80 dark:border-zinc-800/50 backdrop-blur-xl shadow-xs hover:border-indigo-300 dark:hover:border-indigo-700/60 hover:shadow-md transition-all text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500"
             aria-label="Cargar archivos: fichas PDF, fotos de carné, planillas CSV o listas de matrícula"
@@ -659,6 +680,7 @@ export const StudentsManagerView: React.FC<StudentsManagerViewProps> = ({ onGene
           {/* R67 (§12B — restablecimiento MASIVO): sobre el conjunto dinámico de
               estudiantes, con confirmación, estrategia y resultados honestos. */}
           <button
+            data-testid="accion-restablecer-claves"
             onClick={openBulkReset}
             className="group flex flex-col items-start gap-1.5 min-h-[84px] p-4 rounded-3xl bg-amber-50/70 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800/50 backdrop-blur-xl shadow-xs hover:border-amber-300 dark:hover:border-amber-700/70 hover:shadow-md transition-all text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-500"
             aria-label="Restablecer la clave de acceso de todos los estudiantes (operación masiva con confirmación)"
@@ -672,6 +694,7 @@ export const StudentsManagerView: React.FC<StudentsManagerViewProps> = ({ onGene
           </button>
 
           <button
+            data-testid="accion-nuevo-estudiante"
             onClick={handleOpenAdd}
             className="group flex flex-col items-start gap-1.5 min-h-[84px] p-4 rounded-3xl bg-indigo-600 dark:bg-indigo-500/90 border border-indigo-600 text-white shadow-md shadow-indigo-600/20 hover:bg-indigo-500 dark:hover:bg-indigo-400/90 hover:shadow-lg transition-all text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-300"
             aria-label="Matricular un nuevo estudiante"
@@ -733,6 +756,8 @@ export const StudentsManagerView: React.FC<StudentsManagerViewProps> = ({ onGene
             <Search className="w-4 h-4 absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400" />
             <input
               type="text"
+              data-testid="directorio-buscador"
+              aria-label="Buscar estudiantes por nombre, documento o código"
               placeholder="Buscar por nombre, documento (TI, CC, RC) o código..."
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
@@ -742,13 +767,25 @@ export const StudentsManagerView: React.FC<StudentsManagerViewProps> = ({ onGene
 
           <div className="flex items-center gap-2">
             <select
+              data-testid="directorio-filtro-grado"
+              aria-label="Filtrar el directorio por curso"
               value={selectedGrade}
               onChange={(e) => setSelectedGrade(e.target.value)}
               className="px-3.5 py-2.5 bg-white dark:bg-black/70 border border-slate-200 dark:border-zinc-800/50 rounded-2xl text-xs font-bold focus:outline-none"
             >
               <option value="all">Todos los Cursos ({students.length})</option>
-              {uniqueGrades.map(g => (
-                <option key={g} value={g}>Grado {g}</option>
+              {/* R69 (RC-7a): sólo cursos con matrícula real y con su conteo — así un
+                  curso vacío no se confunde con un filtro roto. */}
+              {gradeCatalog.map(entry => (
+                <option
+                  key={entry.grade}
+                  value={entry.grade}
+                  title={entry.rawVariants.length
+                    ? `Escrituras equivalentes encontradas en el catálogo: ${entry.rawVariants.join(' · ')}`
+                    : undefined}
+                >
+                  {gradeOptionLabel(entry)}
+                </option>
               ))}
             </select>
           </div>
@@ -771,17 +808,21 @@ export const StudentsManagerView: React.FC<StudentsManagerViewProps> = ({ onGene
               {/* Ronda 27 (entrega limpia): empty state útil — nunca una tabla en blanco silencioso. */}
               {filteredStudents.length === 0 && (
                 <tr>
-                  <td colSpan={6} className="py-12 text-center">
+                  <td colSpan={6} data-testid="directorio-vacio" className="py-12 text-center">
                     <p className="text-xs font-bold text-slate-500 dark:text-slate-400">
                       {students.length === 0
                         ? 'Aún no hay estudiantes. Importa la matrícula (CSV/Excel/SIMAT) o crea el primero con "+ Nuevo Estudiante".'
-                        : 'Sin resultados para la búsqueda o el filtro aplicado.'}
+                        : effectiveGrade !== 'all' && !searchQuery.trim()
+                          // R69: mensaje honesto y accionable (antes sólo decía "sin resultados"
+                          // y el propietario concluía que el filtro estaba roto).
+                          ? `El curso ${effectiveGrade} no tiene estudiantes en el catálogo descargado (${students.length} en total). Verifica el curso o sincroniza (Pull) para traer la matrícula de la nube.`
+                          : 'Sin resultados para la búsqueda o el filtro aplicado.'}
                     </p>
                   </td>
                 </tr>
               )}
               {filteredStudents.map((std) => (
-                <tr key={std.code} className="hover:bg-slate-100 dark:hover:bg-zinc-900/50 transition-colors group border-b border-slate-100 dark:border-zinc-800/50 last:border-0 hover:shadow-sm">
+                <tr key={std.code} data-testid={`directorio-fila-${std.code}`} className="hover:bg-slate-100 dark:hover:bg-zinc-900/50 transition-colors group border-b border-slate-100 dark:border-zinc-800/50 last:border-0 hover:shadow-sm">
                   <td className="py-3 px-3 font-bold text-slate-900 dark:text-white">
                     <div className="flex items-center gap-2.5">
                       {std.photoUrl ? (
@@ -820,6 +861,7 @@ export const StudentsManagerView: React.FC<StudentsManagerViewProps> = ({ onGene
                     {std.isRepresentative ? (
                       <button
                         type="button"
+                        data-testid={`quitar-rep-${std.code}`}
                         onClick={() => {
                           AttendanceStorageService.setRepresentativeForGrade(std.grade, '');
                           refreshList();
@@ -833,6 +875,7 @@ export const StudentsManagerView: React.FC<StudentsManagerViewProps> = ({ onGene
                     ) : (
                       <button
                         type="button"
+                        data-testid={`hacer-rep-${std.code}`}
                         onClick={() => {
                           AttendanceStorageService.setRepresentativeForGrade(std.grade, std.code);
                           refreshList();

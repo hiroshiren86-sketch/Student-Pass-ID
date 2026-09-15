@@ -1,0 +1,61 @@
+dia,grado,bloque,materia,docente,aula
+Lunes,6°1,1,Dirección de Grupo,,Aula 6°1
+Lunes,6°2,1,Dirección de Grupo,,Aula 6°2
+Lunes,6°3,1,Dirección de Grupo,,Aula 6°3
+Lunes,7°1,1,Dirección de Grupo,,Aula 7°1
+Lunes,7°2,1,Dirección de Grupo,,Aula 7°2
+Lunes,7°3,1,Dirección de Grupo,,Aula 7°3
+Lunes,8°1,1,Dirección de Grupo,,Aula 8°1
+Lunes,8°2,1,Dirección de Grupo,,Aula 8°2
+Lunes,8°3,1,Dirección de Grupo,,Aula 8°3
+Lunes,9°1,1,Dirección de Grupo,,Aula 9°1
+Lunes,9°2,1,Dirección de Grupo,,Aula 9°2
+Lunes,10°1,1,Dirección de Grupo,,Aula 10°1
+Lunes,10°2,1,Dirección de Grupo,,Aula 10°2
+Lunes,11°1,1,Dirección de Grupo,,Aula 11°1
+Lunes,11°2,1,Dirección de Grupo,,Aula 11°2
+Lunes,6°1,2,Matemáticas,Juan Pablo Pérez Gómez,Aula 6°1
+Lunes,6°2,3,Matemáticas,Germán Antonio Ospina Muñoz,Aula 6°2
+Lunes,6°3,4,Matemáticas,Juan Pablo Pérez Gómez,Aula 6°3
+Martes,7°1,2,Matemáticas,Germán Antonio Ospina Muñoz,Aula 7°1
+Martes,7°2,3,Matemáticas,Juan Pablo Pérez Gómez,Aula 7°2
+Martes,7°3,4,Matemáticas,Germán Antonio Ospina Muñoz,Aula 7°3
+Miércoles,8°1,2,Matemáticas,Juan Pablo Pérez Gómez,Aula 8°1
+Miércoles,8°2,3,Matemáticas,Germán Antonio Ospina Muñoz,Aula 8°2
+Miércoles,8°3,4,Matemáticas,Juan Pablo Pérez Gómez,Aula 8°3
+Jueves,9°1,2,Matemáticas,Germán Antonio Ospina Muñoz,Aula 9°1
+Jueves,9°2,3,Matemáticas,Juan Pablo Pérez Gómez,Aula 9°2
+Jueves,10°1,4,Matemáticas,Germán Antonio Ospina Muñoz,Aula 10°1
+Viernes,10°2,2,Matemáticas,Juan Pablo Pérez Gómez,Aula 10°2
+Viernes,11°1,3,Matemáticas,Germán Antonio Ospina Muñoz,Aula 11°1
+Viernes,11°2,4,Matemáticas,Juan Pablo Pérez Gómez,Aula 11°2
+Martes,6°1,2,Lengua Castellana,Yenny Carolina Molina Giraldo,Aula 6°1
+Martes,6°2,3,Lengua Castellana,María Camila Restrepo Henao,Aula 6°2
+Martes,6°3,4,Lengua Castellana,Yenny Carolina Molina Giraldo,Aula 6°3
+Miércoles,7°1,2,Lengua Castellana,María Camila Restrepo Henao,Aula 7°1
+Miércoles,7°2,3,Lengua Castellana,Yenny Carolina Molina Giraldo,Aula 7°2
+Miércoles,7°3,4,Lengua Castellana,María Camila Restrepo Henao,Aula 7°3
+Jueves,8°1,2,Lengua Castellana,Yenny Carolina Molina Giraldo,Aula 8°1
+Jueves,8°2,3,Lengua Castellana,María Camila Restrepo Henao,Aula 8°2
+Jueves,8°3,4,Lengua Castellana,Yenny Carolina Molina Giraldo,Aula 8°3
+Viernes,9°1,2,Lengua Castellana,María Camila Restrepo Henao,Aula 9°1
+Viernes,9°2,3,Lengua Castellana,Yenny Carolina Molina Giraldo,Aula 9°2
+Viernes,10°1,4,Lengua Castellana,María Camila Restrepo Henao,Aula 10°1
+Lunes,10°2,2,Lengua Castellana,Yenny Carolina Molina Giraldo,Aula 10°2
+Lunes,11°1,3,Lengua Castellana,María Camila Restrepo Henao,Aula 11°1
+Lunes,11°2,4,Lengua Castellana,Yenny Carolina Molina Giraldo,Aula 11°2
+Miércoles,6°1,2,Inglés,Andrés Felipe Giraldo Duque,Aula 6°1
+Miércoles,6°2,3,Inglés,Natalia Andrea Gaviria Rivera,Aula 6°2
+Miércoles,6°3,4,Inglés,Andrés Felipe Giraldo Duque,Aula 6°3
+Jueves,7°1,2,Inglés,Natalia Andrea Gaviria Rivera,Aula 7°1
+Jueves,7°2,3,Inglés,Andrés Felipe Giraldo Duque,Aula 7°2
+Jueves,7°3,4,Inglés,Natalia Andrea Gaviria Rivera,Aula 7°3
+Viernes,8°1,2,Inglés,Andrés Felipe Giraldo Duque,Aula 8°1
+Viernes,8°2,3,Inglés,Natalia Andrea Gaviria Rivera,Aula 8°2
+Viernes,8°3,4,Inglés,Andrés Felipe Giraldo Duque,Aula 8°3
+Lunes,9°1,2,Inglés,Natalia Andrea Gaviria Rivera,Aula 9°1
+Lunes,9°2,3,Inglés,Andrés Felipe Giraldo Duque,Aula 9°2
+Lunes,10°1,4,Inglés,Natalia Andrea Gaviria Rivera,Aula 10°1
+Martes,10°2,2,Inglés,Andrés Felipe Giraldo Duque,Aula 10°2
+Martes,11°1,3,Inglés,Natalia Andrea Gaviria Rivera,Aula 11°1
+Martes,11°2,4,Inglés,Andrés Felipe Giraldo Duque,Aula 11°2

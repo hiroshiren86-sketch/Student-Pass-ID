@@ -366,7 +366,13 @@ await section('K. QR de Clase — transparencia en planilla/CSV (fuente)', () =>
   const storage = readFileSync('src/services/attendanceStorage.ts', 'utf8');
   check('CSV con columna Contexto de Vinculación', storage.includes('Contexto de Vinculación') && storage.includes("r.contextSource === 'QR_CLASE' ? 'QR de Clase (firmado)'"));
   check('registro persiste contextSource/classQrVerified', storage.includes("contextSource: params.contextSource || 'HORA'") && storage.includes('classQrVerified: params.classQrVerified'));
-  check('registerScan aplica contexto de clase activa', storage.includes("student.grade === activeClass.grade") && storage.includes("contextSource: 'QR_CLASE'"));
+  // R69 (RC-7b): el contrato de "el contexto de clase activa aplica al mismo curso"
+  // ahora se expresa con comparación CANÓNICA (`gradesMatch`) en vez de igualdad literal:
+  // una tarjeta QR generada con el curso escrito "10-1" debe vincular los escaneos de las
+  // fichas guardadas como "10°1" (antes no emparejaban y el contexto se perdía).
+  // Prueba de comportamiento del nuevo contrato: tests/unit/r69_clase_activa_canonica.ts
+  // (mismo curso en otra escritura → QR_CLASE; curso distinto → HORA, lente no puerta).
+  check('registerScan aplica contexto de clase activa (comparación canónica R69)', storage.includes("gradesMatch(student.grade, activeClass.grade)") && storage.includes("contextSource: 'QR_CLASE'"));
   check('resetToDemo limpia la clase activa', storage.includes('localStorage.removeItem(ACTIVE_CLASS_KEY)'));
 
   const types = readFileSync('src/types/attendance.ts', 'utf8');

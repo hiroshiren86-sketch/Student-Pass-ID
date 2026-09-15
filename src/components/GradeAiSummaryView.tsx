@@ -23,8 +23,11 @@ import { AiService } from '../services/aiService';
 import { AiProviderMark } from './AiProviderMark';
 
 export const GradeAiSummaryView: React.FC = () => {
-  const uniqueGrades = AttendanceStorageService.getUniqueGrades();
-  const [selectedGrade, setSelectedGrade] = useState<string>(uniqueGrades[0] || '6°2');
+  // R69 (RC-7a): cursos con matrícula real y su conteo. Antes el selector arrancaba
+  // en `uniqueGrades[0]` = '6°1' (catálogo demo estático, sin estudiantes en la nube)
+  // y la analítica se generaba sobre un curso vacío.
+  const gradeCatalog = AttendanceStorageService.getGradeCatalog();
+  const [selectedGrade, setSelectedGrade] = useState<string>(gradeCatalog[0]?.grade || '6°2');
   const [timeframe, setTimeframe] = useState<string>('month');
   const [customQuestion, setCustomQuestion] = useState<string>('');
   const [loading, setLoading] = useState<boolean>(false);
@@ -146,13 +149,15 @@ export const GradeAiSummaryView: React.FC = () => {
           <div className="flex items-center bg-white/80 dark:bg-black/80 border border-slate-200 dark:border-zinc-800/50 rounded-2xl p-1 shadow-xs">
             <span className="text-xs font-bold px-2.5 text-slate-500">Curso:</span>
             <select
+              data-testid="ia-filtro-grado"
+              aria-label="Filtrar la analítica por curso"
               value={selectedGrade}
               onChange={(e) => setSelectedGrade(e.target.value)}
               className="px-3 py-1.5 bg-indigo-600 text-white rounded-xl text-xs font-black outline-none transition-all cursor-pointer"
             >
-              {uniqueGrades.map((g) => (
-                <option key={g} value={g} className="bg-slate-900 text-white">
-                  Grado {g}
+              {gradeCatalog.map((entry) => (
+                <option key={entry.grade} value={entry.grade} className="bg-slate-900 text-white">
+                  Grado {entry.grade} ({entry.students})
                 </option>
               ))}
             </select>

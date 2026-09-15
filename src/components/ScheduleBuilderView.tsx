@@ -49,6 +49,7 @@ import { generateTeacherCardPayload, slugifySubject } from '../utils/crypto';
 import { TeacherCardQrModal } from './TeacherCardQrModal'; // Ronda 43: modal A6 v2 compartido (rectoría + portal docente)
 import { ToggleSwitch } from './ToggleSwitch';
 import { ConfirmDialog } from './ConfirmDialog';
+import { canonicalGrade, gradesMatch } from '../utils/gradeCatalog'; // R69 (RC-7b): cursos canónicos
 
 const DAYS_OF_WEEK = [
   { id: 1, name: 'Lunes', short: 'LUN' },
@@ -121,8 +122,14 @@ export const ScheduleBuilderView: React.FC = () => {
   // otros grados → el propietario percibió "no hay horarios" tras su Pull (Ronda 41/42).
   // El grado inicial ahora es el PRIMERO CON CÁTEDRAS (orden del selector); sin cátedras
   // se conserva el comportamiento antiguo.
-  const gradesWithCatedras = useMemo(() => Array.from(new Set(assignments.map(a => a.grade))), [assignments]);
-  const initialGrade = grades.find(g => gradesWithCatedras.includes(g)) || grades[0] || '10°1';
+  // R69 (RC-7b): la comparación de "grados con cátedra" es canónica (antes, una
+  // cátedra guardada como "6-1" no emparejaba con el curso "6°1" del selector y el
+  // constructor volvía a abrir en un grado vacío — la regresión H-42-1 por otra vía).
+  const gradesWithCatedras = useMemo(
+    () => Array.from(new Set(assignments.map(a => canonicalGrade(a?.grade)).filter((g): g is string => !!g))),
+    [assignments]
+  );
+  const initialGrade = grades.find(g => gradesWithCatedras.some(cg => gradesMatch(cg, g))) || grades[0] || '10°1';
 
   // Mode: 'grid' (Timetable matrix) vs 'weekly-matrix' (Full 5-day week) vs 'slots-editor' (Design structure of hours) vs 'templates' (Plantillas + política) vs 'class-qr' (QR de Clase — Ronda 19)
   const [subView, setSubView] = useState<'grid' | 'weekly-matrix' | 'slots-editor' | 'templates' | 'class-qr'>('grid');
@@ -341,9 +348,9 @@ export const ScheduleBuilderView: React.FC = () => {
     setEditingSlot(slot);
 
     // Check existing assignment
-    const existing = assignments.find(a => 
-      a.slotId === slot.id && 
-      a.grade === selectedGrade && 
+    const existing = assignments.find(a =>
+      a.slotId === slot.id &&
+      gradesMatch(a?.grade, selectedGrade) && // R69 (RC-7b)
       a.dayOfWeek === targetDay
     );
 
@@ -508,16 +515,16 @@ export const ScheduleBuilderView: React.FC = () => {
 
   // Helper to get assignment for current grade/day/slot
   const getAssignment = (slotId: string, day: number = selectedDay, grade: string = selectedGrade) => {
-    return assignments.find(a => 
-      a.slotId === slotId && 
-      a.grade === grade && 
+    return assignments.find(a =>
+      a.slotId === slotId &&
+      gradesMatch(a?.grade, grade) && // R69 (RC-7b)
       a.dayOfWeek === day
     );
   };
 
   // Calculate total weekly hours and double blocks count for selected grade
   const gradeStats = useMemo(() => {
-    const gradeAssignments = assignments.filter(a => a.grade === selectedGrade);
+    const gradeAssignments = assignments.filter(a => gradesMatch(a?.grade, selectedGrade)); // R69 (RC-7b)
     const doubleBlocksCount = gradeAssignments.filter(a => a.isDoubleBlock && a.doubleBlockRole === 'FIRST_HOUR').length;
     const totalHours = gradeAssignments.length;
     return {
@@ -1622,6 +1629,7 @@ export const ScheduleBuilderView: React.FC = () => {
               </label>
             </div>
             <textarea
+              data-testid="horario-csv-texto"
               value={importText}
               onChange={(e) => { setImportText(e.target.value); setImportPreview(null); }}
               placeholder={"…o pega aquí el contenido:\ndía,grado,bloque,materia,docente,aula\nLunes,10°1,1,Matemáticas,Juan Pablo Pérez,Aula 204"}
@@ -1632,6 +1640,7 @@ export const ScheduleBuilderView: React.FC = () => {
             <div className="flex items-center justify-between gap-3 flex-wrap">
               <button
                 type="button"
+                data-testid="horario-csv-validar"
                 disabled={!importText.trim()}
                 onClick={() => setImportPreview(AttendanceStorageService.parseScheduleImport(importText))}
                 className="px-4 py-2 rounded-xl bg-slate-900 dark:bg-white text-white dark:text-slate-900 text-xs font-bold disabled:opacity-40"
@@ -1705,6 +1714,7 @@ export const ScheduleBuilderView: React.FC = () => {
                   </button>
                   <button
                     type="button"
+                    data-testid="horario-csv-aplicar"
                     disabled={importPreview.rows.length === 0}
                     onClick={() => {
                       const res = AttendanceStorageService.applyScheduleImport(importPreview.rows, { wipeIncludedGrades: importWipe });

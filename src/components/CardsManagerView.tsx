@@ -18,19 +18,22 @@ import {
 import { Student, SchoolSettings } from '../types/attendance';
 import { AttendanceStorageService } from '../services/attendanceStorage';
 import { generateStudentCardPdf, generateBatchCardsPdf, downloadPdfBlob } from '../utils/pdfGenerator';
-import { matchStudentFuzzy } from '../utils/searchHelper';
+import { matchStudentFuzzy, matchesGradeFilter } from '../utils/searchHelper';
+import { gradeOptionLabel, resolveGradeSelection, type GradeCatalogEntry } from '../utils/gradeCatalog'; // R69
 import { generateBarcodeDataUrl } from '../utils/barcode';
 
 export const CardsManagerView: React.FC = () => {
   const [students, setStudents] = useState<Student[]>(AttendanceStorageService.getStudents());
   const [settings, setSettings] = useState<SchoolSettings>(AttendanceStorageService.getSettings());
-  const [uniqueGrades, setUniqueGrades] = useState<string[]>(AttendanceStorageService.getUniqueGrades());
+  // R69 (RC-7a): catálogo de cursos derivado de la matrícula real (con conteos), en
+  // lugar de la lista estática del demo que ofrecía cursos sin un solo estudiante.
+  const [gradeCatalog, setGradeCatalog] = useState<GradeCatalogEntry[]>(AttendanceStorageService.getGradeCatalog());
 
   useEffect(() => {
     const unsubscribe = AttendanceStorageService.subscribe(() => {
       setStudents(AttendanceStorageService.getStudents());
       setSettings(AttendanceStorageService.getSettings());
-      setUniqueGrades(AttendanceStorageService.getUniqueGrades());
+      setGradeCatalog(AttendanceStorageService.getGradeCatalog());
     });
     return unsubscribe;
   }, []);
@@ -48,14 +51,20 @@ export const CardsManagerView: React.FC = () => {
     [previewStudent]
   );
 
+  // R69 (RC-7b): selección de curso siempre resuelta contra el catálogo vigente.
+  const effectiveGrade = resolveGradeSelection(selectedGrade, gradeCatalog);
+  useEffect(() => {
+    if (effectiveGrade !== selectedGrade) setSelectedGrade(effectiveGrade);
+  }, [effectiveGrade, selectedGrade]);
+
   // Filtrar estudiantes con búsqueda inteligente fuzzy
   const filteredStudents = useMemo(() => {
     return students.filter(std => {
-      const matchesGrade = selectedGrade === 'all' || std.grade === selectedGrade;
+      const matchesGrade = matchesGradeFilter(std?.grade, effectiveGrade); // R69 (RC-7b)
       const matchesSearch = matchStudentFuzzy(std, searchQuery);
       return matchesGrade && matchesSearch;
     });
-  }, [students, selectedGrade, searchQuery]);
+  }, [students, effectiveGrade, searchQuery]);
 
   // Si cambia el filtro y el preview actual no existe, seleccionar el primero disponible
   useEffect(() => {
@@ -208,13 +217,15 @@ export const CardsManagerView: React.FC = () => {
 
               <div className="flex items-center gap-2">
                 <select
+                  data-testid="carnes-filtro-grado"
+                  aria-label="Filtrar la generación de carnés por curso"
                   value={selectedGrade}
                   onChange={(e) => setSelectedGrade(e.target.value)}
                   className="px-3 py-2 bg-white/80 dark:bg-black/70 border border-slate-200 dark:border-zinc-800/50 rounded-xl text-xs font-bold"
                 >
                   <option value="all">Todos los Cursos ({students.length})</option>
-                  {uniqueGrades.map(g => (
-                    <option key={g} value={g}>Grado {g}</option>
+                  {gradeCatalog.map(entry => (
+                    <option key={entry.grade} value={entry.grade}>{gradeOptionLabel(entry)}</option>
                   ))}
                 </select>
 
