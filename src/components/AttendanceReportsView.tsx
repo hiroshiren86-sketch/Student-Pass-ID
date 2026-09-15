@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react'; // R69: useMemo del catálogo por curso
 import { 
   BarChart3, 
   Calendar, 
@@ -17,7 +17,9 @@ import {
 } from 'lucide-react';
 import { AttendanceRecord, AttendanceSummary, UserRole } from '../types/attendance';
 import { AttendanceStorageService, getTodayDateString } from '../services/attendanceStorage';
-import { matchStudentFuzzy } from '../utils/searchHelper';
+import { matchStudentFuzzy, matchesGradeFilter } from '../utils/searchHelper';
+// R69 (RC-7a/RC-7b): cursos derivados de datos reales + comparación canónica.
+import { canonicalGrade } from '../utils/gradeCatalog';
 import { ExcuseJustifyModal } from './ExcuseJustifyModal'; // Ronda 21: justificación post-hoc de 1 toque
 
 interface AttendanceReportsViewProps {
@@ -35,7 +37,19 @@ export const AttendanceReportsView: React.FC<AttendanceReportsViewProps> = ({ cu
   const [selectedGrade, setSelectedGrade] = useState('all');
   const [selectedStatus, setSelectedStatus] = useState('all');
 
-  const uniqueGrades = AttendanceStorageService.getUniqueGrades();
+  // R69 (RC-7a): el selector de curso de la Planilla se construye con el catálogo
+  // derivado de los datos reales (matrícula + planilla + horario) y muestra cuántos
+  // registros hay del curso en la fecha elegida — antes listaba los 12 grados del
+  // catálogo demo estático, todos sin datos, y filtrar por uno dejaba la tabla vacía.
+  const gradeCatalog = useMemo(() => AttendanceStorageService.getGradeCatalog(), [records, summary]);
+  const recordsByGrade = useMemo(() => {
+    const m = new Map<string, number>();
+    records.forEach(r => {
+      const c = canonicalGrade(r?.studentGrade);
+      if (c) m.set(c, (m.get(c) ?? 0) + 1);
+    });
+    return m;
+  }, [records]);
 
   const loadData = () => {
     const recs = AttendanceStorageService.getAttendanceByDate(selectedDate);
@@ -61,7 +75,7 @@ export const AttendanceReportsView: React.FC<AttendanceReportsViewProps> = ({ cu
       },
       searchQuery
     );
-    const matchesGrade = selectedGrade === 'all' || r.studentGrade === selectedGrade;
+    const matchesGrade = matchesGradeFilter(r?.studentGrade, selectedGrade); // R69 (RC-7b)
     const matchesStatus = selectedStatus === 'all' || r.status === selectedStatus;
 
     return matchesSearch && matchesGrade && matchesStatus;
@@ -199,13 +213,17 @@ export const AttendanceReportsView: React.FC<AttendanceReportsViewProps> = ({ cu
 
           <div className="flex items-center gap-2">
             <select
+              data-testid="reportes-filtro-grado"
+              aria-label="Filtrar la planilla por curso"
               value={selectedGrade}
               onChange={(e) => setSelectedGrade(e.target.value)}
               className="px-3 py-2.5 bg-white/80 dark:bg-black/70 border border-slate-200 dark:border-zinc-800/50 rounded-xl text-xs font-bold"
             >
-              <option value="all">Todos los Cursos</option>
-              {uniqueGrades.map(g => (
-                <option key={g} value={g}>Curso {g}</option>
+              <option value="all">Todos los Cursos ({records.length})</option>
+              {gradeCatalog.map(entry => (
+                <option key={entry.grade} value={entry.grade}>
+                  Curso {entry.grade} · {recordsByGrade.get(entry.grade) ?? 0} reg. · {entry.students} matric.
+                </option>
               ))}
             </select>
 

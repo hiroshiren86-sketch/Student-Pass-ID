@@ -369,6 +369,7 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onLoginSuccess }) => {
                   <button
                     key={r.id}
                     type="button"
+                    data-testid={`login-rol-${r.id}`}
                     onClick={() => handleRoleSelect(r.id)}
                     className={`w-full p-4 rounded-2xl border text-left transition-all flex items-center justify-between group ${
                       isSelected
@@ -434,6 +435,7 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onLoginSuccess }) => {
                   <div className="relative">
                     <User className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
                     <input
+                      data-testid="login-identificador"
                       type={selectedRole === 'ESTUDIANTE_ACUDIENTE' ? 'text' : 'email'}
                       value={identifier}
                       onChange={(e) => setIdentifier(e.target.value)}
@@ -462,6 +464,7 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onLoginSuccess }) => {
                   <div className="relative">
                     <Lock className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
                     <input
+                      data-testid="login-clave"
                       type={showPassword ? 'text' : 'password'}
                       value={password}
                       onChange={(e) => setPassword(e.target.value)}
@@ -492,6 +495,7 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onLoginSuccess }) => {
 
                 <button
                   type="submit"
+                  data-testid="login-submit"
                   disabled={isLoading}
                   className="w-full py-3.5 bg-indigo-600 dark:bg-white hover:bg-indigo-500 dark:hover:bg-zinc-200 text-white dark:text-black rounded-2xl text-xs font-bold shadow-lg shadow-indigo-600/30 flex items-center justify-center gap-2 transition-all disabled:opacity-50 mt-2"
                 >

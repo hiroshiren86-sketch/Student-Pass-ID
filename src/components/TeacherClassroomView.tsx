@@ -1,5 +1,10 @@
 import React, { useState, useMemo, useEffect, useRef } from 'react';
 import { ConfirmDialog } from './ConfirmDialog';
+// R69 (RC-7b): comparación canónica de cursos en el Aula Docente. El aula es el punto
+// caliente del flujo de clase (desbloqueo por QR + llamado a lista): si la cátedra se
+// guardó como "6-1" y la ficha del estudiante dice "6°1", antes NO se encontraban y la
+// hora aparecía sin materia / sin estudiantes.
+import { gradesMatch, canonicalGrade } from '../utils/gradeCatalog';
 import { ActiveClassBanner } from './ActiveClassBanner';
 import { ChangePasswordModal } from './ChangePasswordModal';
 import { 
@@ -77,8 +82,20 @@ export const TeacherClassroomView: React.FC<TeacherClassroomViewProps> = ({
   const allAssignments = AttendanceStorageService.getScheduleAssignments();
   
   const uniqueGrades = AttendanceStorageService.getUniqueGrades();
+  // R69 (RC-7a/RC-8): el selector del aula agrupa primero LOS CURSOS DEL DOCENTE
+  // (asignados + dirección de grupo, canonicalizados) y después el resto del catálogo
+  // real. `getUniqueGrades()` ya devuelve primero los cursos con matrícula, así que el
+  // aula nunca abre en un curso vacío del catálogo demo (mismo defecto que H-42-1).
+  const teacherGrades = useMemo(() => {
+    const own = new Set<string>();
+    (teacher?.assignedGrades ?? []).forEach(g => { const c = canonicalGrade(g); if (c) own.add(c); });
+    const dir = canonicalGrade(teacher?.directorGrade);
+    if (dir) own.add(dir);
+    return Array.from(own);
+  }, [teacher]);
+  const otherGrades = useMemo(() => uniqueGrades.filter(g => !teacherGrades.includes(g)), [uniqueGrades, teacherGrades]);
   const [selectedGrade, setSelectedGrade] = useState<string>(
-    teacher?.directorGrade || teacher?.assignedGrades?.[0] || uniqueGrades[0] || '6°1'
+    canonicalGrade(teacher?.directorGrade) || teacherGrades[0] || uniqueGrades[0] || '6°1'
   );
   const [selectedSlotId, setSelectedSlotId] = useState<string>(scheduleSlots[0]?.id || 'slot-1');
   const [selectedSubject, setSelectedSubject] = useState<string>(teacher?.subjects?.[0] || INSTITUTIONAL_SUBJECTS[0]);
@@ -247,7 +264,7 @@ export const TeacherClassroomView: React.FC<TeacherClassroomViewProps> = ({
   // Sync selected subject with assignment if exists
   useEffect(() => {
     const dayOfWeek = new Date().getDay() || 1;
-    const assignment = allAssignments.find(a => a.grade === selectedGrade && a.slotId === selectedSlotId && a.dayOfWeek === dayOfWeek);
+    const assignment = allAssignments.find(a => gradesMatch(a?.grade, selectedGrade) && a.slotId === selectedSlotId && a.dayOfWeek === dayOfWeek);
     if (assignment) {
       setSelectedSubject(assignment.subject);
     }
@@ -263,7 +280,7 @@ export const TeacherClassroomView: React.FC<TeacherClassroomViewProps> = ({
   };
   const activeSlot = scheduleSlots.find(s => s.id === selectedSlotId) || scheduleSlots[0] || NO_SLOTS_PLACEHOLDER;
   const gradeStudents = useMemo(() => {
-    return students.filter(s => s.grade === selectedGrade && s.active);
+    return students.filter(s => gradesMatch(s?.grade, selectedGrade) && s.active); // R69 (RC-7b)
   }, [students, selectedGrade]);
 
   const representativeStudent = useMemo(() => {
@@ -276,13 +293,13 @@ export const TeacherClassroomView: React.FC<TeacherClassroomViewProps> = ({
 
   const activeDelegations = useMemo(() => {
     return AttendanceStorageService.getEphemeralDelegations()
-      .filter(d => d.grade === selectedGrade && d.slotId === selectedSlotId && d.date === today)
+      .filter(d => gradesMatch(d?.grade, selectedGrade) && d.slotId === selectedSlotId && d.date === today) // R69 (RC-7b)
       .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
     // R61 (TCV-2): storageVersion invalida al crear/revocar delegaciones.
   }, [selectedGrade, selectedSlotId, today, storageVersion]);
 
   const isDirectorOfCurrentGrade = useMemo(() => {
-    return teacher?.isGroupDirector && teacher?.directorGrade === selectedGrade;
+    return !!teacher?.isGroupDirector && gradesMatch(teacher?.directorGrade, selectedGrade); // R69 (RC-7b)
   }, [teacher, selectedGrade]);
 
   const isNonComputableSlot = useMemo(() => {
@@ -305,7 +322,7 @@ export const TeacherClassroomView: React.FC<TeacherClassroomViewProps> = ({
 
   // Today records for selected grade and slot
   const currentSlotRecords = useMemo(() => {
-    return records.filter(r => r.studentGrade === selectedGrade && r.slotId === selectedSlotId && r.date === today);
+    return records.filter(r => gradesMatch(r?.studentGrade, selectedGrade) && r.slotId === selectedSlotId && r.date === today); // R69 (RC-7b)
   }, [records, selectedGrade, selectedSlotId, today]);
 
   const recordMapByStudentCode = useMemo(() => {
@@ -317,7 +334,7 @@ export const TeacherClassroomView: React.FC<TeacherClassroomViewProps> = ({
   // Assignment & Double Block check
   const currentAssignment = useMemo(() => {
     const dayOfWeek = new Date().getDay() || 1;
-    return allAssignments.find(a => a.grade === selectedGrade && a.slotId === selectedSlotId && a.dayOfWeek === dayOfWeek);
+    return allAssignments.find(a => gradesMatch(a?.grade, selectedGrade) && a.slotId === selectedSlotId && a.dayOfWeek === dayOfWeek); // R69 (RC-7b)
   }, [allAssignments, selectedGrade, selectedSlotId]);
 
   // Metrics
@@ -755,7 +772,7 @@ export const TeacherClassroomView: React.FC<TeacherClassroomViewProps> = ({
                   {teacher?.directorGrade ? (
                     <span className="inline-flex items-center gap-1 font-bold text-amber-600 dark:text-amber-400 bg-amber-50 dark:bg-amber-950/50 px-2 py-0.5 rounded-lg border border-amber-200 dark:border-amber-900/60 text-[11px]">
                       ⭐ Director de Grupo: Grado {teacher.directorGrade}
-                      {teacher.directorGrade === selectedGrade && (
+                      {gradesMatch(teacher.directorGrade, selectedGrade) && (
                         <span className="text-[10px] text-amber-700 dark:text-amber-300 font-semibold">(Viendo tu grupo a cargo)</span>
                       )}
                     </span>
@@ -794,13 +811,25 @@ export const TeacherClassroomView: React.FC<TeacherClassroomViewProps> = ({
             <div>
               <label className="block text-[10px] font-bold uppercase text-slate-400 mb-1">Curso / Grado</label>
               <select
+                data-testid="aula-grado"
                 value={selectedGrade}
                 onChange={(e) => setSelectedGrade(e.target.value)}
                 className="py-2 px-3 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-zinc-800 rounded-xl text-xs font-bold text-slate-900 dark:text-white outline-none"
               >
-                {uniqueGrades.map(g => (
-                  <option key={g} value={g}>Grado {g}</option>
-                ))}
+                {teacherGrades.length > 0 && (
+                  <optgroup label="Mis cursos">
+                    {teacherGrades.map(g => (
+                      <option key={`own-${g}`} value={g}>Grado {g}{gradesMatch(g, teacher?.directorGrade) ? ' · ⭐ mi grupo' : ''}</option>
+                    ))}
+                  </optgroup>
+                )}
+                {otherGrades.length > 0 && (
+                  <optgroup label={teacherGrades.length > 0 ? 'Otros cursos' : 'Cursos'}>
+                    {otherGrades.map(g => (
+                      <option key={`other-${g}`} value={g}>Grado {g}</option>
+                    ))}
+                  </optgroup>
+                )}
               </select>
             </div>
 
@@ -809,6 +838,7 @@ export const TeacherClassroomView: React.FC<TeacherClassroomViewProps> = ({
               <label className="block text-[10px] font-bold uppercase text-slate-400 mb-1">Bloque de Horario</label>
               <select
                 value={selectedSlotId}
+                data-testid="aula-bloque"
                 onChange={(e) => setSelectedSlotId(e.target.value)}
                 className="py-2 px-3 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-zinc-800 rounded-xl text-xs font-bold text-slate-900 dark:text-white outline-none"
               >
@@ -825,6 +855,7 @@ export const TeacherClassroomView: React.FC<TeacherClassroomViewProps> = ({
               <label className="block text-[10px] font-bold uppercase text-slate-400 mb-1">Asignatura</label>
               <select
                 value={activeSubject}
+                data-testid="aula-materia"
                 onChange={(e) => setSelectedSubject(e.target.value)}
                 className="py-2 px-3 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-zinc-800 rounded-xl text-xs font-bold text-slate-900 dark:text-white outline-none max-w-[200px]"
                 aria-label="Asignatura de la clase"
@@ -1156,6 +1187,7 @@ export const TeacherClassroomView: React.FC<TeacherClassroomViewProps> = ({
                 onClick={() => setShowMyCards(true)}
                 className="py-2.5 px-3 bg-violet-50 dark:bg-violet-950/60 border border-violet-300 dark:border-violet-800 text-violet-700 dark:text-violet-300 hover:bg-violet-100 dark:hover:bg-violet-900/60 rounded-xl text-xs font-bold flex items-center gap-2 transition-all"
                 title="Tu tarjeta QR por asignatura: sirve todos los días, sin depender del horario"
+                data-testid="aula-mis-tarjetas"
                 aria-label="Abrir Mis Tarjetas QR (credencial docente firmada)"
               >
                 <QrCode className="w-4 h-4" />
@@ -1257,6 +1289,7 @@ export const TeacherClassroomView: React.FC<TeacherClassroomViewProps> = ({
             <input
               type="text"
               value={manualCodeInput}
+              data-testid="aula-escaneo-manual"
               onChange={(e) => setManualCodeInput(e.target.value)}
               placeholder="Escanear con lector USB o teclear código..."
               className="w-full pl-10 pr-4 py-2.5 bg-slate-50 dark:bg-black border border-slate-200 dark:border-zinc-800/50 rounded-xl text-xs font-bold text-slate-900 dark:text-white outline-none focus:ring-2 focus:ring-indigo-500"

@@ -61,6 +61,11 @@ jobs:
       - name: Instalar dependencias (raíz)
         run: npm install --no-audit --no-fund
 
+      # Las suites R69 de DOM montan React sobre jsdom (no entra en package.json para
+      # no inflar el árbol de producción: se instala sólo en CI, como en el sandbox R69).
+      - name: Instalar jsdom (suites de DOM R69)
+        run: npm install --no-save --no-audit --no-fund jsdom
+
       - name: Typecheck cliente (tsc --noEmit)
         run: npx tsc --noEmit
 
@@ -90,6 +95,24 @@ jobs:
       - name: Suite R58 — hardening (F-1/F-6/F-7/F-8/F-12/F-23/F-24)
         run: npx tsx scripts/qa-r58-hardening.ts
 
+      # ── R69: catálogo canónico de cursos (RC-7a/7b), la regresión del filtro en DOM
+      # real, el Escudito dinámico (RC-8) y el ensayo local de la simulación
+      # "Mini Colegio" (Pasos A→B→C con los CSV versionados) ──
+      - name: Suite R69 — canonicalizador y catálogo de cursos
+        run: npx tsx tests/unit/r69_grade_catalog.ts
+
+      - name: Suite R69 — filtro por curso en DOM real (regresión reportada)
+        run: npx tsx tests/unit/r69_filtro_grado_dom.ts
+
+      - name: Suite R69 — Escudito dinámico desde el catálogo (RC-8)
+        run: npx tsx tests/unit/r69_escudito_dinamico.ts
+
+      - name: Suite R69 — ensayo local Mini Colegio (Pasos A→B→C)
+        run: TZ=America/Bogota npx tsx tests/unit/r69_mini_colegio_local.ts
+
+      - name: Fixtures R69 — los CSV versionados coinciden con el generador
+        run: node tests/scripts/gen_fixtures_mini_colegio.mjs --check
+
       # qa-r49-identity requiere .firebase-sa.json (gitignored): entra en SKIP
       # explícito con exit 0 (Ronda 58, F-19). Ejecutarla con credenciales es
       # trabajo de la máquina de QA, no del CI público.
@@ -105,7 +128,9 @@ jobs:
           const fs = require('fs');
           const files = fs.readdirSync('dist/assets').filter(f => f.endsWith('.js'));
           const bundle = files.map(f => fs.readFileSync('dist/assets/' + f, 'utf8')).join('\n');
-          const mustContain = ['hourCycle', 'requireSignedCards', 'tempPasswordVerifier', 'invalid_signature'];
+          const mustContain = ['hourCycle', 'requireSignedCards', 'tempPasswordVerifier', 'invalid_signature',
+            // R69: catálogo canónico de cursos y Escudito dinámico presentes en el bundle
+            'no tiene estudiantes en el catálogo descargado', 'catálogo en la nube', 'TRANSICIÓN'];
           const missing = mustContain.filter(m => !bundle.includes(m));
           if (missing.length) { console.error('FALTAN marcadores R58 en el bundle:', missing); process.exit(1); }
           console.log('Bundle OK: marcadores R58 presentes (' + files.length + ' chunks).');

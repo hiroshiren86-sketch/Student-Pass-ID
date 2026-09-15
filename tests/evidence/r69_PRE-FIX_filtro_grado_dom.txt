@@ -1,0 +1,113 @@
+
+━━━ NIVEL 1 — OBSERVACIÓN DEL CATÁLOGO DE GRADOS (getUniqueGrades) ━━━
+  estudiantes sembrados : 80
+  grados CON estudiantes: 6°4, 7°4, 8°4, 9°3, 10°3, 11°3
+  opciones del <select> : 18 → 6°1 | 6°2 | 6°4 | 7°1 | 7°2 | 7°4 | 8°1 | 8°2 | 8°4 | 9°1 | 9°2 | 9°3 | 10°1 | 10°2 | 10°3 | 11°1 | 11°2 | 11°3
+  opciones SIN ningún estudiante: 12 → 6°1, 6°2, 7°1, 7°2, 8°1, 8°2, 9°1, 9°2, 10°1, 10°2, 11°1, 11°2
+  SCHOOL_GRADES_LIST (estático de mockData): 6°1, 6°2, 7°1, 7°2, 8°1, 8°2, 9°1, 9°2, 10°1, 10°2, 11°1, 11°2
+
+━━━ NIVEL 1 — CONTRATO: el selector no debe ofrecer grados vacíos como si tuvieran datos ━━━
+  ✗ existe getGradeCatalog() derivado de datos reales — método ausente en AttendanceStorageService
+
+━━━ NIVEL 2 — DOM REAL: StudentsManagerView (jsdom + react-dom/client) ━━━
+  <select> con 19 opciones:
+     · value="all"  texto="Todos los Cursos (80)"
+     · value="6°1"  texto="Grado 6°1"
+     · value="6°2"  texto="Grado 6°2"
+     · value="6°4"  texto="Grado 6°4"
+     · value="7°1"  texto="Grado 7°1"
+     · value="7°2"  texto="Grado 7°2"
+     · value="7°4"  texto="Grado 7°4"
+     · value="8°1"  texto="Grado 8°1"
+     · value="8°2"  texto="Grado 8°2"
+     · value="8°4"  texto="Grado 8°4"
+     · value="9°1"  texto="Grado 9°1"
+     · value="9°2"  texto="Grado 9°2"
+     · value="9°3"  texto="Grado 9°3"
+     · value="10°1"  texto="Grado 10°1"
+     · value="10°2"  texto="Grado 10°2"
+     · value="10°3"  texto="Grado 10°3"
+     · value="11°1"  texto="Grado 11°1"
+     · value="11°2"  texto="Grado 11°2"
+     · value="11°3"  texto="Grado 11°3"
+  ✓ la tabla arranca mostrando TODA la matrícula real
+  ✗ el selector NO ofrece el grado estático vacío 6°1 — sigue apareciendo la opción 6°1 (catálogo demo hardcodeado)
+  ✗ todas las opciones del selector corresponden a grados con estudiantes — 6°1,6°2,7°1,7°2,8°1,8°2,9°1,9°2,10°1,10°2,11°1,11°2
+  ✗ las opciones muestran el conteo de estudiantes — Grado 6°1 | Grado 6°2 | Grado 6°4
+  ✓ filtrar por 6°4 → 14 filas (no vacío)
+  ✓ filtrar por 7°4 → 14 filas (no vacío)
+  ✓ filtrar por 8°4 → 14 filas (no vacío)
+  ✓ filtrar por 9°3 → 13 filas (no vacío)
+  ✓ filtrar por 10°3 → 13 filas (no vacío)
+  ✓ filtrar por 11°3 → 12 filas (no vacío)
+  ✓ volver a "Todos" restaura la matrícula completa
+
+━━━ NIVEL 2b — DOM REAL: búsqueda por nombre sobre la lista de la nube ━━━
+  ✓ buscar "salome" (minúsculas) encuentra a SALOME
+  ✓ buscar apellido+nombre en otro orden también encuentra
+  ✓ buscar por prefijo del código encuentra
+  ✓ búsqueda sin coincidencias → 0 filas (empty state honesto)
+
+━━━ NIVEL 2c — variantes de escritura del grado (robustez del filtro) ━━━
+An update to StudentsManagerView inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+An update to StudentsManagerView inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+An update to StudentsManagerView inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+An update to StudentsManagerView inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+  opciones con variantes: all |  8°2 | 6°1 | 6°1  | 6°2 | 6°4 | 7-1 | 7°1 | 7°2 | 7°4 | 8°1 | 8°2 | 8°4 | 9 1 | 9°1 | 9°2 | 9°3 | 10°1 | 10°2 | 10°3 | 11°1 | 11°2 | 11°3
+  ✗ no hay opciones duplicadas por variantes invisibles del mismo grado — 6°1 ,8°2
+  ✗ filtrar 6°1 encuentra la ficha escrita de otra forma — filas=0
+  ✗ filtrar 6°2 encuentra la ficha escrita de otra forma — filas=0
+  ✗ filtrar 7°1 encuentra la ficha escrita de otra forma — filas=0
+  ✗ filtrar 8°2 encuentra la ficha escrita de otra forma — filas=0
+  ✗ filtrar 9°1 encuentra la ficha escrita de otra forma — filas=0
+
+══════════════════════════════════════
+  R69 FILTRO POR GRADO (DOM REAL): 12 OK · 10 FALLO
+  Fallos:
+   - existe getGradeCatalog() derivado de datos reales — método ausente en AttendanceStorageService
+   - el selector NO ofrece el grado estático vacío 6°1 — sigue apareciendo la opción 6°1 (catálogo demo hardcodeado)
+   - todas las opciones del selector corresponden a grados con estudiantes — 6°1,6°2,7°1,7°2,8°1,8°2,9°1,9°2,10°1,10°2,11°1,11°2
+   - las opciones muestran el conteo de estudiantes — Grado 6°1 | Grado 6°2 | Grado 6°4
+   - no hay opciones duplicadas por variantes invisibles del mismo grado — 6°1 ,8°2
+   - filtrar 6°1 encuentra la ficha escrita de otra forma — filas=0
+   - filtrar 6°2 encuentra la ficha escrita de otra forma — filas=0
+   - filtrar 7°1 encuentra la ficha escrita de otra forma — filas=0
+   - filtrar 8°2 encuentra la ficha escrita de otra forma — filas=0
+   - filtrar 9°1 encuentra la ficha escrita de otra forma — filas=0
+══════════════════════════════════════

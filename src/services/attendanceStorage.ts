@@ -39,6 +39,10 @@ import { parseAndVerifyScan, parseAndVerifyClassScan, parseAndVerifyTeacherCard,
 import { isValidGrade } from '../utils/documentParser';
 import { FirebaseService } from './firebase';
 import { SEED_DEMO_ON_FIRST_LAUNCH } from './demoConfig';
+// R69 (RC-7b): canonicalización de cursos. TODA comparación de grado del servicio
+// pasa por `gradesMatch` (antes `===` sobre la cadena cruda: "6°1" ≠ "6°1 " ≠ "6º1"
+// ≠ "601" y el filtro salía vacío aunque la matrícula estuviera en la nube).
+import { buildGradeCatalog, canonicalGrade, compareGrades, gradesMatch, type GradeCatalogEntry } from '../utils/gradeCatalog';
 // Ciclo runtime-only (excuseService ↔ attendanceStorage): seguro, solo métodos estáticos.
 import { ExcuseService, justificationLabelOf, isRecordProtected } from './excuseService';
 
@@ -195,6 +199,22 @@ export class AttendanceStorageService {
     assignments: ClassScheduleAssignment[] | null;
     settings: SchoolSettings | null;
   } = { students: null, teachers: null, attendance: null, slots: null, assignments: null, settings: null };
+
+  /**
+   * R69 — persistencia de INICIALIZACIÓN sin notificar.
+   *
+   * Varios getters siembran su llave en la primera lectura (`[]` con el anti-seed de
+   * R27). Esa escritura es de inicialización, no un cambio de datos: si notifica, y el
+   * getter se llamó DURANTE un render (p. ej. `getGradeCatalog()` desde el Directorio o
+   * el Escudito), React recibe un setState en otro componente en plena renderización
+   * ("Cannot update a component while rendering a different component"). Misma
+   * convención que ya aplica `getActiveClass()` ("NO notifica: puede llamarse durante
+   * render"). El cache de lectura queda write-through, igual que en los save*.
+   */
+  private static persistQuietly(key: string, value: unknown, cacheKey: 'students' | 'teachers' | 'attendance' | 'slots' | 'assignments' | 'settings'): void {
+    try { localStorage.setItem(key, JSON.stringify(value)); } catch { /* cuota llena: no rompe la lectura */ }
+    (this.readCache as any)[cacheKey] = Array.isArray(value) ? (value as any[]).slice() : value;
+  }
 
   private static invalidateReadCaches(): void {
     this.readCache = { students: null, teachers: null, attendance: null, slots: null, assignments: null, settings: null };
@@ -494,11 +514,11 @@ export class AttendanceStorageService {
       // demo — se protegió un respaldo `_corrupt_backup_*` y se recupera vacío; el usuario
       // restaura con "Descargar de Cloudflare" (PULL). Regla 6: cero fallback silencioso.
       if (!SEED_DEMO_ON_FIRST_LAUNCH) {
-        this.saveStudents([], 'system');
+        this.persistQuietly(STUDENTS_KEY, [], 'students'); // R69: init sin notify
         return [];
       }
       // Auto-recover with demo data if JSON is corrupted
-      this.saveStudents(INITIAL_STUDENTS, 'system'); // auto-reparación NO sella
+      this.persistQuietly(STUDENTS_KEY, INITIAL_STUDENTS, 'students'); // R69: auto-reparación NO sella ni notifica
       return INITIAL_STUDENTS;
     }
 
@@ -508,10 +528,10 @@ export class AttendanceStorageService {
       // (patrón Ronda 14: evita re-disparos del seed) y la app queda lista para importar
       // la matrícula real o crear estudiantes desde cero.
       if (!SEED_DEMO_ON_FIRST_LAUNCH) {
-        this.saveStudents([], 'system');
+        this.persistQuietly(STUDENTS_KEY, [], 'students'); // R69: init sin notify
         return [];
       }
-      this.saveStudents(INITIAL_STUDENTS, 'system'); // auto-reparación NO sella
+      this.persistQuietly(STUDENTS_KEY, INITIAL_STUDENTS, 'students'); // R69: init sin notify
       return INITIAL_STUDENTS;
     }
     return [];
@@ -548,30 +568,80 @@ export class AttendanceStorageService {
     this.notify(false);
   }
 
+  /**
+   * Cursos conocidos, CANONICALIZADOS y deduplicados (R69 — RC-7a/RC-7b).
+   *
+   * ANTES: un `Set` con los 12 grados del catálogo demo estático (`SCHOOL_GRADES_LIST`
+   * de mockData) MEZCLADOS con los reales y ordenados alfabéticamente → en producción
+   * (matrícula real en 6°4/7°4/8°4/9°3/10°3/11°3) el desplegable abría con 6°1, 6°2,
+   * 7°1… que NO tienen un solo estudiante, y elegir uno mostraba la tabla vacía
+   * (bug reportado por el propietario). También añadía el valor CRUDO tras validar
+   * una copia recortada, duplicando visualmente el mismo curso ("6°1" y "6°1 ").
+   *
+   * AHORA: primero los cursos con matrícula real, luego los que sólo tienen horario,
+   * y al final —sólo como referencia institucional— los del catálogo oficial. Todos
+   * en forma canónica y orden natural (6°1 < 6°2 < 6°10 < 7°1 < … < 11°3).
+   */
   static getUniqueGrades(): string[] {
     const students = this.getStudents();
-    const set = new Set<string>();
-    SCHOOL_GRADES_LIST.forEach(g => {
-      if (isValidGrade(g)) set.add(g);
-    });
-    students.forEach(s => {
-      if (s.grade && isValidGrade(s.grade)) set.add(s.grade);
-    });
-    // Include schedule assignments grades to prevent orphaned schedules
+    let assignments: Array<{ grade?: string | null }> = [];
     try {
-      const assignments = this.getScheduleAssignments();
-      assignments.forEach(a => {
-        if (a.grade && isValidGrade(a.grade)) set.add(a.grade);
-      });
+      assignments = this.getScheduleAssignments();
     } catch {}
 
-    return Array.from(set).sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
+    const withStudents = new Set<string>();
+    students.forEach(s => {
+      const c = canonicalGrade(s?.grade);
+      if (c) withStudents.add(c);
+    });
+    const withSchedule = new Set<string>();
+    assignments.forEach(a => {
+      const c = canonicalGrade(a?.grade);
+      if (c) withSchedule.add(c);
+    });
+    const institutional = new Set<string>();
+    SCHOOL_GRADES_LIST.forEach(g => {
+      if (isValidGrade(g)) institutional.add(g);
+    });
+
+    const ordered = [
+      ...Array.from(withStudents).sort(compareGrades),
+      ...Array.from(withSchedule).filter(g => !withStudents.has(g)).sort(compareGrades),
+      ...Array.from(institutional).filter(g => !withStudents.has(g) && !withSchedule.has(g)).sort(compareGrades),
+    ];
+    return Array.from(new Set(ordered));
+  }
+
+  /**
+   * R69 — Catálogo de cursos derivado de los DATOS REALES (matrícula + planilla +
+   * horario + docentes), con conteos por curso. Es la fuente de los selectores de
+   * FILTRO (Directorio, Planilla, Carnés, Analítica, Escudito): sólo lista cursos
+   * que existen en la nube/local, y cada opción dice cuántos estudiantes tiene, de
+   * modo que "curso vacío" y "filtro roto" no vuelvan a confundirse.
+   *
+   * `includeEmptyInstitutional: true` añade al final los cursos del catálogo oficial
+   * sin datos — útil en constructores (horario/docentes), nunca en filtros.
+   */
+  static getGradeCatalog(opts?: { includeEmptyInstitutional?: boolean }): GradeCatalogEntry[] {
+    let records: Array<{ studentGrade?: string | null }> = [];
+    let assignments: Array<{ grade?: string | null }> = [];
+    try { records = this.getAllAttendance(); } catch {}
+    try { assignments = this.getScheduleAssignments(); } catch {}
+    return buildGradeCatalog({
+      students: this.getStudents(),
+      records,
+      assignments,
+      teachers: this.getTeachers(),
+      institutional: SCHOOL_GRADES_LIST,
+      includeEmptyInstitutional: opts?.includeEmptyInstitutional === true,
+    });
   }
 
   static getStudentsByGrade(grade: string): Student[] {
     const students = this.getStudents();
     if (grade === 'all') return students;
-    return students.filter(s => s.grade === grade);
+    // R69 (RC-7b): comparación canónica en los dos lados.
+    return students.filter(s => gradesMatch(s?.grade, grade));
   }
 
   static getStudentByCodeOrDoc(identifier: string): Student | undefined {
@@ -606,7 +676,18 @@ export class AttendanceStorageService {
 
   static addStudent(student: Student): { success: boolean; error?: string } {
     const students = this.getStudents();
-    if (students.some(s => s.code === student.code || s.documentId === student.documentId)) {
+    // R69 (familia RC-1 de R68): lectura DEFENSIVA. En un terminal con pull scopeado las
+    // fichas de terceros llegan SIN documentId (minimización de datos R59/R61): la
+    // comparación literal `s.documentId === student.documentId` lanzaba TypeError o, peor,
+    // igualaba dos campos ausentes ('' === '') y rechazaba el alta como duplicado fantasma.
+    const newCode = String(student?.code ?? '').trim();
+    const newDoc = String(student?.documentId ?? '').trim();
+    const duplicate = students.some(s => {
+      const sCode = String(s?.code ?? '').trim();
+      const sDoc = String(s?.documentId ?? '').trim();
+      return (!!newCode && sCode === newCode) || (!!newDoc && sDoc === newDoc);
+    });
+    if (duplicate) {
       return { success: false, error: 'Ya existe un estudiante con ese código o documento (Error 409)' };
     }
     students.push(student);
@@ -876,18 +957,22 @@ export class AttendanceStorageService {
 
   // ==================== SUBROLES & CASCADA DE 3 NIVELES ====================
   static getRepresentativeForGrade(grade: string): Student | undefined {
-    return this.getStudents().find(s => s.grade === grade && s.isRepresentative && s.active);
+    // R69 (RC-7b): canónico — el representante de "6°1" lo es también si su ficha
+    // llegó escrita "6-1"/"601" desde un CSV.
+    return this.getStudents().find(s => gradesMatch(s?.grade, grade) && s.isRepresentative && s.active);
   }
 
   static getSubstituteRepresentativeForGrade(grade: string): Student | undefined {
-    return this.getStudents().find(s => s.grade === grade && s.isSubstituteRepresentative && s.active);
+    return this.getStudents().find(s => gradesMatch(s?.grade, grade) && s.isSubstituteRepresentative && s.active);
   }
 
   static setRepresentativeForGrade(grade: string, studentCode: string, isSubstitute: boolean = false): boolean {
     const students = this.getStudents();
     let updated = false;
     students.forEach(s => {
-      if (s.grade === grade) {
+      // R69 (RC-7b): canónico — "Hacer rep" desde la tabla funciona aunque la ficha
+      // traiga otra escritura del curso.
+      if (gradesMatch(s?.grade, grade)) {
         if (s.code === studentCode) {
           if (isSubstitute) {
             s.isSubstituteRepresentative = true;
@@ -1002,7 +1087,7 @@ export class AttendanceStorageService {
     }
 
     const ephem = this.getValidEphemeralDelegation(studentCode, slotId);
-    if (ephem && ephem.grade === grade) {
+    if (ephem && gradesMatch(ephem.grade, grade)) { // R69 (RC-7b)
       return { role: 'DELEGADO_EFIMERO', authorized: true, delegation: ephem };
     }
 
@@ -1010,7 +1095,9 @@ export class AttendanceStorageService {
   }
 
   static getGroupDirectorForGrade(grade: string): Teacher | undefined {
-    return this.getTeachers().find(t => t.isGroupDirector && t.directorGrade === grade && t.active);
+    // R69 (RC-7b): canónico — el director de grupo se reconoce aunque su
+    // `directorGrade` se haya guardado con otra escritura del curso.
+    return this.getTeachers().find(t => t.isGroupDirector && gradesMatch(t?.directorGrade, grade) && t.active);
   }
 
   static setGroupDirectorForGrade(grade: string, teacherId: string): boolean {
@@ -1026,7 +1113,7 @@ export class AttendanceStorageService {
         t.subjects = (t.subjects || []).filter(s => s !== 'Dirección de Grupo');
         t.subjects = [...t.subjects, 'Dirección de Grupo'];
         updated = true;
-      } else if (t.directorGrade === grade && t.id !== teacherId) {
+      } else if (gradesMatch(t.directorGrade, grade) && t.id !== teacherId) { // R69 (RC-7b)
         t.isGroupDirector = false;
         t.directorGrade = undefined;
         // Ronda 55: quien pierde la dirección pierde la tarjeta derivada (misma fuente de verdad).
@@ -1060,11 +1147,12 @@ export class AttendanceStorageService {
       } catch {}
     }
     // Ronda 27 (entrega limpia): key null o corrupta → `[]` persistido (sin demo).
+    // R69: init SIN notify (getGradeCatalog se llama durante render en el Escudito).
     if (!SEED_DEMO_ON_FIRST_LAUNCH) {
-      this.saveTeachers([], 'system'); // Ronda 57 (fix hueco #7): auto-reparación NO sella
+      this.persistQuietly(TEACHERS_KEY, [], 'teachers'); // R57 (hueco #7): no sella
       return [];
     }
-    this.saveTeachers(INITIAL_TEACHERS, 'system');
+    this.persistQuietly(TEACHERS_KEY, INITIAL_TEACHERS, 'teachers');
     return INITIAL_TEACHERS;
   }
 
@@ -1348,7 +1436,11 @@ export class AttendanceStorageService {
   static async closeDayAttendance(params: { dateStr?: string; forceClose?: boolean; closedBy?: string }): Promise<{ closedAt: string; blocksClosed: number; absentMarked: number; excusedMarked: number; pendingRevision: number; details: Array<{ grade: string; slotId: string; status: string; absent: number; excused: number }> }> {
     const date = params.dateStr || getTodayDateString();
     const slots = this.getScheduleSlots().filter(s => s.type !== 'BREAK' && s.type !== 'LUNCH');
-    const grades = Array.from(new Set(this.getStudents().filter(s => s.active).map(s => s.grade)));
+    // R69 (RC-7b): grados canónicos — con escrituras mezcladas ("6°4" y "6°4 ") el
+    // cierre automático recorría el MISMO curso dos veces y duplicaba detalles.
+    const grades = Array.from(new Set(
+      this.getStudents().filter(s => s.active).map(s => canonicalGrade(s?.grade) ?? String(s?.grade ?? ''))
+    )).filter(Boolean);
     const details: Array<{ grade: string; slotId: string; status: string; absent: number; excused: number }> = [];
     let absentMarked = 0;
     let excusedMarked = 0;
@@ -1543,7 +1635,8 @@ export class AttendanceStorageService {
     try {
       const stored = localStorage.getItem(NON_COMPUTABLE_SLOTS_KEY);
       const list = stored ? JSON.parse(stored) : [];
-      const filtered = list.filter((item: any) => !(item.slotId === params.slotId && item.grade === params.grade && item.date === date));
+      // R69 (RC-7b): deduplicación canónica del curso.
+      const filtered = list.filter((item: any) => !(item.slotId === params.slotId && gradesMatch(item?.grade, params.grade) && item.date === date));
       filtered.push({
         slotId: params.slotId,
         grade: params.grade,
@@ -1560,7 +1653,7 @@ export class AttendanceStorageService {
     try {
       const stored = localStorage.getItem(NON_COMPUTABLE_SLOTS_KEY);
       const list = stored ? JSON.parse(stored) : [];
-      const filtered = list.filter((item: any) => !(item.slotId === params.slotId && item.grade === params.grade && item.date === date));
+      const filtered = list.filter((item: any) => !(item.slotId === params.slotId && gradesMatch(item?.grade, params.grade) && item.date === date)); // R69 (RC-7b)
       localStorage.setItem(NON_COMPUTABLE_SLOTS_KEY, JSON.stringify(filtered));
       this.notify();
     } catch {}
@@ -1579,7 +1672,7 @@ export class AttendanceStorageService {
     }
 
     const date = dateStr || getTodayDateString();
-    const nonComp = this.getNonComputableSlots(date).find(item => item.slotId === slotId && item.grade === grade);
+    const nonComp = this.getNonComputableSlots(date).find(item => item.slotId === slotId && gradesMatch(item?.grade, grade)); // R69 (RC-7b)
     if (nonComp) {
       return { isNonComputable: true, reason: nonComp.reason };
     }
@@ -1599,7 +1692,10 @@ export class AttendanceStorageService {
         }
       }
     } catch {}
-    this.saveScheduleSlots(DEFAULT_SCHEDULE_SLOTS, 'system'); // Ronda 57 (fix hueco #7): lazy-init NO sella
+    // Ronda 57 (fix hueco #7): lazy-init NO sella. R69: tampoco notifica — este getter
+    // se llama durante render (getUniqueGrades/getGradeCatalog) y el notify provocaba
+    // "Cannot update a component while rendering a different component".
+    this.persistQuietly(SCHEDULE_SLOTS_KEY, DEFAULT_SCHEDULE_SLOTS, 'slots');
     return DEFAULT_SCHEDULE_SLOTS;
   }
 
@@ -1636,11 +1732,12 @@ export class AttendanceStorageService {
       } catch {}
     }
     // Ronda 27 (entrega limpia): key null o corrupta → `[]` persistido (sin cátedras demo).
+    // R69: init sin notify (mismo motivo que getScheduleSlots: se lee durante render).
     if (!SEED_DEMO_ON_FIRST_LAUNCH) {
-      this.saveScheduleAssignments([], 'system');
+      this.persistQuietly(SCHEDULE_ASSIGNMENTS_KEY, [], 'assignments');
       return [];
     }
-    this.saveScheduleAssignments(INITIAL_SCHEDULE_ASSIGNMENTS, 'system');
+    this.persistQuietly(SCHEDULE_ASSIGNMENTS_KEY, INITIAL_SCHEDULE_ASSIGNMENTS, 'assignments');
     return INITIAL_SCHEDULE_ASSIGNMENTS;
   }
 
@@ -1653,7 +1750,7 @@ export class AttendanceStorageService {
 
   static getScheduleForGrade(grade: string, dayOfWeek: number = 1): (ScheduleSlot & { assignment?: ClassScheduleAssignment })[] {
     const slots = this.getScheduleSlots();
-    const assignments = this.getScheduleAssignments().filter(a => a.grade === grade && a.dayOfWeek === dayOfWeek);
+    const assignments = this.getScheduleAssignments().filter(a => gradesMatch(a?.grade, grade) && a.dayOfWeek === dayOfWeek); // R69 (RC-7b)
     const assignMap = new Map<string, ClassScheduleAssignment>();
     assignments.forEach(a => assignMap.set(a.slotId, a));
 
@@ -1774,7 +1871,7 @@ export class AttendanceStorageService {
       a.teacherId === params.teacherId &&
       a.dayOfWeek === params.dayOfWeek &&
       a.slotId === params.slotId &&
-      (!params.excludeGrade || a.grade !== params.excludeGrade)
+      (!params.excludeGrade || !gradesMatch(a?.grade, params.excludeGrade)) // R69 (RC-7b)
     );
     if (conflict) {
       const slot = slots.find(s => s.id === params.slotId);
@@ -1827,9 +1924,9 @@ export class AttendanceStorageService {
 
   static setAssignment(assignment: Omit<ClassScheduleAssignment, 'id'> & { id?: string }): void {
     const assignments = this.getScheduleAssignments();
-    const existingIdx = assignments.findIndex(a => 
-      a.grade === assignment.grade && 
-      a.slotId === assignment.slotId && 
+    const existingIdx = assignments.findIndex(a =>
+      gradesMatch(a?.grade, assignment.grade) && // R69 (RC-7b): un mismo curso escrito distinto no duplica la cátedra
+      a.slotId === assignment.slotId &&
       a.dayOfWeek === assignment.dayOfWeek
     );
 
@@ -1849,13 +1946,13 @@ export class AttendanceStorageService {
 
   static removeAssignment(grade: string, slotId: string, dayOfWeek: number, removeDoubleBlock?: boolean): void {
     const assignments = this.getScheduleAssignments();
-    const target = assignments.find(a => a.grade === grade && a.slotId === slotId && a.dayOfWeek === dayOfWeek);
-    let filtered = assignments.filter(a => !(a.grade === grade && a.slotId === slotId && a.dayOfWeek === dayOfWeek));
+    const target = assignments.find(a => gradesMatch(a?.grade, grade) && a.slotId === slotId && a.dayOfWeek === dayOfWeek); // R69 (RC-7b)
+    let filtered = assignments.filter(a => !(gradesMatch(a?.grade, grade) && a.slotId === slotId && a.dayOfWeek === dayOfWeek));
     
     if (removeDoubleBlock && target && target.isDoubleBlock) {
       const nextSlot = this.getNextClassSlot(slotId);
       if (nextSlot) {
-        filtered = filtered.filter(a => !(a.grade === grade && a.slotId === nextSlot.id && a.dayOfWeek === dayOfWeek && a.subject === target.subject));
+        filtered = filtered.filter(a => !(gradesMatch(a?.grade, grade) && a.slotId === nextSlot.id && a.dayOfWeek === dayOfWeek && a.subject === target.subject)); // R69 (RC-7b)
       }
     }
     this.saveScheduleAssignments(filtered);
@@ -1906,8 +2003,19 @@ export class AttendanceStorageService {
     };
 
     // Grado: normaliza '10-1' / '10.1' / '10 1' → '10°1' y valida contra la matrícula real
-    const knownGrades = new Set<string>([...SCHOOL_GRADES_LIST, ...this.getStudents().map(s => s.grade)]);
+    // R69 (RC-7b): la normalización delega en `canonicalGrade` (cubre además '6º1',
+    // '601', 'GRADO 6-1', 'SEXTO 1', NBSP y espacios sobrantes) y el conjunto de
+    // cursos conocidos incluye la forma canónica de la matrícula real, de modo que un
+    // CSV de horarios escrito distinto al de las fichas YA NO rebota con "el grado no
+    // existe en la matrícula". Las secciones alfabéticas (10°A) conservan la vía antigua.
+    const knownGrades = new Set<string>([
+      ...SCHOOL_GRADES_LIST,
+      ...this.getStudents().map(s => String(s?.grade ?? '')),
+      ...this.getStudents().map(s => canonicalGrade(s?.grade)).filter((g): g is string => !!g),
+    ]);
     const normalizeGrade = (raw: string): string | null => {
+      const canonical = canonicalGrade(raw);
+      if (canonical) return canonical;
       const cleaned = raw.trim().toUpperCase().replace(/\s*[-.\s]\s*/g, '°');
       const m = cleaned.match(/^(\d{1,2})°?([A-Z0-9]{1,3})$/);
       return m ? `${m[1]}°${m[2]}` : null;
@@ -2065,7 +2173,7 @@ export class AttendanceStorageService {
 
     // Guarda 1: la celda (grado, día, bloque) ya tiene cátedra de OTRO docente → no se pisa
     const existing = this.getScheduleAssignments().find(a =>
-      a.grade === params.grade && a.slotId === params.slotId && a.dayOfWeek === params.dayOfWeek
+      gradesMatch(a?.grade, params.grade) && a.slotId === params.slotId && a.dayOfWeek === params.dayOfWeek // R69 (RC-7b)
     );
     if (existing && existing.teacherId && existing.teacherId !== teacherId) {
       return { ok: false, error: `"${slot.name}" del ${params.grade} ya está asignada a ${existing.teacherName}. Pide a Rectoría que la reasigne.` };
@@ -2096,7 +2204,7 @@ export class AttendanceStorageService {
   }
 
   static removeTeacherOwnAssignment(teacherId: string, grade: string, slotId: string, dayOfWeek: number): boolean {
-    const target = this.getScheduleAssignments().find(a => a.grade === grade && a.slotId === slotId && a.dayOfWeek === dayOfWeek);
+    const target = this.getScheduleAssignments().find(a => gradesMatch(a?.grade, grade) && a.slotId === slotId && a.dayOfWeek === dayOfWeek); // R69 (RC-7b)
     if (!target || target.teacherId !== teacherId) return false; // solo las propias
     this.removeAssignment(grade, slotId, dayOfWeek);
     return true;
@@ -2123,12 +2231,14 @@ export class AttendanceStorageService {
     }
 
     // Ronda 27 (entrega limpia): la planilla nace sin registros (sin asistencias demo).
+    // R69: la siembra de primera lectura NO notifica (getGradeCatalog puede llamarse
+    // durante render desde el Directorio/Planilla/Escudito).
     if (!SEED_DEMO_ON_FIRST_LAUNCH) {
-      this.saveAttendance([]);
+      this.persistQuietly(ATTENDANCE_KEY, [], 'attendance');
       return [];
     }
     const initialRecords = this.generateInitialSeededAttendance();
-    this.saveAttendance(initialRecords);
+    this.persistQuietly(ATTENDANCE_KEY, initialRecords, 'attendance');
     return initialRecords;
   }
 
@@ -2149,11 +2259,13 @@ export class AttendanceStorageService {
   static getAttendanceByGrade(grade: string): AttendanceRecord[] {
     const all = this.getAllAttendance();
     if (grade === 'all') return all;
-    return all.filter(r => r.studentGrade === grade);
+    // R69 (RC-7b): canónico — la planilla del curso no depende de cómo se escribió
+    // el grado en la ficha ni en el registro.
+    return all.filter(r => gradesMatch(r?.studentGrade, grade));
   }
 
   static getAttendanceByGradeAndSlot(grade: string, slotId: string, dateStr: string = getTodayDateString()): AttendanceRecord[] {
-    return this.getAllAttendance().filter(r => r.studentGrade === grade && r.slotId === slotId && r.date === dateStr);
+    return this.getAllAttendance().filter(r => gradesMatch(r?.studentGrade, grade) && r.slotId === slotId && r.date === dateStr); // R69 (RC-7b)
   }
 
   // ==================== QR DE CLASE — CONTEXTO ACTIVO (Ronda 19) ====================
@@ -2235,7 +2347,9 @@ export class AttendanceStorageService {
       return { type: 'error', title: 'Bloque inexistente', message: `El QR referencia el bloque "${parsed.slotId}" que ya no existe en la plantilla. Regenera la tarjeta.`, timestamp: new Date().toISOString() };
     }
 
-    const assignment = this.getScheduleAssignments().find(a => a.grade === parsed.grade && a.slotId === parsed.slotId && a.dayOfWeek === parsed.dayOfWeek);
+    // R69 (RC-7b): la tarjeta QR de clase (CLASE:v1/v2) lleva el grado tal como se
+    // generó; la cátedra puede estar guardada con otra escritura del mismo curso.
+    const assignment = this.getScheduleAssignments().find(a => gradesMatch(a?.grade, parsed.grade) && a.slotId === parsed.slotId && a.dayOfWeek === parsed.dayOfWeek);
     const ctx: ActiveClassContext = {
       grade: parsed.grade,
       dayOfWeek: parsed.dayOfWeek,
@@ -2277,7 +2391,7 @@ export class AttendanceStorageService {
     if (Date.now() > expiresAt) {
       return { type: 'error', title: 'Bloque ya finalizado', message: `${slot.name} terminó a las ${slot.endTime}; no se puede activar una clase vencida.`, timestamp: new Date().toISOString() };
     }
-    const assignment = this.getScheduleAssignments().find(a => a.grade === grade && a.slotId === slotId && a.dayOfWeek === (todayDow || 1));
+    const assignment = this.getScheduleAssignments().find(a => gradesMatch(a?.grade, grade) && a.slotId === slotId && a.dayOfWeek === (todayDow || 1)); // R69 (RC-7b)
     const ctx: ActiveClassContext = {
       grade,
       dayOfWeek: todayDow || 1,
@@ -2616,7 +2730,7 @@ export class AttendanceStorageService {
     // Check if slot has assignment
     const currentDay = new Date().getDay() || 1;
     const assignments = this.getScheduleAssignments();
-    const assignment = assignments.find(a => a.grade === student.grade && a.slotId === currentSlot.id && a.dayOfWeek === currentDay);
+    const assignment = assignments.find(a => gradesMatch(a?.grade, student.grade) && a.slotId === currentSlot.id && a.dayOfWeek === currentDay); // R69 (RC-7b)
 
     const resolvedSubject = params.subject || assignment?.subject || 'Cátedra General';
     const resolvedTeacher = params.teacherName || assignment?.teacherName || 'Docente Titular';
@@ -3292,11 +3406,21 @@ export class AttendanceStorageService {
     const settings = this.getSettings();
     const parsed = await parseAndVerifyScan(params.scanInput, settings.qrSecret);
     const students = this.getStudents();
-    const student = students.find(s =>
-      s.code === parsed.studentCode ||
-      s.documentId === parsed.studentCode ||
-      (parsed.documentId && s.documentId === parsed.documentId)
-    );
+    // R69 (familia RC-1 de R68): emparejamiento DEFENSIVO y sin coincidencias vacías.
+    // En un terminal con pull scopeado las fichas de terceros llegan sin `documentId`;
+    // la comparación literal podía igualar dos campos ausentes (undefined === undefined)
+    // y adjudicar el escaneo a un estudiante equivocado.
+    const scannedCode = String(parsed.studentCode ?? '').trim();
+    const scannedDoc = String(parsed.documentId ?? '').trim();
+    const student = students.find(s => {
+      const sCode = String(s?.code ?? '').trim();
+      const sDoc = String(s?.documentId ?? '').trim();
+      return (
+        (!!scannedCode && sCode === scannedCode) ||
+        (!!scannedCode && sDoc === scannedCode) ||
+        (!!scannedDoc && sDoc === scannedDoc)
+      );
+    });
 
     // Ronda 19 — QR DE CLASE: si hay una clase activa en el dispositivo y el carné pertenece
     // a ese curso, el contexto lo aporta el QR (materia/bloque exactos), no el reloj — la
@@ -3329,7 +3453,10 @@ export class AttendanceStorageService {
       });
     }
 
-    if (activeClass && student && student.grade === activeClass.grade) {
+    // R69 (RC-7b): la clase activa desbloquea la hora del curso aunque el QR y la
+    // ficha escriban el grado distinto (mismo curso canónico). Distinto curso sigue
+    // sin contaminarse (ruta clásica por HORA), que es la regla R19/R20.
+    if (activeClass && student && gradesMatch(student.grade, activeClass.grade)) {
       return this.registerClassScan({
         scanInput: params.scanInput,
         method: params.method || 'CAMERA',

@@ -45,6 +45,12 @@ import { FirstWelcomeTour, FirstWelcomeTourService } from './components/FirstWel
 import { useExcusesBadge } from './hooks/useExcusesBadge'; // Ronda 24: punto rojo de excusas pendientes
 import { useTheme } from './context/ThemeContext';
 import { SchoolSettings, Student, Teacher, UserSession, UserRole } from './types/attendance';
+// R69 (RC-8): el Escudito busca con la misma lógica inteligente del Directorio
+// (insensible a tildes, tokens en cualquier orden, documento/código/curso) y filtra
+// por curso canónico. Antes usaba `.toLowerCase().includes(q)`: "gomez" no encontraba
+// a "Gómez" y no había forma de acotar 180 estudiantes por curso en la demostración.
+import { matchStudentFuzzy, matchTeacherFuzzy, matchesGradeFilter } from './utils/searchHelper';
+import { canonicalGrade, compareGrades, gradeOptionLabel } from './utils/gradeCatalog';
 import { AttendanceStorageService } from './services/attendanceStorage';
 import { CloudflareSyncService } from './services/cloudflareSync';
 import { FirebaseService } from './services/firebase';
@@ -74,6 +80,21 @@ export default function App() {
   // abre un BUSCADOR de la persona concreta; sin selección no hay cambio de rol.
   const [rolePicker, setRolePicker] = useState<'DOCENTE' | 'ESTUDIANTE_ACUDIENTE' | null>(null);
   const [pickerSearch, setPickerSearch] = useState('');
+  // R69 (RC-8) — Escudito 100% dinámico desde el catálogo de la nube:
+  //  · `catalogVersion` fuerza el re-render cuando llega un pull. ANTES el suscriptor
+  //    de App sólo hacía `setSettings(getSettings())`, y con el cache de lectura (F-10)
+  //    un pull que actualizaba ÚNICAMENTE estudiantes devolvía la MISMA referencia de
+  //    settings → React hacía bail-out → la lista del Escudito quedaba congelada en el
+  //    catálogo previo (eso es lo que se percibía como "lista estática/hardcodeada").
+  //  · `pickerGrade` acota el listado por curso (imprescindible con la matrícula
+  //    completa de 6°1 a 11°3 en la exposición).
+  //  · `pickerRefreshing`/`pickerNotice` hacen visible de dónde vienen los datos y si
+  //    la nube respondió (transparencia: nunca se finge un catálogo fresco).
+  const [catalogVersion, setCatalogVersion] = useState(0);
+  const [pickerGrade, setPickerGrade] = useState<string>('all');
+  const [pickerRefreshing, setPickerRefreshing] = useState(false);
+  const [pickerNotice, setPickerNotice] = useState<string | null>(null);
+  const pickerRefreshInFlight = useRef(false);
   // Ronda 29: asistente de primer ingreso (guía por perfil, una sola vez por dispositivo)
   const [showWelcomeTour, setShowWelcomeTour] = useState(false);
   const [isTourManualReopen, setIsTourManualReopen] = useState(false);
@@ -123,6 +144,10 @@ export default function App() {
     }
     const unsubscribe = AttendanceStorageService.subscribe(() => {
       setSettings(AttendanceStorageService.getSettings());
+      // R69 (RC-8): contador monotónico — garantiza re-render ante CUALQUIER escritura
+      // del catálogo (pull, alta, "Hacer rep", cascada), sin depender de que la
+      // referencia de settings cambie.
+      setCatalogVersion(v => v + 1);
     });
     return unsubscribe;
   }, []);
@@ -301,6 +326,52 @@ export default function App() {
     setLoggedUser({ username: 'Rectoría / Administrador General' });
   };
 
+  /**
+   * R69 (RC-8) — Refresco del catálogo desde la nube al abrir el Escudito.
+   *
+   * La lista del selector SIEMPRE se leyó del almacenamiento local (nunca fue
+   * hardcodeada), pero ese almacenamiento es la CACHÉ del pull: en un terminal recién
+   * abierto puede estar vacío o viejo. Por eso al abrir el selector se dispara un PULL
+   * explícito (Rectoría, snapshot completo) y la UI dice qué pasó. Si la nube no
+   * responde, se muestra el catálogo local con un aviso honesto — jamás una lista
+   * inventada ni un fallo silencioso.
+   */
+  const refreshCatalogFromCloud = async (reason: 'escudito') => {
+    if (pickerRefreshInFlight.current) return;
+    const session = AttendanceStorageService.getCurrentSession();
+    const workerUrl = (AttendanceStorageService.getSettings().cloudflareWorkerUrl || '').trim();
+    if (session?.role !== 'ADMIN' || !workerUrl) return; // sin Rectoría o sin Worker no hay pull
+    pickerRefreshInFlight.current = true;
+    setPickerRefreshing(true);
+    setPickerNotice(null);
+    try {
+      const result = await CloudflareSyncService.pullFromCloudflare();
+      const students = AttendanceStorageService.getStudents().length;
+      const teachers = AttendanceStorageService.getTeachers().length;
+      if (result?.success) {
+        setPickerNotice(`Catálogo actualizado desde la nube: ${students} estudiantes · ${teachers} docentes.`);
+      } else {
+        setPickerNotice(`La nube no respondió (${result?.message || 'sin conexión'}). Se lista el catálogo local: ${students} estudiantes · ${teachers} docentes.`);
+      }
+    } catch (err: any) {
+      setPickerNotice(`No se pudo actualizar el catálogo desde la nube (${err?.message || 'error de red'}). Se lista el catálogo local.`);
+      console.error('[Escudito] refresco del catálogo falló:', err);
+    } finally {
+      pickerRefreshInFlight.current = false;
+      setPickerRefreshing(false);
+    }
+    void reason;
+  };
+
+  const openRoleSwitcher = () => {
+    setShowRoleModal(true);
+    setRolePicker(null);
+    setPickerSearch('');
+    setPickerGrade('all');
+    setPickerNotice(null);
+    void refreshCatalogFromCloud('escudito'); // R69 (RC-8): datos frescos de la nube al abrir
+  };
+
   // R64 (Fix B): ¿hay una sesión REAL de Rectoría debajo del rol activo? (Vista previa)
   // La píldora es clickeable en ese caso desde CUALQUIER rol — el "bloqueo" del que
   // informaba el propietario (cambiar a estudiante y no poder volver) era porque la
@@ -394,7 +465,8 @@ export default function App() {
                 quedan fijos a su identidad. */}
             {canOpenRoleSwitcher ? (
               <button
-                onClick={() => { setShowRoleModal(true); setRolePicker(null); setPickerSearch(''); }}
+                data-testid="escudito"
+                onClick={openRoleSwitcher}
                 className={`px-3 py-1.5 rounded-2xl border text-xs font-bold transition-all flex items-center gap-1.5 ${roleConfig[currentRole].color} shadow-xs hover:opacity-90`}
                 title="Cambiar Perfil de Usuario (Rectoría / Docente / Estudiante)"
               >
@@ -476,6 +548,7 @@ export default function App() {
                       return (
                         <button
                           key={item.id}
+                          data-testid={`nav-${item.id}`}
                           onClick={() => {
                             setActiveTab(item.id);
                             setIsMenuOpen(false);
@@ -704,10 +777,30 @@ export default function App() {
               </p>
             </div>
 
+            {/* R69 (RC-8) — franja de estado del catálogo: visible en las dos
+                pantallas del modal (selección de perfil y buscador), para que siempre
+                se sepa de dónde viene la lista y si la nube respondió. */}
+            <div className="flex flex-wrap items-center gap-2 text-[10px] font-bold">
+              <span className="px-2 py-1 rounded-lg bg-indigo-50 dark:bg-indigo-950/60 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800">
+                {AttendanceStorageService.getStudents().length} estudiantes · {AttendanceStorageService.getTeachers().length} docentes · catálogo en la nube
+              </span>
+              {pickerRefreshing && (
+                <span className="px-2 py-1 rounded-lg bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 border border-slate-200 dark:border-zinc-700 animate-pulse">
+                  Actualizando desde la nube…
+                </span>
+              )}
+              {pickerNotice && !pickerRefreshing && (
+                <span className="px-2 py-1 rounded-lg bg-slate-50 dark:bg-black text-slate-500 dark:text-slate-400 border border-slate-200 dark:border-zinc-800">
+                  {pickerNotice}
+                </span>
+              )}
+            </div>
+
             {!rolePicker && (
               <>
                 {currentRole !== 'ADMIN' && hasUnderlyingAdminSession && (
                   <button
+                    data-testid="escudito-volver-rectoria"
                     onClick={() => switchRole('ADMIN')}
                     className="w-full p-3.5 rounded-2xl border-2 border-purple-500 bg-purple-50/60 dark:bg-purple-950/40 text-left transition-all flex items-center justify-between shadow-md"
                   >
@@ -753,7 +846,8 @@ export default function App() {
 
                   {/* 2. Docente / Aula */}
                   <button
-                    onClick={() => { setRolePicker('DOCENTE'); setPickerSearch(''); }}
+                    data-testid="escudito-rol-docente"
+                    onClick={() => { setRolePicker('DOCENTE'); setPickerSearch(''); setPickerGrade('all'); }}
                     className={`p-4 rounded-2xl border text-left transition-all space-y-2 ${
                       currentRole === 'DOCENTE'
                         ? 'border-emerald-500 bg-emerald-50/50 dark:bg-emerald-950/40 shadow-md ring-2 ring-emerald-500/20'
@@ -775,7 +869,8 @@ export default function App() {
 
                   {/* 3. Estudiante / Acudiente */}
                   <button
-                    onClick={() => { setRolePicker('ESTUDIANTE_ACUDIENTE'); setPickerSearch(''); }}
+                    data-testid="escudito-rol-estudiante"
+                    onClick={() => { setRolePicker('ESTUDIANTE_ACUDIENTE'); setPickerSearch(''); setPickerGrade('all'); }}
                     className={`p-4 rounded-2xl border text-left transition-all space-y-2 ${
                       currentRole === 'ESTUDIANTE_ACUDIENTE'
                         ? 'border-sky-500 bg-sky-50/50 dark:bg-sky-950/40 shadow-md ring-2 ring-sky-500/20'
@@ -798,21 +893,66 @@ export default function App() {
               </>
             )}
 
-            {rolePicker && (
-              <div className="space-y-3">
+            {rolePicker && (() => {
+              /* R69 (RC-8) — LISTADO 100% DINÁMICO DEL CATÁLOGO.
+                 Se re-lee el almacenamiento en cada render (el contador
+                 `catalogVersion` garantiza que un pull produzca render) y la búsqueda
+                 usa las mismas utilidades inteligentes del Directorio. Nada aquí está
+                 hardcodeado: si la nube trae 230 estudiantes, el selector lista 230. */
+              const isTeacherPicker = rolePicker === 'DOCENTE';
+              const allStudents = AttendanceStorageService.getStudents().filter(Boolean) as Student[];
+              const allTeachers = AttendanceStorageService.getTeachers().filter(Boolean) as Teacher[];
+              const studentCatalog = AttendanceStorageService.getGradeCatalog();
+              const query = pickerSearch;
+
+              const students = allStudents
+                .filter(s => matchesGradeFilter(s.grade, pickerGrade) && matchStudentFuzzy(s, query))
+                .sort((a, b) =>
+                  compareGrades(String(a.grade ?? ''), String(b.grade ?? '')) ||
+                  `${a.lastName ?? ''} ${a.firstName ?? ''}`.localeCompare(`${b.lastName ?? ''} ${b.firstName ?? ''}`, 'es')
+                );
+              const teachers = allTeachers
+                .filter(t => matchTeacherFuzzy(t, query))
+                .sort((a, b) => String(a.fullName ?? '').localeCompare(String(b.fullName ?? ''), 'es'));
+
+              const initials = (first?: string | null, last?: string | null) =>
+                `${String(first ?? '?').trim().charAt(0) || '?'}${String(last ?? '').trim().charAt(0)}`.toUpperCase();
+
+              return (
+              <div className="space-y-3" data-catalog-version={catalogVersion}>
+                {/* Estado del catálogo: de dónde vienen los datos y si la nube respondió */}
+                <div className="flex flex-wrap items-center gap-2 text-[10px] font-bold">
+                  <span data-testid="escudito-catalogo" className="px-2 py-1 rounded-lg bg-indigo-50 dark:bg-indigo-950/60 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800">
+                    {isTeacherPicker ? `${allTeachers.length} docentes` : `${allStudents.length} estudiantes`} · catálogo en la nube
+                  </span>
+                  {pickerRefreshing && (
+                    <span className="px-2 py-1 rounded-lg bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 border border-slate-200 dark:border-zinc-700 animate-pulse">
+                      Actualizando desde la nube…
+                    </span>
+                  )}
+                  {pickerNotice && !pickerRefreshing && (
+                    <span data-testid="escudito-aviso" className="px-2 py-1 rounded-lg bg-slate-50 dark:bg-black text-slate-500 dark:text-slate-400 border border-slate-200 dark:border-zinc-800">
+                      {pickerNotice}
+                    </span>
+                  )}
+                </div>
+
                 <div className="flex items-center gap-2">
                   <div className="relative flex-1">
                     <Search className="w-3.5 h-3.5 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
                     <input
                       autoFocus
+                      data-testid="escudito-buscador"
                       value={pickerSearch}
                       onChange={(e) => setPickerSearch(e.target.value)}
-                      placeholder={rolePicker === 'DOCENTE' ? 'Buscar docente por nombre, documento o asignatura…' : 'Buscar estudiante por nombre, código o documento…'}
+                      placeholder={isTeacherPicker ? 'Buscar docente por nombre, documento, correo o asignatura…' : 'Buscar estudiante por nombre, código, documento o curso…'}
+                      aria-label={isTeacherPicker ? 'Buscar docente' : 'Buscar estudiante'}
                       className="w-full pl-9 pr-3 py-2.5 bg-slate-50 dark:bg-black border border-slate-200 dark:border-zinc-800/50 rounded-xl text-xs text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
                     />
                   </div>
                   <button
-                    onClick={() => { setRolePicker(null); setPickerSearch(''); }}
+                    data-testid="escudito-atras"
+                    onClick={() => { setRolePicker(null); setPickerSearch(''); setPickerGrade('all'); }}
                     className="px-3 py-2.5 bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 rounded-xl text-xs font-bold hover:bg-slate-200 transition-all flex items-center gap-1.5"
                   >
                     <ArrowLeft className="w-3.5 h-3.5" />
@@ -820,98 +960,124 @@ export default function App() {
                   </button>
                 </div>
 
-                {(() => {
-                  const q = pickerSearch.trim().toLowerCase();
-                  if (rolePicker === 'DOCENTE') {
-                    const teachers = AttendanceStorageService.getTeachers().filter(t =>
-                      !q || `${t.fullName} ${t.documentId || ''} ${(t.subjects || []).join(' ')}`.toLowerCase().includes(q)
-                    );
-                    if (teachers.length === 0) {
-                      return (
-                        <div className="p-4 rounded-2xl bg-slate-50 dark:bg-black border border-slate-200 dark:border-zinc-800/50 text-xs text-slate-500 text-center">
-                          No hay docentes en el catálogo local{q ? ' que coincidan con la búsqueda' : ''}. Sincroniza (Pull) o registre docentes primero en Gestión Docentes.
-                        </div>
-                      );
-                    }
-                    return (
-                      <div className="space-y-1.5 max-h-72 overflow-y-auto pr-1">
-                        {teachers.map((t) => (
-                          <button
-                            key={t.id}
-                            onClick={() => switchRole('DOCENTE', { teacher: t })}
-                            className={`w-full p-3 rounded-2xl border text-left transition-all flex items-center justify-between ${
-                              loggedUser.teacher?.id === t.id
-                                ? 'border-emerald-500 bg-emerald-50/60 dark:bg-emerald-950/40'
-                                : 'border-slate-200 dark:border-zinc-800/50 hover:border-emerald-300 dark:hover:border-emerald-800 bg-white dark:bg-black hover:bg-emerald-50/40 dark:hover:bg-emerald-950/20'
-                            }`}
-                          >
-                            <div className="flex items-center gap-3 min-w-0">
-                              <div className="w-9 h-9 rounded-xl bg-emerald-100 dark:bg-emerald-900/60 text-emerald-700 dark:text-emerald-300 flex items-center justify-center font-black text-xs shrink-0">
-                                {t.fullName.split(' ').map(p => p[0]).slice(0, 2).join('')}
-                              </div>
-                              <div className="min-w-0">
-                                <p className="text-xs font-black text-slate-900 dark:text-white truncate">{t.fullName}</p>
-                                <p className="text-[10px] text-slate-500 dark:text-slate-400 truncate">
-                                  {(t.subjects || []).slice(0, 3).join(' · ') || 'Sin asignaturas'}
-                                  {t.isGroupDirector ? ' · ⭐ Dirección de Grupo' : ''}
-                                </p>
-                              </div>
-                            </div>
-                            {loggedUser.teacher?.id === t.id && (
-                              <span className="text-[9px] font-black px-2 py-1 rounded-full bg-emerald-600 text-white shrink-0">ACTIVO</span>
-                            )}
-                          </button>
-                        ))}
-                      </div>
-                    );
-                  }
-                  const students = AttendanceStorageService.getStudents().filter(s =>
-                    !q || `${s.firstName} ${s.lastName} ${s.code} ${s.documentId || ''} ${s.grade}`.toLowerCase().includes(q)
-                  );
-                  if (students.length === 0) {
-                    return (
-                      <div className="p-4 rounded-2xl bg-slate-50 dark:bg-black border border-slate-200 dark:border-zinc-800/50 text-xs text-slate-500 text-center">
-                        No hay estudiantes en el catálogo local{q ? ' que coincidan con la búsqueda' : ''}. Sincroniza (Pull) o matricule primero en el Directorio.
-                      </div>
-                    );
-                  }
-                  return (
+                {/* Filtro por curso (sólo estudiantes): con la matrícula completa de
+                    6°1 a 11°3 el buscador solo no basta en una exposición. */}
+                {!isTeacherPicker && studentCatalog.length > 0 && (
+                  <div className="flex items-center gap-2">
+                    <label htmlFor="escudito-grade" className="text-[10px] font-black uppercase text-slate-400">Curso</label>
+                    <select
+                      id="escudito-grade"
+                      data-testid="escudito-grado"
+                      value={pickerGrade}
+                      onChange={(e) => setPickerGrade(e.target.value)}
+                      className="flex-1 px-3 py-2 bg-slate-50 dark:bg-black border border-slate-200 dark:border-zinc-800/50 rounded-xl text-xs font-bold text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                    >
+                      <option value="all">Todos los cursos ({allStudents.length})</option>
+                      {studentCatalog.map(entry => (
+                        <option key={entry.grade} value={entry.grade}>{gradeOptionLabel(entry)}</option>
+                      ))}
+                    </select>
+                    <button
+                      data-testid="escudito-actualizar"
+                      onClick={() => void refreshCatalogFromCloud('escudito')}
+                      disabled={pickerRefreshing}
+                      title="Descargar el catálogo actualizado de la nube"
+                      className="px-3 py-2 bg-indigo-50 dark:bg-indigo-950/60 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800 rounded-xl text-[10px] font-black hover:bg-indigo-100 transition-all disabled:opacity-50"
+                    >
+                      {pickerRefreshing ? 'Actualizando…' : 'Actualizar'}
+                    </button>
+                  </div>
+                )}
+
+                {isTeacherPicker ? (
+                  teachers.length === 0 ? (
+                    <div className="p-4 rounded-2xl bg-slate-50 dark:bg-black border border-slate-200 dark:border-zinc-800/50 text-xs text-slate-500 text-center">
+                      {allTeachers.length === 0
+                        ? 'El catálogo no tiene docentes en este dispositivo. Descargue los datos de la nube (Pull) o regístrelos en Gestión Docentes.'
+                        : 'Ningún docente coincide con la búsqueda. Pruebe sin tildes o por correo/asignatura.'}
+                    </div>
+                  ) : (
                     <div className="space-y-1.5 max-h-72 overflow-y-auto pr-1">
-                      {students.map((s) => (
+                      {teachers.map((t) => (
                         <button
-                          key={s.code}
-                          onClick={() => switchRole('ESTUDIANTE_ACUDIENTE', { student: s })}
+                          key={t.id}
+                          data-testid={`escudito-docente-${t.id}`}
+                          onClick={() => switchRole('DOCENTE', { teacher: t })}
                           className={`w-full p-3 rounded-2xl border text-left transition-all flex items-center justify-between ${
-                            loggedUser.student?.code === s.code
-                              ? 'border-sky-500 bg-sky-50/60 dark:bg-sky-950/40'
-                              : 'border-slate-200 dark:border-zinc-800/50 hover:border-sky-300 dark:hover:border-sky-800 bg-white dark:bg-black hover:bg-sky-50/40 dark:hover:bg-sky-950/20'
+                            loggedUser.teacher?.id === t.id
+                              ? 'border-emerald-500 bg-emerald-50/60 dark:bg-emerald-950/40'
+                              : 'border-slate-200 dark:border-zinc-800/50 hover:border-emerald-300 dark:hover:border-emerald-800 bg-white dark:bg-black hover:bg-emerald-50/40 dark:hover:bg-emerald-950/20'
                           }`}
                         >
                           <div className="flex items-center gap-3 min-w-0">
-                            <div className="w-9 h-9 rounded-xl bg-sky-100 dark:bg-sky-900/60 text-sky-700 dark:text-sky-300 flex items-center justify-center font-black text-xs shrink-0">
-                              {s.firstName[0]}{s.lastName[0]}
+                            <div className="w-9 h-9 rounded-xl bg-emerald-100 dark:bg-emerald-900/60 text-emerald-700 dark:text-emerald-300 flex items-center justify-center font-black text-xs shrink-0">
+                              {initials(String(t.fullName ?? '').split(' ')[0], String(t.fullName ?? '').split(' ').slice(1).join(' '))}
                             </div>
                             <div className="min-w-0">
-                              <p className="text-xs font-black text-slate-900 dark:text-white truncate">
-                                {s.firstName} {s.lastName} {s.isRepresentative && <span title="Representante de salón">★</span>}
+                              <p className="text-xs font-black text-slate-900 dark:text-white truncate">{t.fullName}</p>
+                              <p className="text-[10px] text-slate-500 dark:text-slate-400 truncate">
+                                {(t.subjects || []).slice(0, 3).join(' · ') || 'Sin asignaturas'}
+                                {(t.assignedGrades || []).length > 0 ? ` · ${(t.assignedGrades || []).slice(0, 3).join(', ')}` : ''}
+                                {t.isGroupDirector ? ' · ⭐ Dirección de Grupo' : ''}
                               </p>
-                              <p className="text-[10px] text-slate-500 dark:text-slate-400 truncate font-mono">{s.grade} · {s.code}</p>
                             </div>
                           </div>
-                          {loggedUser.student?.code === s.code && (
-                            <span className="text-[9px] font-black px-2 py-1 rounded-full bg-sky-600 text-white shrink-0">ACTIVO</span>
+                          {loggedUser.teacher?.id === t.id && (
+                            <span className="text-[9px] font-black px-2 py-1 rounded-full bg-emerald-600 text-white shrink-0">ACTIVO</span>
                           )}
                         </button>
                       ))}
                     </div>
-                  );
-                })()}
+                  )
+                ) : students.length === 0 ? (
+                  <div className="p-4 rounded-2xl bg-slate-50 dark:bg-black border border-slate-200 dark:border-zinc-800/50 text-xs text-slate-500 text-center">
+                    {allStudents.length === 0
+                      ? 'El catálogo no tiene estudiantes en este dispositivo. Descargue los datos de la nube (Pull) o matricule en el Directorio.'
+                      : pickerGrade !== 'all' && !query.trim()
+                        ? `El curso ${pickerGrade} no tiene estudiantes en el catálogo descargado. Elija otro curso o actualice desde la nube.`
+                        : 'Ningún estudiante coincide con la búsqueda. Pruebe sin tildes, por código o por documento.'}
+                  </div>
+                ) : (
+                  <div className="space-y-1.5 max-h-72 overflow-y-auto pr-1">
+                    {students.map((s) => (
+                      <button
+                        key={s.code}
+                        data-testid={`escudito-estudiante-${s.code}`}
+                        onClick={() => switchRole('ESTUDIANTE_ACUDIENTE', { student: s })}
+                        className={`w-full p-3 rounded-2xl border text-left transition-all flex items-center justify-between ${
+                          loggedUser.student?.code === s.code
+                            ? 'border-sky-500 bg-sky-50/60 dark:bg-sky-950/40'
+                            : 'border-slate-200 dark:border-zinc-800/50 hover:border-sky-300 dark:hover:border-sky-800 bg-white dark:bg-black hover:bg-sky-50/40 dark:hover:bg-sky-950/20'
+                        }`}
+                      >
+                        <div className="flex items-center gap-3 min-w-0">
+                          <div className="w-9 h-9 rounded-xl bg-sky-100 dark:bg-sky-900/60 text-sky-700 dark:text-sky-300 flex items-center justify-center font-black text-xs shrink-0">
+                            {initials(s.firstName, s.lastName)}
+                          </div>
+                          <div className="min-w-0">
+                            <p className="text-xs font-black text-slate-900 dark:text-white truncate">
+                              {s.firstName} {s.lastName} {s.isRepresentative && <span title="Representante de salón">★</span>}
+                            </p>
+                            <p className="text-[10px] text-slate-500 dark:text-slate-400 truncate font-mono">
+                              {canonicalGrade(s.grade) ?? s.grade} · {s.code}
+                              {s.hasFirebaseAccount ? ' · cuenta activa' : ''}
+                            </p>
+                          </div>
+                        </div>
+                        {loggedUser.student?.code === s.code && (
+                          <span className="text-[9px] font-black px-2 py-1 rounded-full bg-sky-600 text-white shrink-0">ACTIVO</span>
+                        )}
+                      </button>
+                    ))}
+                  </div>
+                )}
               </div>
-            )}
+              );
+            })()}
 
             <div className="flex justify-end">
               <button
-                onClick={() => { setShowRoleModal(false); setRolePicker(null); setPickerSearch(''); }}
+                onClick={() => { setShowRoleModal(false); setRolePicker(null); setPickerSearch(''); setPickerGrade('all'); setPickerNotice(null); }}
                 className="px-5 py-2.5 bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 rounded-2xl text-xs font-bold hover:bg-slate-200 transition-all"
               >
                 Cerrar
