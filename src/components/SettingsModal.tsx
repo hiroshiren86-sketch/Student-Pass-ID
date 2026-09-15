@@ -159,7 +159,18 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ onClose }) => {
   }, [onClose]);
 
   const handleChange = (field: keyof SchoolSettings, value: string | number | boolean) => {
-    setSettings(prev => ({ ...prev, [field]: value }));
+    const next = { ...settings, [field]: value };
+    setSettings(next);
+    // R68 (N+1 — auditoría de sync, "no reversión silenciosa"): los tokens de
+    // DISPOSITIVO persisten INMEDIATO. Antes, cerrar el modal con X/Escape sin
+    // pulsar "Guardar Cambios" DESCARTABA EN SILENCIO el AUTH_TOKEN recién
+    // pegado y el terminal seguía empujando sin permiso de catálogo (la
+    // eliminación en cascada rebotaba 403 y el nuevo estudiante nunca
+    // publicaba su ficha — reproducible en el E2E N+1). Los tokens no necesitan
+    // la validación del form; el resto de campos conserva el guardado explícito.
+    if (field === 'cloudflareApiToken' || field === 'cloudflareOperatorToken') {
+      try { AttendanceStorageService.saveSettings(next); } catch { /* sin localStorage: el estado queda en memoria */ }
+    }
   };
 
   // Ronda 55: handleDayTemplateChange y el selector «Plantilla de Jornada Activa» se RETIRARON
@@ -722,7 +733,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ onClose }) => {
                   </button>
                 </div>
                 <p className="text-[10px] text-amber-700 dark:text-amber-400 mt-1 leading-snug">
-                  Se envía como Bearer al Worker. El AUTH_TOKEN está ACTIVO en producción desde la Ronda 27 (hardening): sin este token, push/pull/excusas responden 401 y la caché local nunca sale del dispositivo (los secretos de cada dispositivo jamás viajan a la nube — política Ronda 16/29). Usa “Probar Conexión” para validar el token; el navegador NUNCA accede directo a la API de Cloudflare: el Worker es el único con acceso a D1/KV.
+                  Se guarda al escribir (R68: antes un cierre sin «Guardar Cambios» lo descartaba en silencio). Se envía como Bearer al Worker. El AUTH_TOKEN está ACTIVO en producción desde la Ronda 27 (hardening): sin este token, push/pull/excusas responden 401 y la caché local nunca sale del dispositivo (los secretos de cada dispositivo jamás viajan a la nube — política Ronda 16/29). Usa “Probar Conexión” para validar el token; el navegador NUNCA accede directo a la API de Cloudflare: el Worker es el único con acceso a D1/KV.
                 </p>
               </div>
 
