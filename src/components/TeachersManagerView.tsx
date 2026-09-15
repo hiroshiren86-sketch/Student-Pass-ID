@@ -612,40 +612,52 @@ export const TeachersManagerView: React.FC = () => {
         </div>
       )}
 
-      {/* Header Banner */}
-      <div className="p-6 rounded-3xl bg-white/70 dark:bg-zinc-950/70 border border-slate-200/80 dark:border-zinc-800/50 backdrop-blur-xl shadow-sm flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
-        <div>
-          <div className="flex items-center gap-2">
-            <span className="text-[11px] font-bold px-2.5 py-0.5 rounded-full bg-purple-50 dark:bg-purple-950/60 text-purple-700 dark:text-purple-300 border border-purple-200 dark:border-purple-800 uppercase tracking-wider">
-              Administración • Gestión de Personal
-            </span>
-          </div>
-          <h2 className="text-xl sm:text-2xl font-black text-slate-900 dark:text-white tracking-tight mt-1">
-            Panel de Control de Docentes & Credenciales
-          </h2>
-          <p className="text-xs sm:text-sm text-slate-500 dark:text-slate-400 mt-0.5">
-            Administra el cuerpo docente, asigna asignaturas, gestiona usuarios de acceso y restablece contraseñas al instante.
-          </p>
+      {/* Header Banner — R68 §32: mismo análisis que Directorio Estudiantes:
+          el encabezado solo informa; las acciones pasan a una tira BENTO
+          debajo (antes: apiladas al lado del título, emparedadas en móvil). */}
+      <div className="p-6 rounded-3xl bg-white/70 dark:bg-zinc-950/70 border border-slate-200/80 dark:border-zinc-800/50 backdrop-blur-xl shadow-sm">
+        <div className="flex items-center gap-2">
+          <span className="text-[11px] font-bold px-2.5 py-0.5 rounded-full bg-purple-50 dark:bg-purple-950/60 text-purple-700 dark:text-purple-300 border border-purple-200 dark:border-purple-800 uppercase tracking-wider">
+            Administración • Gestión de Personal
+          </span>
         </div>
+        <h2 className="text-xl sm:text-2xl font-black text-slate-900 dark:text-white tracking-tight mt-1">
+          Panel de Control de Docentes & Credenciales
+        </h2>
+        <p className="text-xs sm:text-sm text-slate-500 dark:text-slate-400 mt-0.5">
+          Administra el cuerpo docente, asigna asignaturas, gestiona usuarios de acceso y restablece contraseñas al instante.
+        </p>
+      </div>
 
-        <div className="flex flex-col md:flex-row items-stretch md:items-center gap-2.5">
+      {/* R68 §32 — Tira bento de acciones: 1 celda por acción con jerarquía
+          icono+título+descripción; 1 columna en móvil (toque cómodo) y 2 en
+          escritorio. Accesible: focus-visible + aria-label. */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3" role="group" aria-label="Acciones de gestión de docentes">
         <button
           onClick={handleOpenAdd}
-          className="px-4 py-2.5 bg-indigo-600 dark:bg-white hover:bg-indigo-500 dark:hover:bg-zinc-200 text-white dark:text-black rounded-2xl text-xs font-bold transition-all shadow-md shadow-indigo-600/20 flex items-center gap-2 self-stretch md:self-auto justify-center"
+          className="group flex flex-col items-start gap-1.5 min-h-[84px] p-4 rounded-3xl bg-indigo-600 dark:bg-indigo-500/90 border border-indigo-600 text-white shadow-md shadow-indigo-600/20 hover:bg-indigo-500 dark:hover:bg-indigo-400/90 hover:shadow-lg transition-all text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-300"
+          aria-label="Registrar un nuevo docente"
+          title="Crear la ficha de un nuevo docente"
         >
-          <UserPlus className="w-4 h-4" />
-          <span>Registrar Nuevo Docente</span>
+          <span className="flex items-center justify-center w-9 h-9 rounded-2xl bg-white/15 border border-white/20 group-hover:scale-105 transition-transform">
+            <UserPlus className="w-5 h-5" />
+          </span>
+          <span className="text-xs font-black">Registrar Nuevo Docente</span>
+          <span className="text-[10px] font-medium text-indigo-100/90 leading-snug">Ficha con asignaturas, grupos y cuenta de acceso opcional</span>
         </button>
         {/* R67 (§12B — reset masivo docente): conjunto dinámico con cuenta. */}
         <button
           onClick={openTeacherBulkReset}
-          className="px-4 py-2.5 bg-amber-50 hover:bg-amber-100 dark:bg-amber-950/40 dark:hover:bg-amber-900/40 text-amber-700 dark:text-amber-300 rounded-2xl text-xs font-bold transition-all border border-amber-200 dark:border-amber-800/60 shadow-xs flex items-center gap-2 self-stretch md:self-auto justify-center"
+          className="group flex flex-col items-start gap-1.5 min-h-[84px] p-4 rounded-3xl bg-amber-50/70 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800/50 backdrop-blur-xl shadow-xs hover:border-amber-300 dark:hover:border-amber-700/70 hover:shadow-md transition-all text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-500"
+          aria-label="Restablecer la clave de todos los docentes con cuenta (operación masiva con confirmación)"
           title="Restablecer la clave de TODOS los docentes con cuenta (operación administrativa masiva con confirmación)"
         >
-          <Key className="w-4 h-4" />
-          <span>Restablecer claves (todos)</span>
+          <span className="flex items-center justify-center w-9 h-9 rounded-2xl bg-amber-100/80 dark:bg-amber-950/60 text-amber-700 dark:text-amber-300 border border-amber-200 dark:border-amber-900/60 group-hover:scale-105 transition-transform">
+            <Key className="w-5 h-5" />
+          </span>
+          <span className="text-xs font-black text-amber-800 dark:text-amber-200">Restablecer claves (todos)</span>
+          <span className="text-[10px] font-medium text-amber-700/80 dark:text-amber-300/80 leading-snug">Solo docentes con cuenta, con confirmación y resultados por usuario</span>
         </button>
-        </div>
       </div>
 
       {/* Search and Summary Counter */}

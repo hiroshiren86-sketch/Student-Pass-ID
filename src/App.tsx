@@ -85,7 +85,7 @@ export default function App() {
   const menuRef = useRef<HTMLDivElement>(null);
 
   // Ronda 24: punto rojo de excusas pendientes (Rectoría) — sondeo 30s, verdad = Worker
-  const { pendingCount, refresh: refreshExcuseBadge } = useExcusesBadge(currentRole, activeTab);
+  const { pendingCount, refresh: refreshExcuseBadge } = useExcusesBadge(currentRole, activeTab, isAuthenticated);
 
   // Ronda 29: asistente de primer ingreso — se dispara al cambiar de perfil/sesión si
   // este dispositivo nunca ha visto la guía de ese perfil (bandera localStorage).
@@ -99,7 +99,15 @@ export default function App() {
 
   useEffect(() => {
     AttendanceStorageService.ensureActiveTemplateConsistency(); // Ronda 8 (B4): realinea plantilla activa vs slots
-    FirebaseService.ensureAnonymousAuth().catch(() => {}); // Ronda 16: fire-and-forget, nunca bloquea
+    // R68 (fix RC-4 — cuentas anónimas): RETIRADA la creación automática de
+    // sesión anónima en el arranque (Ronda 16). Cada navegador limpio generaba
+    // una cuenta anónima nueva (993 órfanos en la auditoría R67) y el
+    // signInAnonymously en vuelo podía resolverse DESPUÉS de un login real y
+    // trocar currentUser → el auto-sync siguiente perdía su ID token (401).
+    // Nada en la pantalla pre-login la requiere: la lectura de settings de
+    // Firestore pre-login ya era rechazada por las reglas desplegadas (R38
+    // H-38-4) y el pull del Worker es el canal canónico. ensureAnonymousAuth
+    // queda SOLO para el respaldo manual de Rectoría (no-op si hay sesión real).
     AttendanceStorageService.initCloudSettingsSync();
     CloudflareSyncService.initAutoSync();
     // Ronda 30 (H-30-1): arranque con PUERTA DE LOGIN. Se intenta restaurar

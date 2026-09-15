@@ -617,60 +617,74 @@ export const StudentsManagerView: React.FC<StudentsManagerViewProps> = ({ onGene
         </div>
       )}
 
-      {/* Top Header Card */}
-      <div className="p-6 rounded-3xl bg-white/70 dark:bg-zinc-950/70 border border-slate-200/80 dark:border-zinc-800/50 backdrop-blur-xl shadow-sm flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
-        <div>
-          <div className="flex items-center gap-2">
-            <span className="text-[11px] font-bold px-2.5 py-0.5 rounded-full bg-indigo-50 dark:bg-indigo-950/60 text-indigo-600 dark:text-indigo-400 border border-indigo-200 dark:border-indigo-800 uppercase tracking-wider">
-              {currentRole === 'DOCENTE' ? 'Directorio Docente' : 'Directorio Escolar'}
-            </span>
-          </div>
-          <h2 className="text-xl sm:text-2xl font-black text-slate-900 dark:text-white tracking-tight mt-1">
-            {currentRole === 'DOCENTE' ? 'Consulta de Estudiantes y Carnés' : 'Registro y Gestión de Estudiantes'}
-          </h2>
-          <p className="text-xs sm:text-sm text-slate-500 dark:text-slate-400 mt-0.5">
-            {currentRole === 'DOCENTE'
-              ? 'Consulta la lista general de estudiantes, busca por curso o documento y genera o descarga sus carnés.'
-              : 'Matricula estudiantes individuales o carga fichas masivas con fotos de carné opcionales.'}
-          </p>
+      {/* Top Header Card — R68 §32: el encabezado ahora solo informa (título +
+          descripción); las acciones viven en la tira BENTO debajo, separadas y
+          con jerarquía real (antes: 3 botones emparedados en la misma fila del
+          título — en móvil se estrujaban con etiquetas largas). */}
+      <div className="p-6 rounded-3xl bg-white/70 dark:bg-zinc-950/70 border border-slate-200/80 dark:border-zinc-800/50 backdrop-blur-xl shadow-sm">
+        <div className="flex items-center gap-2">
+          <span className="text-[11px] font-bold px-2.5 py-0.5 rounded-full bg-indigo-50 dark:bg-indigo-950/60 text-indigo-600 dark:text-indigo-400 border border-indigo-200 dark:border-indigo-800 uppercase tracking-wider">
+            {currentRole === 'DOCENTE' ? 'Directorio Docente' : 'Directorio Escolar'}
+          </span>
         </div>
-
-        {currentRole === 'ADMIN' && (
-          <div className="flex items-center gap-2 w-full sm:w-auto">
-            {/* Botón Cargar Archivo / Upload File */}
-            <button
-              onClick={() => setShowUploadModal(true)}
-              className="flex-1 sm:flex-initial px-4 py-2.5 bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-800 dark:text-slate-200 rounded-2xl text-xs font-bold transition-all border border-slate-200 dark:border-zinc-800 shadow-xs flex items-center justify-center gap-2"
-              title="Cargar Fichas PDF, Fotos Carné, Planillas CSV o Listas de Matrícula"
-            >
-              <Upload className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />
-              <span>Cargar Archivo(s)</span>
-            </button>
-
-            {/* R67 (§12B — restablecimiento MASIVO): sobre el conjunto dinámico de
-                estudiantes, con confirmación, estrategia y resultados honestos. */}
-            {currentRole === 'ADMIN' && (
-              <button
-                onClick={openBulkReset}
-                className="flex-1 sm:flex-initial px-4 py-2.5 bg-amber-50 hover:bg-amber-100 dark:bg-amber-950/40 dark:hover:bg-amber-900/40 text-amber-700 dark:text-amber-300 rounded-2xl text-xs font-bold transition-all border border-amber-200 dark:border-amber-800/60 shadow-xs flex items-center justify-center gap-2"
-                title="Restablecer la clave de acceso de TODOS los estudiantes (operación administrativa masiva con confirmación)"
-              >
-                <KeyRound className="w-4 h-4" />
-                <span>Restablecer claves (todos)</span>
-              </button>
-            )}
-
-            {/* Botón Nuevo Estudiante */}
-            <button
-              onClick={handleOpenAdd}
-              className="flex-1 sm:flex-initial px-4 py-2.5 bg-indigo-600 dark:bg-white hover:bg-indigo-500 dark:hover:bg-zinc-200 text-white dark:text-black rounded-2xl text-xs font-bold transition-all shadow-md shadow-indigo-600/20 flex items-center justify-center gap-2"
-            >
-              <UserPlus className="w-4 h-4" />
-              <span>+ Nuevo Estudiante</span>
-            </button>
-          </div>
-        )}
+        <h2 className="text-xl sm:text-2xl font-black text-slate-900 dark:text-white tracking-tight mt-1">
+          {currentRole === 'DOCENTE' ? 'Consulta de Estudiantes y Carnés' : 'Registro y Gestión de Estudiantes'}
+        </h2>
+        <p className="text-xs sm:text-sm text-slate-500 dark:text-slate-400 mt-0.5">
+          {currentRole === 'DOCENTE'
+            ? 'Consulta la lista general de estudiantes, busca por curso o documento y genera o descarga sus carnés.'
+            : 'Matricula estudiantes individuales o carga fichas masivas con fotos de carné opcionales.'}
+        </p>
       </div>
+
+      {/* R68 §32 — TIRA BENTO de acciones (solo Rectoría): 1 celda por acción,
+          jerarquía icono+título+descripción, grid 1 columna en móvil (toque
+          cómodo, altura ≥44 px) y 3 columnas en escritorio. Accesible: botones
+          reales con focus-visible, aria-label y contraste AA. */}
+      {currentRole === 'ADMIN' && (
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3" role="group" aria-label="Acciones de matrícula y credenciales">
+          <button
+            onClick={() => setShowUploadModal(true)}
+            className="group flex flex-col items-start gap-1.5 min-h-[84px] p-4 rounded-3xl bg-white/70 dark:bg-zinc-950/70 border border-slate-200/80 dark:border-zinc-800/50 backdrop-blur-xl shadow-xs hover:border-indigo-300 dark:hover:border-indigo-700/60 hover:shadow-md transition-all text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500"
+            aria-label="Cargar archivos: fichas PDF, fotos de carné, planillas CSV o listas de matrícula"
+            title="Cargar Fichas PDF, Fotos Carné, Planillas CSV o Listas de Matrícula"
+          >
+            <span className="flex items-center justify-center w-9 h-9 rounded-2xl bg-indigo-50 dark:bg-indigo-950/50 text-indigo-600 dark:text-indigo-400 border border-indigo-100 dark:border-indigo-900/50 group-hover:scale-105 transition-transform">
+              <Upload className="w-5 h-5" />
+            </span>
+            <span className="text-xs font-black text-slate-800 dark:text-slate-100">Cargar Archivo(s)</span>
+            <span className="text-[10px] font-medium text-slate-500 dark:text-slate-400 leading-snug">Fichas PDF, fotos de carné, CSV o SIMAT</span>
+          </button>
+
+          {/* R67 (§12B — restablecimiento MASIVO): sobre el conjunto dinámico de
+              estudiantes, con confirmación, estrategia y resultados honestos. */}
+          <button
+            onClick={openBulkReset}
+            className="group flex flex-col items-start gap-1.5 min-h-[84px] p-4 rounded-3xl bg-amber-50/70 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800/50 backdrop-blur-xl shadow-xs hover:border-amber-300 dark:hover:border-amber-700/70 hover:shadow-md transition-all text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-500"
+            aria-label="Restablecer la clave de acceso de todos los estudiantes (operación masiva con confirmación)"
+            title="Restablecer la clave de acceso de TODOS los estudiantes (operación administrativa masiva con confirmación)"
+          >
+            <span className="flex items-center justify-center w-9 h-9 rounded-2xl bg-amber-100/80 dark:bg-amber-950/60 text-amber-700 dark:text-amber-300 border border-amber-200 dark:border-amber-900/60 group-hover:scale-105 transition-transform">
+              <KeyRound className="w-5 h-5" />
+            </span>
+            <span className="text-xs font-black text-amber-800 dark:text-amber-200">Restablecer claves (todos)</span>
+            <span className="text-[10px] font-medium text-amber-700/80 dark:text-amber-300/80 leading-snug">Masivo, con confirmación y resultados por usuario</span>
+          </button>
+
+          <button
+            onClick={handleOpenAdd}
+            className="group flex flex-col items-start gap-1.5 min-h-[84px] p-4 rounded-3xl bg-indigo-600 dark:bg-indigo-500/90 border border-indigo-600 text-white shadow-md shadow-indigo-600/20 hover:bg-indigo-500 dark:hover:bg-indigo-400/90 hover:shadow-lg transition-all text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-300"
+            aria-label="Matricular un nuevo estudiante"
+            title="Crear la ficha de un nuevo estudiante"
+          >
+            <span className="flex items-center justify-center w-9 h-9 rounded-2xl bg-white/15 border border-white/20 group-hover:scale-105 transition-transform">
+              <UserPlus className="w-5 h-5" />
+            </span>
+            <span className="text-xs font-black">+ Nuevo Estudiante</span>
+            <span className="text-[10px] font-medium text-indigo-100/90 leading-snug">Ficha individual con clave y cuenta opcional</span>
+          </button>
+        </div>
+      )}
 
       {/* Ronda 27 (entrega limpia): onboarding de matrícula vacía — solo visible con 0 estudiantes.
           Guía el Día Cero: importar la matrícula real (CSV/Excel/SIMAT) o crear el primer estudiante. */}

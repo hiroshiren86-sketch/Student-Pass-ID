@@ -32,7 +32,12 @@ import type { UserRole } from '../types/attendance';
 
 const POLL_MS = 30_000;
 
-export function useExcusesBadge(role: UserRole, activeTab?: string) {
+// R68 (fix RC-3 — ruido pre-login): `currentRole` nace como 'ADMIN' aunque el
+// dispositivo NO esté autenticado → el badge sondeaba /api/excuses?status=PENDIENTE
+// desde la pantalla de login (401 garantizado en dispositivos limpios, consola
+// ensuciada y métricas infladas). Con `isAuthenticated` el sondeo solo ocurre
+// con una sesión REAL de Rectoría.
+export function useExcusesBadge(role: UserRole, activeTab?: string, isAuthenticated = true) {
   const [pendingCount, setPendingCount] = useState<number>(0);
   const [loaded, setLoaded] = useState<boolean>(false);
   const inFlight = useRef(false);
@@ -41,7 +46,8 @@ export function useExcusesBadge(role: UserRole, activeTab?: string) {
   const everLoaded = useRef(false);
 
   const refresh = useCallback(async () => {
-    if (role !== 'ADMIN') { setPendingCount(0); setLoaded(true); prevCount.current = null; return; }
+    // R68 (fix RC-3): sin sesión real no se sondea (evita el 401 pre-login).
+    if (role !== 'ADMIN' || !isAuthenticated) { setPendingCount(0); setLoaded(true); prevCount.current = null; return; }
     if (inFlight.current) return;
     inFlight.current = true;
     try {
@@ -65,7 +71,7 @@ export function useExcusesBadge(role: UserRole, activeTab?: string) {
     } finally {
       inFlight.current = false;
     }
-  }, [role]);
+  }, [role, isAuthenticated]);
 
   useEffect(() => {
     refresh();

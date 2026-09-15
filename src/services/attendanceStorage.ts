@@ -398,7 +398,17 @@ export class AttendanceStorageService {
     if (this.isCloudSyncInitialized) return;
     this.isCloudSyncInitialized = true;
 
-    FirebaseService.ensureAnonymousAuth().then(() => {
+    // R68 (fix RC-4 — cuentas anónimas): ya NO se espera/crea sesión anónima
+    // antes de leer Firestore. El arranque automático creaba una cuenta anónima
+    // por cada navegador (993 órfanos en la auditoría R67) y la carrera
+    // signInAnonymously→login real podía trocar currentUser y dejar el
+    // dispositivo sin ID token para el auto-sync. En un dispositivo pre-login
+    // la lectura de school_settings en Firestore YA es rechazada por las reglas
+    // desplegadas (R38 H-38-4), y con sesión real (Rectoría) se lee con esa —
+    // loadSchoolSettings degrada a null con los existentes caminos de "lectura
+    // diferida/offline". El canal canónico de settings en frío es el pull del
+    // Worker (pullFromCloudflare), que no depende de Firestore.
+    void Promise.resolve().then(() => {
       // 1. Initial fetch from Firestore
       FirebaseService.loadSchoolSettings().then((cloudSettings) => {
         if (cloudSettings) {
@@ -569,15 +579,26 @@ export class AttendanceStorageService {
     const rawClean = identifier.trim().toLowerCase();
     const normalizedDigits = identifier.replace(/[^a-zA-Z0-9]/g, '').toLowerCase();
 
+    // R68 (fix RC-1 — CAUSA RAÍZ del bug "cuenta válida pero sin ficha"): el pull
+    // por rol DESPOJA las fichas de terceros (authz.ts R59/R61): a un estudiante
+    // sus compañeros llegan SIN documentId/photoUrl/loginKey (stripStudentRecordDeep),
+    // y a un docente TODOS los estudiantes llegan SIN documentId (stripStudentRecord).
+    // El callback de find() lanzaba TypeError (`s.documentId.toLowerCase()` sobre
+    // undefined) al iterar el primer compañero despojado ANTES de llegar a la ficha
+    // propia → en el login el throw quedaba tragado por el catch del pull (mensaje
+    // "Su cuenta es válida…") y en el reintento caía en el catch externo ("No se
+    // pudo iniciar sesión") — aunque los 14 estudiantes ESTUVIERAN en localStorage.
+    // Lectura defensiva: un campo ausente nunca rompe la búsqueda; el `code` (que
+    // NUNCA se despoja) sigue siendo el identificador canónico.
     return students.find(s => {
-      const sCode = s.code.toLowerCase();
-      const sDoc = s.documentId.toLowerCase();
-      const sCodeClean = s.code.replace(/[^a-zA-Z0-9]/g, '').toLowerCase();
-      const sDocClean = s.documentId.replace(/[^a-zA-Z0-9]/g, '').toLowerCase();
+      const sCode = String(s?.code ?? '').toLowerCase();
+      const sDoc = String(s?.documentId ?? '').toLowerCase();
+      const sCodeClean = String(s?.code ?? '').replace(/[^a-zA-Z0-9]/g, '').toLowerCase();
+      const sDocClean = String(s?.documentId ?? '').replace(/[^a-zA-Z0-9]/g, '').toLowerCase();
 
       return (
-        sCode === rawClean || 
-        sDoc === rawClean || 
+        sCode === rawClean ||
+        sDoc === rawClean ||
         (normalizedDigits.length >= 3 && (sCodeClean === normalizedDigits || sDocClean === normalizedDigits))
       );
     });
@@ -2663,7 +2684,7 @@ export class AttendanceStorageService {
     const newRecord: AttendanceRecord = {
       id: `rec-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
       studentCode: student.code,
-      studentDocument: student.documentId,
+      studentDocument: String(student.documentId ?? ''),
       studentName: `${student.firstName} ${student.lastName}`,
       studentGrade: student.grade,
       studentSection: student.section,
@@ -2921,7 +2942,7 @@ export class AttendanceStorageService {
             // infladas). Antes: rec-abs-<Date.now()>-<code> era distinto en cada terminal.
             id: `rec-autoclose-${today}-${slot.id}-${student.code}`,
             studentCode: student.code,
-            studentDocument: student.documentId,
+            studentDocument: String(student.documentId ?? ''),
             studentName: `${student.firstName} ${student.lastName}`,
             studentGrade: student.grade,
             studentSection: student.section,
@@ -2954,7 +2975,7 @@ export class AttendanceStorageService {
           // Ronda 58 (F-9): id determinista — ver comentario de la rama protegida.
           id: `rec-autoclose-${today}-${slot.id}-${student.code}`,
           studentCode: student.code,
-          studentDocument: student.documentId,
+          studentDocument: String(student.documentId ?? ''),
           studentName: `${student.firstName} ${student.lastName}`,
           studentGrade: student.grade,
           studentSection: student.section,
@@ -3401,7 +3422,7 @@ export class AttendanceStorageService {
           records.push({
             id: `rec-seed-${grd}-${slot.id}-${std.code}`,
             studentCode: std.code,
-            studentDocument: std.documentId,
+            studentDocument: String(std.documentId ?? ''),
             studentName: `${std.firstName} ${std.lastName}`,
             studentGrade: std.grade,
             studentSection: std.section,

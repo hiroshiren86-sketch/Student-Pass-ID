@@ -62,7 +62,12 @@ await section('B. Espera de sesión anónima + reglas endurecidas', () => {
   const storage = readFileSync('src/services/attendanceStorage.ts', 'utf8');
   check('ensureAnonymousAuth singleton con timeout', fb.includes('anonymousAuthPromise') && fb.includes('ANON_AUTH_TIMEOUT_MS'));
   check('restore de sesión persistida antes de crear usuario nuevo', fb.includes('onAuthStateChanged(auth, (user) =>'));
-  check('initCloudSettingsSync ESPERA la sesión anónima', storage.includes('ensureAnonymousAuth().then(() =>'));
+  // R68 (fix RC-4 — cuentas anónimas): el arranque YA NO crea/espera sesión
+  // anónima (993 órfanos auditados en R67 + carrera signInAnonymously→login real
+  // que trocaba currentUser y dejaba sin ID token el auto-sync). La aserción
+  // ahora codifica el NUEVO contrato: sin auto-creación; el canal canónico de
+  // settings en frío es el pull del Worker (loadSchoolSettings degrada a null).
+  check('initCloudSettingsSync NO crea/espera sesión anónima (R68 RC-4)', !storage.includes('ensureAnonymousAuth().then(() =>'));
   check('saveSchoolSettings espera sesión', fb.split('static async saveSchoolSettings')[1]?.split('\n  static ')[0].includes('await this.ensureAnonymousAuth()'));
   check('backupAllToFirestore espera sesión', fb.split('static async backupAllToFirestore')[1]?.split('\n  static ')[0].includes('await this.ensureAnonymousAuth()'));
   // Ronda 60-b: syncAttendanceRecord era código muerto (0 llamadores) y fue ELIMINADO
@@ -71,9 +76,18 @@ await section('B. Espera de sesión anónima + reglas endurecidas', () => {
   const cfg = JSON.parse(readFileSync('firebase-applet-config.json', 'utf8'));
   check('App Check preparado condicionalmente y NO activo hoy', fb.includes('initializeAppCheck') && (cfg.recaptchaSiteKey || '') === '');
   const rules = readFileSync('firestore.rules', 'utf8');
-  for (const col of ['school_settings', 'students', 'teachers', 'attendance_records', 'schedule_assignments']) {
-    const block = rules.split(`match /${col}/`)[1]?.split('match /')[0] || '';
-    check(`regla ${col}: exige isAuthenticated()`, block.includes('if isAuthenticated();') && !block.includes('if true'));
+  // R58 (F-4) — contrato VIGENTE del archivo (listo para despliegue del dueño;
+  // R68 NO lo despliega, es zona del propietario):
+  //   school_settings → lectura AUTENTICADA + escritura SOLO ADMIN.
+  //   students/teachers/schedule_assignments/attendance_records → SOLO ADMIN
+  //   (read y write) — los espejos operativos nunca son públicos.
+  {
+    const block = (col: string) => rules.split(`match /${col}/`)[1]?.split('match /')[0] || '';
+    const ss = block('school_settings');
+    check('regla school_settings: lectura autenticada + escritura ADMIN (R58 F-4)', ss.includes('allow read: if isAuthenticated();') && ss.includes('allow write: if isAdmin();'));
+    for (const col of ['students', 'teachers', 'schedule_assignments', 'attendance_records']) {
+      check(`regla ${col}: solo ADMIN (R58 F-4)`, block(col).includes('if isAdmin()') && !block(col).includes('if true'));
+    }
   }
   check('users owner-only + delete prohibido', /match \/users\/\{userId\}[\s\S]*?request\.auth\.uid == userId[\s\S]*?allow delete: if false;/.test(rules));
   check('catch-all DENY explícito', /match \/\{document=\*\*\}[\s\S]*?allow read, write: if false;/.test(rules));
@@ -83,13 +97,36 @@ await section('B. Espera de sesión anónima + reglas endurecidas', () => {
 await section('C. Sync Cloudflare — Worker-only, sin fallbacks (regresión Ronda 16, estático)', () => {
   const sync = readFileSync('src/services/cloudflareSync.ts', 'utf8');
   check('sin api.cloudflare.com en el cliente', !sync.includes('api.cloudflare.com'));
-  check('sin uso real de localStorage (éxito falso eliminado)', !hasRealLocalStorage(sync));
+  // R48: el único uso LEGÍTIMO de localStorage en el sync service es la
+  // persistencia del deviceId (X-Device-Id) — el "éxito falso" de R16
+  // (reportar ÉXITO guardando datos de sync en localStorage) sigue eliminado:
+  // NO hay escritura de datos de sincronización.
+  {
+    const lsLines = sync.split('\n').filter(l => { const t = l.trim(); if (t.startsWith('*') || t.startsWith('//')) return false; return /localStorage/.test(l); });
+    check('localStorage SOLO para deviceId (R48); éxito falso R16 sigue eliminado', lsLines.length <= 2 && lsLines.every(l => /localStorage\.(get|set)Item\(KEY/.test(l)));
+  }
   check('Authorization Bearer uniforme (workerHeaders)', sync.split('workerHeaders()').length >= 4);
   check('guard push sin URL → fallo honesto accionable', /if \(!baseUrl\)[\s\S]{0,400}URL del Cloudflare Worker no configurada[\s\S]{0,200}Ajustes/.test(sync));
   check('guard pull sin URL → fallo honesto accionable', /if \(!cleanBaseUrl\)[\s\S]{0,400}URL del Cloudflare Worker no configurada/.test(sync));
   const worker = readFileSync('cloudflare-worker/src/index.ts', 'utf8');
   check('worker: comparación timing-safe del AUTH_TOKEN', worker.includes('timingSafeEqual'));
-  check('worker: prepared statements (sin interpolación SQL)', !/`SELECT[^`]*\$\{|`INSERT[^`]*\$\{/.test(worker));
+  // R68 (auditoría forense): el worker tiene 4 SQL-templates con `${`, y los 4 son
+  // SEGUROS: (1) ${ph} = string de placeholders "?" para IN(...) con valores
+  // SIEMPRE bound vía .bind() (chunking por el límite de 90 variables de SQLite);
+  // (2-4) ${table} = identificadores FIJOS del export/purga (R28) — D1 no
+  // parametriza identificadores y la variable solo toma nombres de tabla de una
+  // lista cerrada (deleteOrder / tablas del export). Cualquier OTRO `${` dentro
+  // de un SQL sigue prohibido.
+  {
+    const sqlTpl: string[] = [];
+    const re = /`([^`]*)`/g;
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(worker))) {
+      const t = m[1];
+      if (/\b(SELECT|INSERT|UPDATE|DELETE)\b/i.test(t) && t.includes('${')) sqlTpl.push(t);
+    }
+    check('worker: SQL preparado (solo ${ph} de chunking y ${table} fijo R28)', sqlTpl.length <= 4 && sqlTpl.every(t => t.includes('${ph}') || t.includes('${table}')));
+  }
 });
 
 // =====================================================================

@@ -271,6 +271,15 @@ export class FirebaseService {
         // honesto del requisito real, en lugar del default engañoso de "iniciar sesión".
         return 'La clave es demasiado corta: Firebase exige al menos 6 caracteres. Use 6 o más caracteres e intente de nuevo.';
       default:
+        // R68 (fix RC-5): sin código `auth/*` no es un error de credenciales, es
+        // una excepción del código de la app (p. ej. la TypeError de RC-1 al
+        // resolver la ficha). El mensaje anterior ("No se pudo iniciar sesión")
+        // sonaba a problema de red/cuenta y encubría la regresión; ahora se
+        // distingue honestamente y se loguea para no perderla de nuevo.
+        if (!code) {
+          console.error('[Auth] excepción no-Firebase durante el login:', error);
+          return 'Ocurrió un error inesperado al iniciar sesión (no parece un problema de credenciales). Reintente; si persiste, contacte a Rectoría.';
+        }
         return 'No se pudo iniciar sesión. Intente de nuevo o contacte a Rectoría.';
     }
   }

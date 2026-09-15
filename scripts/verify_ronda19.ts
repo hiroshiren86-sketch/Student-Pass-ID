@@ -93,6 +93,10 @@ await section('B. BUG-1 — getCurrentActiveSlot distingue dentro/fuera de bloqu
 
 // =====================================================================
 await section('C. BUG-1 — registerScan rechaza en recreo (sin contaminar planilla)', async () => {
+  // R68: desde R58 F-1 el carné FIRMADO es exigido por defecto — esta sección
+  // prueba la lógica de BLOQUES/jornada (no la firma: esa la cubre
+  // qa-r58-hardening, 68/68). Se prueba el camino clásico código-solo.
+  svc.saveSettings({ ...svc.getSettings(), requireSignedCards: false }, false);
   const slots = svc.getScheduleSlots();
   const nonClass: any = slots.find((s: any) => s.type !== 'CLASS');
   const student = svc.getStudents()[0];
@@ -253,6 +257,14 @@ await section('H. QR de Clase — token CLASE:v1 (cripto)', async () => {
 // =====================================================================
 await section('I. QR de Clase — activación del contexto (servicio)', async () => {
   const crypto = await import('../src/utils/crypto');
+  // R68 (suite sincronizada al modelo R58 F-2): resetToDemo() RESTABLECE el
+  // qrSecret a '' y getSettings() rota a un nuevo secreto ALEATORIO — ya no
+  // existe el demo-secret fijo de la era R19. La suite original firmaba el
+  // token ANTES del reset y verificaba DESPUÉS (con el mismo secreto fijo era
+  // transparente); hoy divergen → "firma inválida" en todo el bloque. Fix:
+  // reset PRIMERO, leer el secreto vigente y firmar con él.
+  svc.resetToDemo();
+  svc.saveSettings({ ...svc.getSettings(), requireSignedCards: false }, false);
   const settings = svc.getSettings();
   const todayDow = new Date().getDay();
   const slots = svc.getScheduleSlots();
@@ -263,7 +275,6 @@ await section('I. QR de Clase — activación del contexto (servicio)', async ()
   // Token del DÍA de hoy (para pasar la validación de día) — si hoy es domingo (0), se espera rechazo por día
   if (todayDow >= 1 && todayDow <= 6) {
     const token = await crypto.generateClassQrPayload('10°1', classSlot.id, todayDow, Date.now() + 3600_000, settings.qrSecret);
-    svc.resetToDemo();
     const res = await svc.setActiveClassFromToken(token);
     check('activación OK → class_activated', res.type === 'class_activated', JSON.stringify(res));
     const ctx = svc.getActiveClass();
@@ -292,6 +303,10 @@ await section('I. QR de Clase — activación del contexto (servicio)', async ()
 // =====================================================================
 await section('J. QR de Clase — vinculación de escaneos (contexto > reloj)', async () => {
   const crypto = await import('../src/utils/crypto');
+  // R68: mismo fix de orden que la sección I (resetToDemo rota el qrSecret —
+  // R58 F-2): reset PRIMERO, leer el secreto vigente y firmar con él.
+  svc.resetToDemo();
+  svc.saveSettings({ ...svc.getSettings(), requireSignedCards: false }, false);
   const settings = svc.getSettings();
   const todayDow = new Date().getDay();
   const student10 = svc.getStudents().find((s: any) => s.grade === '10°1');
@@ -306,7 +321,9 @@ await section('J. QR de Clase — vinculación de escaneos (contexto > reloj)', 
   const origWindow = svc.isWithinSchoolDay;
   try {
     if (todayDow >= 1 && todayDow <= 6) {
-      svc.resetToDemo();
+      // (R68: el resetToDemo de aquí se movió al inicio de la sección — si
+      // queda entre la firma y la verificación, rota el secreto y el token
+      // deja de verificar, R58 F-2.)
       svc.saveAttendance([]);
       const token = await crypto.generateClassQrPayload('10°1', classSlot.id, todayDow, Date.now() + 3600_000, settings.qrSecret);
       await svc.setActiveClassFromToken(token);
@@ -517,10 +534,18 @@ await section('P. BUG-5 — secreto QR aleatorio en primer arranque + UX (fuente
   const again = svc.getSettings();
   check('persistido: segunda lectura devuelve el MISMO secreto', again.qrSecret === fresh.qrSecret);
 
-  // La firma HMAC funciona igual con el secreto generado (roundtrip carné)
-  svc.resetToDemo(); // restaura ajustes demo (hardcoded) — estado limpio para lo que siga
+  // R68 (sincronizado al modelo R58 F-2): resetToDemo() restaura los defaults,
+  // cuyo qrSecret es '' (JAMÁS un secreto conocido en el repo) → getSettings()
+  // rota a un secreto aleatorio NUEVO y persistido. La aserción R19 original
+  // comparaba contra el demo-secret fijo de la era pre-R58: hoy el contrato es
+  // "reset rota el secreto", no "restaura un secreto conocido".
+  const secretAntes = fresh.qrSecret;
+  svc.resetToDemo();
   const settingsNow = svc.getSettings();
-  check('resetToDemo restaura ajustes demo', settingsNow.qrSecret === hardcoded);
+  check('resetToDemo restaura ajustes demo + rota el qrSecret (R58 F-2)',
+    settingsNow.qrSecret && /^[0-9a-f]{64}$/.test(settingsNow.qrSecret)
+    && settingsNow.qrSecret !== secretAntes && settingsNow.qrSecret !== hardcoded,
+    settingsNow.qrSecret?.slice(0, 12));
 });
 
 // =====================================================================

@@ -245,7 +245,15 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onLoginSuccess }) => {
           if (pull.success && !student && identityProfile?.linkedStudentCode) {
             student = AttendanceStorageService.getStudentByCodeOrDoc(identityProfile.linkedStudentCode);
           }
-        } catch { /* sin red/URL: se degrada al mensaje honesto */ }
+        } catch (pullErr) {
+          // R68 (fix RC-5): este catch era SILENCIOSO y tragaba incluso crashes de
+          // código — así la TypeError de RC-1 (getStudentByCodeOrDoc sobre fichas
+          // despojadas) se enmascaró como "cuenta válida, sin ficha" y el bug pasó
+          // por un problema de red/sync. Ahora todo error se loguea: los fallos de
+          // red siguen degradando igual, pero las regresiones de código ya no son
+          // invisibles.
+          console.warn('[Login] Pull/lookup falló (se degrada a ficha local):', pullErr);
+        }
 
         if (!student) {
           // Ronda 58 (F-18a): mensaje genérico y SIN PII — no revela si el código

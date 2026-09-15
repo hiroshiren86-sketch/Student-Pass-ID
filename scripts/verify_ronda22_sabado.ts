@@ -92,12 +92,20 @@ await section('D. Validación de cátedras (Mis Cátedras)', () => {
   check('día 5 (Viernes) → aceptado', r5.ok === true, r5.error);
 });
 
-await section('E. Limpieza de huérfanas (datos legados día-6)', () => {
-  // assignments legados con día 6
+await section('E. Limpieza de huérfanas (datos legados día-6)', async () => {
+  // R68: R58 (F-10) añadió el readCache de lecturas. Este test escribe
+  // localStorage DIRECTO (simulando datos legados del pre-R22); con el cache
+  // caliente de secciones anteriores el getter short-circuitaba y la purga
+  // persistida nunca corría (fallo del HARNESS, no del producto: en producción
+  // la primera lectura tras el deploy SIEMPRE es con cache frío — el readCache
+  // es solo memoria, muere con la página). Simulación honesta: instancia
+  // FRESCA del módulo (query de cache-busting) = primer arranque post-deploy.
+  svc.resetToDemo();
   const key1 = 'inas_schedule_assignments_v5';
   const demoAssignments = svc.getScheduleAssignments();
   localStorage.setItem(key1, JSON.stringify([...demoAssignments, { id: 'legacy-sab', dayOfWeek: 6, slotId: 'slot-1', grade: '10°1', subject: 'Legado', teacherId: 'prof-2' }]));
-  const after = svc.getScheduleAssignments();
+  const freshSvc = (await import(`../src/services/attendanceStorage?r22-fresh-${Date.now()}`)).AttendanceStorageService;
+  const after = freshSvc.getScheduleAssignments();
   check('assignment día-6 purgado en lectura', !after.some((a: any) => a.dayOfWeek === 6 || a.dayOfWeek < 1));
   const persisted = JSON.parse(localStorage.getItem(key1) || '[]');
   check('purga persistida (próxima sync nace limpia)', !persisted.some((a: any) => a.dayOfWeek === 6));

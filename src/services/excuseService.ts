@@ -7,6 +7,7 @@ import {
 // Ciclo runtime-only con attendanceStorage (ambos se referencian SOLO dentro de
 // métodos estáticos, nunca en evaluación de módulo) — patrón ESM seguro.
 import { AttendanceStorageService } from './attendanceStorage';
+import { FirebaseService } from './firebase';
 
 /**
  * ==============================================================================
@@ -102,16 +103,34 @@ export class ExcuseService {
     }
   }
 
-  private static workerHeaders(): Record<string, string> {
+  /**
+   * R68 (fix RC-2): los dispositivos de identidad (estudiante/docente desde su
+   * propio teléfono) NO tienen token de dispositivo — solo su sesión Firebase.
+   * Antes este método SOLO enviaba el Bearer de dispositivo → /api/excuses*
+   * respondía 401 permanente en esos terminales ("Mis Justificaciones" vacía,
+   * radicar excusa imposible, overlay sin sincronizar). Ahora viaja también el
+   * ID token cuando hay una cuenta REAL (mismo patrón que cloudflareSync.ts,
+   * R49): el Worker autoriza por identidad verificada (resolveAuthz) y el rol
+   * lo limita al alcance propio (estudiante → solo SU studentCode, R7).
+   * Aditivo/retrocompat: sin sesión Firebase no se envía nada nuevo.
+   */
+  private static async workerHeaders(): Promise<Record<string, string>> {
     let token = '';
     try {
       const raw = localStorage.getItem('inas_settings_v5');
       token = (raw ? (JSON.parse(raw).cloudflareApiToken || '') : '').trim();
     } catch { /* sin token */ }
-    return {
+    const headers: Record<string, string> = {
       'Content-Type': 'application/json',
       ...(token ? { Authorization: `Bearer ${token}` } : {})
     };
+    try {
+      const fbIdToken = await FirebaseService.getCurrentIdToken();
+      if (fbIdToken) headers['X-Firebase-Id-Token'] = fbIdToken;
+    } catch {
+      // la identidad jamás rompe las excusas (sigue el token de dispositivo).
+    }
+    return headers;
   }
 
   // ============================ CACHE LOCAL ============================
@@ -141,7 +160,7 @@ export class ExcuseService {
     const baseUrl = this.getWorkerBaseUrl();
     if (!baseUrl) return { ok: false, count: 0, error: 'URL del Worker no configurada.' };
     try {
-      const res = await fetch(`${baseUrl}/api/excuses`, { method: 'GET', headers: this.workerHeaders() });
+      const res = await fetch(`${baseUrl}/api/excuses`, { method: 'GET', headers: await this.workerHeaders() });
       const data = await res.json().catch(() => null);
       if (!res.ok || !data?.success) {
         return { ok: false, count: 0, error: data?.error || `HTTP ${res.status}` };
@@ -283,7 +302,7 @@ export class ExcuseService {
     try {
       const res = await fetch(`${baseUrl}/api/excuses`, {
         method: 'POST',
-        headers: this.workerHeaders(),
+        headers: await this.workerHeaders(),
         body: JSON.stringify(payload)
       });
       const data = await res.json().catch(() => null);
@@ -323,7 +342,7 @@ export class ExcuseService {
     try {
       const res = await fetch(`${baseUrl}/api/excuses/${encodeURIComponent(id)}`, {
         method: 'PATCH',
-        headers: this.workerHeaders(),
+        headers: await this.workerHeaders(),
         body: JSON.stringify(decision)
       });
       const data = await res.json().catch(() => null);
@@ -364,7 +383,7 @@ export class ExcuseService {
       if (filters?.to) qs.set('to', filters.to);
       const res = await fetch(`${baseUrl}/api/excuses${qs.toString() ? `?${qs.toString()}` : ''}`, {
         method: 'GET',
-        headers: this.workerHeaders()
+        headers: await this.workerHeaders()
       });
       const data = await res.json().catch(() => null);
       if (!res.ok || !data?.success) {
@@ -384,7 +403,7 @@ export class ExcuseService {
     const baseUrl = this.getWorkerBaseUrl();
     if (!baseUrl) return { ok: false, error: 'URL del Cloudflare Worker no configurada.' };
     try {
-      const res = await fetch(`${baseUrl}/api/excuses/verify-chain`, { method: 'GET', headers: this.workerHeaders() });
+      const res = await fetch(`${baseUrl}/api/excuses/verify-chain`, { method: 'GET', headers: await this.workerHeaders() });
       const data = await res.json().catch(() => null);
       if (!res.ok) return { ok: false, error: data?.error || `HTTP ${res.status}` };
       return { ok: true, intact: data.intact, signed: data.signed, checked: data.checked, firstBroken: data.firstBroken };
@@ -410,7 +429,7 @@ export class ExcuseService {
     try {
       const res = await fetch(`${baseUrl}/api/excuses/${encodeURIComponent(id)}/attachment`, {
         method: 'POST',
-        headers: this.workerHeaders(),
+        headers: await this.workerHeaders(),
         body: JSON.stringify(payload)
       });
       const data = await res.json().catch(() => null);
@@ -437,7 +456,7 @@ export class ExcuseService {
       if (viewer.role) qs.set('role', viewer.role);
       if (viewer.studentCode) qs.set('requestBy', viewer.studentCode);
       const res = await fetch(`${baseUrl}/api/excuses/${encodeURIComponent(id)}/attachment${qs.toString() ? `?${qs}` : ''}`, {
-        method: 'GET', headers: this.workerHeaders()
+        method: 'GET', headers: await this.workerHeaders()
       });
       const data = await res.json().catch(() => null);
       if (!res.ok || !data?.success) return { ok: false, error: data?.error || `HTTP ${res.status}` };
