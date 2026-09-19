@@ -1,0 +1,25 @@
+EVIDENCIA R70 — ¿el estudiante ve la asistencia que registra el docente? (2 dispositivos, sin red)
+Generado: 2026-09-19T01:38:44.485Z
+Checks: 15 OK · 0 FALLO
+
+RESPUESTA CORTA: el pull del estudiante es automático, pero el escaneo del docente NO entra
+al canal que reparte el pull (el snapshot) hasta que algún dispositivo publique un push.
+Por eso hoy puede tardar: llega a D1 (exportaciones/métricas) mucho antes que al perfil del estudiante.
+
+
+Flujo verificado (dos dispositivos, nube simulada):
+  1) Docente escanea  → outbox → POST /api/attendance → fila en D1  (el snapshot NO cambia)
+  2) Estudiante hace pull → NO ve el escaneo (el snapshot no lo tiene)
+  3) Docente publica snapshot (push de operador) → el hecho entra al snapshot
+  4) Estudiante hace pull → AHORA sí lo ve en “Historial de Clases Registradas”
+  Nota: el pull del estudiante es automático cada 5 min (initAutoSync, sin dirty) y en cada login;
+        el push del docente solo ocurre si su dispositivo tiene ediciones selladas (dirty) o un push manual.
+
+Llamadas observadas:
+  · POST https://worker.inas.test/api/attendance
+  · GET https://worker.inas.test/api/sync/pull?schoolCode=INAS-ANTONIA-SANTOS-2026
+  · GET https://worker.inas.test/api/sync/pull?schoolCode=INAS-ANTONIA-SANTOS-2026
+  · POST https://worker.inas.test/api/sync/push
+  · GET https://worker.inas.test/api/sync/pull?schoolCode=INAS_2026
+
+Fallos: (ninguno)
