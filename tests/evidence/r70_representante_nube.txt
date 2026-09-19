@@ -1,5 +1,5 @@
 EVIDENCIA R70 — “¿el representante manda a la nube?” (código real, sin red)
-Generado: 2026-09-18T23:59:09.238Z
+Generado: 2026-09-19T01:14:52.143Z
 Checks: 15 OK · 0 FALLO
 
 RESPUESTA CORTA: SÍ, el dispositivo del representante empuja sus HECHOS de asistencia
@@ -14,7 +14,7 @@ Llamadas observadas (orden real del cliente):
   · POST https://worker.inas.test/api/attendance
       Authorization: (sin token de dispositivo en este simulacro)
       X-Firebase-Id-Token: (sin sesión Firebase en este simulacro: el estudiante real entra con su cuenta y sí lo envía)
-      hecho: studentCode=1700000274 status=PUNTUAL scannedBy=REPRESENTANTE_TITULAR opId=op-mutation-rec-rep-1789775949048
+      hecho: studentCode=1700000274 status=PUNTUAL scannedBy=REPRESENTANTE_TITULAR opId=op-mutation-rec-rep-1789780492037
   · GET https://worker.inas.test/api/sync/pull?schoolCode=INAS-ANTONIA-SANTOS-2026
       Authorization: (sin token de dispositivo en este simulacro)
       X-Firebase-Id-Token: (sin sesión Firebase en este simulacro: el estudiante real entra con su cuenta y sí lo envía)

@@ -1,0 +1,21 @@
+EVIDENCIA R70 — ALCANCE REAL DEL AUTOSINCRONIZADO (código real, sin red)
+Generado: 2026-09-19T01:14:54.108Z
+Checks: 12 OK · 0 FALLO
+
+RESPUESTA CORTA: hoy los portales autorizados para el autosincronizado son el de
+DOCENTE y el de RECTORÍA. El portal del ESTUDIANTE/REPRESENTANTE guarda y encola sus
+hechos, pero no dispara publicación automática (la sincronización de sus escaneos no
+está implementada: se dejó así por compatibilidad, para no romper lo que ya funciona).
+Los datos NO se pierden: quedan en el dispositivo y en la cola durable.
+
+Conclusión §1: desde el portal del estudiante, NI el escaneo, NI la foto, NI el CSV
+sellan el aviso de publicación → el ciclo automático no tiene nada que subir desde aquí.
+Llamadas de red durante §1: ninguna
+
+Mapa de disparadores del autosincronizado (estado REAL de la Ronda 69):
+  · Portal DOCENTE (Escáner de Aula / pestaña Escanear) → reenvía hechos pendientes al volver la conexión
+  · Portal RECTORÍA → sella dirty al guardar catálogo/ajustes/horarios → el ciclo publica el snapshot
+  · Portal ESTUDIANTE/REPRESENTANTE → guarda y encola; NO dispara publicación automática hoy
+  · Publicación diferida: cuando ese dispositivo se use con sesión Docente/Rectoría, o con su push.
+
+Fallos: (ninguno)

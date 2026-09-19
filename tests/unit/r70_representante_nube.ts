@@ -131,11 +131,18 @@ const record = {
   presenceCapture: 'CARD_SCAN' as const,
 };
 AttendanceStorageService.saveAttendance([record]);
+// ── Este ensayo fuerza el sello para ejercitar los ENDPOINTS (¿puede el dispositivo
+// subir?). La PREGUNTA “¿qué lo dispara en el portal del estudiante?” se responde con
+// el código real en `tests/unit/r70_alcance_autosync.ts` (evidencia
+// `tests/evidence/r70_alcance_autosync.txt`): en una sesión de ESTUDIANTE, ni el
+// escaneo, ni la foto, ni el CSV sellan dirty → hoy el portal del estudiante NO tiene
+// disparador de publicación automática; el reenvío está cableado en el Escáner de
+// Rectoría/Docente. El dato NO se pierde: queda en la cola durable.
 AttendanceStorageService.markLocalSyncDirty();
 AttendanceStorageService.enqueueOfflineMutation(record as any, `op-mutation-${record.id}`);
 const queue = AttendanceStorageService.getOfflineQueue().filter(i => i.status !== 'SENT');
 check('el hecho quedó en el OUTBOX del dispositivo (pendiente de nube)', queue.some(i => i.id === record.id), JSON.stringify(queue.map(i => i.id)));
-check('el sello "ediciones sin subir" quedó activo (auto-sync lo publicará)', !!AttendanceStorageService.getLocalSyncDirty());
+check('el sello "ediciones sin subir" quedó activo (forzado en este ensayo para ejercitar los endpoints)', !!AttendanceStorageService.getLocalSyncDirty());
 
 section('4 · El dispositivo del representante EMPUJA a la nube (endpoints reales)');
 await CloudflareSyncService.replayOutbox();

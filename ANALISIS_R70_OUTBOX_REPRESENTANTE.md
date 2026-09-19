@@ -12,21 +12,26 @@
 |---|---|---|
 | 1 | El escaneo del representante **sí** se encola en el outbox durable, con `opId` idempotente | `src/services/attendanceStorage.ts:2842-2845` (`enqueueOfflineMutation(newRecord, 'op-mutation-<id>')`) |
 | 2 | El reenvío de esa cola existe y está probado: `POST /api/attendance` con `opId` | `src/services/cloudflareSync.ts:1273` (`replayOutbox()`), `attendanceStorage.ts:3384` (`syncOfflineQueue()`) |
-| 3 | **Único llamador en producto:** el evento `online` dentro del **Escáner de Rectoría/Docente** | `src/components/ScanHubView.tsx:58` (pantalla de rol ADMIN/DOCENTE; el portal del estudiante no la monta) |
+| 3 | **Único llamador en producto:** el evento `online` dentro del **Escáner de Rectoría/Docente** | `src/components/ScanHubView.tsx:58`; único componente que invoca `syncOfflineQueue()` (verificado por rastreo en `r70_alcance_autosync.ts`) |
 | 4 | El ciclo automático de 5 min **solo hace Pull** cuando no hay sello *dirty* | `src/services/cloudflareSync.ts:65-85`; `initAutoSync()` se llama para cualquier rol en `src/App.tsx:133` |
 | 5 | Los **hechos de asistencia NO sellan *dirty*** | `saveAttendance` (`attendanceStorage.ts:2245`) no llama `markLocalSyncDirty`; solo sellan ajustes/catálogo/horarios (líneas 400, 543, 1160, 1235, 1535, 1703, 1745) |
 | 6 | La clase activa vive en su propia clave, tampoco sella | `inas_active_class_v1` (`attendanceStorage.ts:63, 2369, 2542`) |
+| 6b | En sesión **no-ADMIN**, editar la propia ficha (foto) tampoco sella; el CSV del horario tampoco | `attendanceStorage.ts:800-804` (R64 Fix A) y `:1552-1559`; probado en ejecución en `r70_alcance_autosync.ts` |
 | 7 | Todas las rutas de datos exigen credencial válida (identidad o token) | `cloudflare-worker/src/index.ts:827-830` (401 sin credencial); la ruta de hechos en `index.ts:2661` |
 | 8 | Un rol ESTUDIANTE_ACUDIENTE con identidad Firebase **sí** puede escribir hechos (nunca catálogo) | `cloudflare-worker/src/authz.ts:217+`; `index.ts:866-867` (`isOperator = !isAdmin`), `catalogWritten: isAdmin` (`index.ts:1442`) |
 
-### Conclusión sobre la Nota 2
+### Conclusión sobre la Nota 2 (corregida y verificada con evidencia ejecutable)
 
-- **El diagnóstico del informe es correcto** en su primera mitad: los registros no activan el sello de publicación y el reenvío por outbox está cableado en el Escáner de Rectoría/Docente.
-- **La segunda mitad se queda corta**: *"el registro viajará con el siguiente ciclo de 5 minutos"* **no se cumple hoy**. En el teléfono del representante, el ciclo de 5 minutos ve `dirty = null` y hace **solo Pull** (lectura). El hecho sube únicamente si:
-  1. en **ese mismo teléfono** se entra al Escáner con sesión de Rectoría/Docente (o se dispara el evento `online` de esa pantalla), o
-  2. algo sella *dirty* en ese dispositivo y el push automático sube el snapshot (por ejemplo, el estudiante **personaliza su foto** o **carga su horario por CSV**: `saveStudents` / `saveAllStudentSchedules` con origen `local`), o
-  3. se hace un **push manual** en ese dispositivo — el portal del estudiante no tiene ese botón.
-- Es decir: **la ruta del representante hoy es "captura garantizada, publicación diferida sin disparador"**. El dato no se pierde (cola durable de hasta 2000 operaciones, `attendanceStorage.ts:3326+`), pero nadie garantiza cuándo sale.
+Evidencia: `tests/unit/r70_alcance_autosync.ts` → **12 OK · 0 FALLO** (`tests/evidence/r70_alcance_autosync.txt`).
+
+- **El diagnóstico del informe es correcto**: los registros no activan el sello de publicación y el reenvío por outbox está cableado en el Escáner de Rectoría/Docente.
+- *"El registro viajará con el siguiente ciclo de 5 minutos"* **NO se cumple hoy**: en el teléfono del representante el ciclo ve `dirty = null` y hace **solo Pull** (lectura).
+- **Corrección a una afirmación anterior de este documento** (y del guion): **"personalizar la foto" y "cargar el horario por CSV" NO sellan *dirty* desde el portal del estudiante.** La R64 (Fix A, `attendanceStorage.ts:800-804`) lo decidió así a propósito: en sesión no-ADMIN esas ediciones se guardan como personalización de dispositivo (origen `cloud`) *"NO sellan dirty (un push de operador no puede publicarlas y el sello bloqueaba los pulls de ajustes para siempre)"*; y `saveStudentPersonalSchedule` (`attendanceStorage.ts:1552-1559`) escribe en su propia clave sin sellar. Lo verifiqué con el código en ejecución: en sesión ESTUDIANTE_ACUDIENTE, escaneo, foto y CSV dejan `getLocalSyncDirty()` en **null**; en sesión ADMIN, esas mismas ediciones **sí** sellan.
+- **Condiciones bajo las que el hecho SÍ sube hoy** (todas requieren una sesión de Docente/Rectoría en ese mismo dispositivo, o su push):
+  1. **Escáner de Rectoría/Docente abierto** y el navegador recupera la conexión (evento `online` → `syncOfflineQueue()` → `replayOutbox()`); es el único disparador del reenvío.
+  2. **Cualquier edición sellada desde una sesión ADMIN/DOCENTE en ese equipo** (catálogo, ajustes, horarios, o incluso editar una ficha): el ciclo publica el snapshot, y ese snapshot **incluye los registros locales** (`data.records`), así que el hecho del representante viaja dentro.
+  3. **Push manual** desde Ajustes → Sync y Seguridad (solo en sesiones con acceso a ese panel).
+- Es decir: **"captura garantizada, publicación diferida sin disparador propio"**. El dato no se pierde (cola durable de hasta 2000 operaciones, `attendanceStorage.ts:3326+`), pero desde el portal del estudiante nadie garantiza cuándo sale — y por eso el guion lo declara así.
 
 ---
 
@@ -96,5 +101,6 @@ Que el representante escanee **desde el dispositivo del aula** (sesión de Docen
 
 ## 5. Recomendación
 
-1. **Corto plazo (presentación):** mantener el guion honesto — el escaneo del representante se guarda al instante y la publicación desde su teléfono queda en cola (hoy sin disparador automático). No prometer el ciclo de 5 minutos.
-2. **Siguiente ronda:** aplicar los 3 cambios de §3 con las 2 comprobaciones nuevas y volver a correr la prueba del representante en producción. Con eso la Nota 2 desaparece sin abrir ninguna puerta de seguridad nueva.
+1. **Corto plazo (presentación):** mantener el guion honesto — el representante es **una alternativa** para cuando el docente no quiere pasar lista; su escaneo se guarda al instante y queda **en cola**, y la **publicación automática desde su portal no está implementada** (decisión de compatibilidad: los portales autorizados hoy para el autosincronizado son el de **Docente** y el de **Rectoría**). No prometer el ciclo de 5 minutos.
+2. **Siguiente ronda (opcional, con tu visto bueno):** aplicar los 3 cambios de §3 con las 2 comprobaciones nuevas y volver a correr la prueba del representante en producción. Con eso la Nota 2 desaparece sin abrir ninguna puerta de seguridad nueva.
+3. **Antes de implementar**: decidir si se quiere mantener el criterio de la R64 (que el portal del estudiante no selle *dirty*) y publicar solo por el endpoint de hechos — es la opción recomendada y la que NO toca el catálogo.
