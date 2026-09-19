@@ -14,6 +14,7 @@
 - **Mire la hora.** La jornada del colegio va de 6:30 a.m. a 12:30 p.m. Si la demostración es fuera de ese horario, la aplicación mostrará **"Jornada cerrada (06:30 – 12:30)"** y no permitirá escanear. **Eso no es un error: es una guarda del sistema** (no deja marcar asistencia en jornada cerrada). Dígalo con naturalidad y siga el recorrido; si puede hacer la demo en horario lectivo, mucho mejor.
 - **Prepare el equipo:** pantalla completa, zoom al 100 %, y el **lector de códigos USB** conectado si va a escanear un carné de verdad (también funciona con la cámara del portátil o del celular).
 - **Reparta los papeles:** una persona narra y otra da clic, o la misma persona hace las dos cosas. Las líneas marcadas con **Decir:** son para leerlas o parafrasearlas.
+- **Si va a hacer Push desde un equipo recién instalado:** pegue primero el **"Token de Acceso del Worker"** en **Ajustes » Sync y Seguridad** (doble llave: sesión de Rectoría + token del terminal). Sin él, el push sube solo los hechos de asistencia y no el catálogo — es seguridad por diseño, no un fallo.
 
 > Regla de oro para el presentador: si algo no sale como dice el guion, **no improvise una explicación técnica**. Diga "lo repito una vez más" y continúe; al final, el anexo 6 dice qué está probado y qué no.
 
@@ -102,9 +103,14 @@
 
 **Muestre:** en su portal aparece **"Modo Representante de Salón (6°4)"** con la explicación *"Tienes permiso para escanear carnés de tus compañeros de salón y apoyar al docente en el llamado a lista"*.
 
-**Haga:** pulse **"Abrir Escáner de Aula"**, pase un carné de un compañero (o escriba el código en **"Escanear carné de compañero"**) y registre con **"Registrar"**.
+**Haga (dos partes):**
 
-**Decir:** *"El representante no manda a la nube de la misma forma que Rectoría, y eso es a propósito: su escaneo es un 'hecho' de asistencia que viaja como un hecho, nunca toca la lista oficial de estudiantes, los horarios ni las credenciales. La autoridad sobre el catálogo la tiene solo Rectoría; el representante aporta marcas de asistencia y nada más."*
+1. **Primero la tarjeta de clase.** Con la pantalla del docente (Escena 6) abra **"Mis Tarjetas QR"** y muestre la tarjeta con QR; luego, en el portal del representante, escanee esa tarjeta. Aparecerá el mensaje **"Clase activa…"** con la asignatura y el bloque del reloj, y **"· Firma verificada por la nube del colegio"**. El propio representante queda auto-registrado (por ejemplo, *"Además quedaste registrado (TARDANZA)"*).
+2. **Después un compañero.** En **"Escanear carné de compañero"** pase el carné de un compañero (o escriba su código) y pulse **"Registrar"**.
+
+**Decir (esta es la parte que conviene decir con exactitud):** *"El representante no es un administrador: él aporta **hechos** de asistencia, nunca toca la lista oficial de estudiantes, los horarios ni las credenciales — la autoridad sobre el catálogo la tiene solo Rectoría. Y hay un detalle fino: su celular no guarda la llave con la que se firman los carnés, por eso la tarjeta de clase se valida contra la nube del colegio en el momento; así, aunque un teléfono se pierda, con él no se pueden fabricar carnés."*
+
+**Aclaración técnica honesta (para la ronda de preguntas, no para narrar):** el escaneo del representante **se guarda al instante** en su dispositivo y **entra a una cola de envío**; esa cola reenvía los hechos al servidor por la ruta de asistencia (idempotente, un hecho por escaneo, nunca el catálogo). En la prueba en producción del 15/09/2026 (informe R70) este era **el único punto parcial de 30 comprobaciones**: el auto-registro quedó bien guardado en el teléfono, pero su publicación automática desde el portal del estudiante aún no tenía disparador propio (el reenvío vivía en el Escáner de Rectoría/Docente). Es decir: **el dato no se pierde —se publica cuando ese u otro terminal del colegio sincroniza—, pero hoy no sale solo desde el portal.** Si preguntan "¿ya está arreglado?": responda *"está diagnosticado y con la corrección propuesta y verificable"*, y no prometa el ciclo automático de 5 minutos para el portal.
 
 ### Escena 8 — La planilla y el buzón: la mañana, resuelta (2 min)
 
@@ -170,6 +176,7 @@ Esta es la parte "de cocina", para las preguntas del jurado o del profesor.
 - **¿Qué pasa si se equivocan al escanear?** Cada bloque y cada curso se pueden revisar y corregir desde la planilla, y todo cambio queda auditado con usuario y fecha.
 - **¿Un carné falso sirve?** No. Los carnés llevan firma criptográfica; si el carné no está firmado o está vencido, el escáner lo rechaza. Hay una casilla en Ajustes que permite operar con lectores antiguos de código de barras, pero entonces el registro queda marcado como *sin verificación criptográfica*, nunca como verificado.
 - **¿Se puede justificar una falta con anticipación?** Sí, desde el portal del estudiante; y Rectoría también puede hacerlo con un toque desde la planilla.
+- **Si el representante escanea desde su propio celular, ¿el registro llega a la nube?** Sí, y llega como **hecho de asistencia** (nunca como catálogo). Detalle honesto probado en producción el 15/09/2026: el registro se guarda al instante en el teléfono y entra a la cola de envío; en esa jornada su **publicación automática desde el portal** quedó pendiente del próximo ciclo de sincronización del colegio (fue el único punto parcial de 30). La corrección está diagnosticada y propuesta, con verificación, en `ANALISIS_R70_OUTBOX_REPRESENTANTE.md`.
 - **¿Cuánto cuesta?** El sistema corre con servicios que tienen plan gratuito (Firebase para las cuentas, Cloudflare para la nube) y su propia IA local. Si el colegio quiere un modelo de lenguaje externo, cada usuario pone su clave: no hay costo obligatorio ni licencias por estudiante.
 
 ---
@@ -196,7 +203,10 @@ Esta es la parte "de cocina", para las preguntas del jurado o del profesor.
 ## 6. Honestidad y evidencia (para el cierre)
 
 - **Lo que está probado en este guion:** cada texto entre comillas existe hoy en la aplicación final. Las pantallas se recorrieron y verificaron con un inventario automático de la interfaz real (`tests/evidence/r70_inventario_ui_guion.txt`), y el flujo del representante de salón hacia la nube tiene una batería propia de 15 comprobaciones (`tests/evidence/r70_representante_nube.txt`).
-- **Lo que no se pudo probar desde el entorno de desarrollo:** la ejecución completa en producción contra la nube y los seis guiones de simulación "mini colegio" (el entorno de desarrollo no tiene salida a internet). Están escritos y listos para ejecutarlos desde el colegio.
+- **Prueba en producción del 15/09/2026 (informe R70, "Pruebita del Representante"):** **29 de 30 comprobaciones en verde** — login real de Rectoría en dispositivo limpio, **"Hacer Rep"** con insignia en la fila, push verificado por API, tarjeta `CLASE:v2` firmada por producción y decodificada del PNG, login del estudiante tras borrado total del navegador, **"Modo Representante de Salón (7°4)"** llegado por la nube, firma validada por el servidor, hora de clase sin bloquearse, auto-registro con materia/docente/bloque y **cero errores de JavaScript**.
+- **El único punto parcial (fila 11 del informe):** el auto-registro quedó guardado en el teléfono, pero **su publicación automática desde el portal del estudiante no tenía disparador** (el reenvío por cola está cableado en el Escáner de Rectoría/Docente). No es pérdida de datos: los hechos viajan cuando ese dispositivo u otro terminal sincroniza. El análisis con líneas de código y la corrección propuesta (3 cambios aditivos, sin abrir permisos nuevos) están en `ANALISIS_R70_OUTBOX_REPRESENTANTE.md`.
+- **Nota 1 del mismo informe (configuración, no fallo):** en un dispositivo **recién instalado**, un Push de Rectoría exige la **doble llave** (sesión de Rectoría **y** el *Token de Acceso del Worker* pegado en **Ajustes » Sync y Seguridad**). Sin ese token el push queda como *solo-hechos*. Para la demo: pegue el token antes de presentar (o haga el Push desde el equipo que ya lo tiene).
+- **Lo que no se pudo probar desde el entorno de desarrollo:** la ejecución completa en producción y los seis guiones de simulación "mini colegio" (el entorno de desarrollo no tiene salida a internet). Están escritos y listos para ejecutarlos desde el colegio.
 - **Lo que se dice con precisión:** el representante de salón **no** escribe directamente el catálogo de la nube; envía **hechos de asistencia** desde la cola del dispositivo, y el servidor solo acepta cambios de catálogo de Rectoría. Es una decisión de seguridad, no una limitación.
 - **Estado de verificación local:** 611 comprobaciones automáticas en verde al cierre de la Ronda 69, más las 9 de este inventario de interfaz y las 15 del flujo del representante.
 
