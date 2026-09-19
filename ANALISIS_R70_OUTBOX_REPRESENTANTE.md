@@ -3,6 +3,7 @@
 **Origen:** informe de prueba en producción del 15/09/2026 (18:20–19:15 Bogotá), *Pruebita del Representante* — 29 de 30 comprobaciones en verde, con **Nota 2**: el auto-registro del representante quedó guardado en el dispositivo y no llegó a la nube en la ventana observada (~5 min).
 **Alcance de este documento:** (a) confirmar o desmentir la Nota 2 contra el código real; (b) riesgos de cablear el envío automático del outbox para el subrol representante; (c) propuesta mínima verificable. **No se ha tocado una línea de código de producto.**
 **Regla vigente:** Regla 8 de `AGENTS.md` (prohibido modificar código para forzar una prueba). Este documento propone un cambio de **producto**, no de prueba; se aplica solo con tu visto bueno.
+**Documentos relacionados (R70):** `ANALISIS_RIESGOS_AUTOSYNC_REPRESENTANTE.md` (análisis de riesgos a fondo del mismo cambio) e `INSTRUCCION_AUDITORIA_AUTOSYNC.md` (paquete para auditoría independiente por otros agentes).
 
 ---
 
